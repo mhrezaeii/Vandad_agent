@@ -1,8 +1,16 @@
-"""CredentialReference model: pointers to secrets, never the secrets themselves.
+"""CredentialReference model: credential metadata and payload routing.
 
-``secret_reference`` holds a locator (e.g. ``vault://platform-x/api-key``)
-resolvable by an external secret store. Raw passwords and API keys must never
-be written to this table; format is enforced by ``app.security.redaction``.
+Two storage kinds exist:
+
+- ``reference``: the secret lives in an external store; ``secret_reference``
+  holds a locator (e.g. ``vault://platform-x/api-key``) validated by
+  ``app.security.redaction``. No secret material is ever stored locally.
+- ``encrypted``: the secret value was provided once (over TLS) and is stored
+  only as AES-256-GCM ciphertext inside ``CredentialVersion`` rows. The
+  plaintext never touches the database, logs, or API responses.
+
+Credential values are versioned (``CredentialVersion``); ``current_version_id``
+points at the active version used for resolution and rotation.
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ from app.database.base import Base
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.credential_version import CredentialVersion
     from app.models.platform import Platform
 
 
@@ -35,6 +44,11 @@ class CredentialStatus(enum.StrEnum):
     EXPIRED = "expired"
 
 
+class CredentialStorageType(enum.StrEnum):
+    REFERENCE = "reference"
+    ENCRYPTED = "encrypted"
+
+
 class CredentialReference(Base, TimestampMixin):
     __tablename__ = "credential_references"
     __table_args__ = (
@@ -44,6 +58,7 @@ class CredentialReference(Base, TimestampMixin):
             name="credential_type_valid",
         ),
         CheckConstraint("status IN ('active', 'revoked', 'expired')", name="status_valid"),
+        CheckConstraint("storage_type IN ('reference', 'encrypted')", name="storage_type_valid"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -57,8 +72,26 @@ class CredentialReference(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=CredentialStatus.ACTIVE.value, server_default=CredentialStatus.ACTIVE.value
     )
+    # How the payload is stored: external locator only, or encrypted locally.
+    storage_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=CredentialStorageType.REFERENCE.value,
+        server_default=CredentialStorageType.REFERENCE.value,
+    )
+    # Active encrypted payload version (NULL for reference-type credentials).
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("credential_versions.id", ondelete="SET NULL"), nullable=True
+    )
 
     platform: Mapped[Platform] = relationship(back_populates="credentials")
+    versions: Mapped[list[CredentialVersion]] = relationship(
+        back_populates="credential_reference",
+        foreign_keys="CredentialVersion.credential_reference_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="CredentialVersion.version",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<CredentialReference id={self.id} type={self.credential_type!r} status={self.status!r}>"

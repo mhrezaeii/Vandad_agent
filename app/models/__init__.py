@@ -3,9 +3,12 @@
 
 from app.models.audit_event import ActorType, AuditEvent
 from app.models.company import Company, CompanyStatus
-from app.models.credential_reference import CredentialReference, CredentialStatus, CredentialType
+from app.models.connection_event import ConnectionEvent
+from app.models.credential_reference import CredentialReference, CredentialStatus, CredentialStorageType, CredentialType
+from app.models.credential_version import CredentialVersion, CredentialVersionStatus
 from app.models.mixins import TimestampMixin
 from app.models.platform import IntegrationType, Platform, PlatformStatus, PlatformType
+from app.models.platform_connection import ConnectionStatus, PlatformConnection
 from app.models.workflow_execution import WorkflowExecution, WorkflowStatus, WorkflowType
 
 __all__ = [
@@ -13,11 +16,17 @@ __all__ = [
     "AuditEvent",
     "Company",
     "CompanyStatus",
+    "ConnectionEvent",
+    "ConnectionStatus",
     "CredentialReference",
     "CredentialStatus",
+    "CredentialStorageType",
     "CredentialType",
+    "CredentialVersion",
+    "CredentialVersionStatus",
     "IntegrationType",
     "Platform",
+    "PlatformConnection",
     "PlatformStatus",
     "PlatformType",
     "TimestampMixin",

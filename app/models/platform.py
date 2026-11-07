@@ -53,6 +53,9 @@ class Platform(Base, TimestampMixin):
     __tablename__ = "platforms"
     __table_args__ = (
         UniqueConstraint("company_id", "slug", name="uq_platforms_company_slug"),
+        # Enables the composite FK from platform_connections (platform_id, company_id)
+        # that keeps tenant ownership consistent at the database level.
+        UniqueConstraint("id", "company_id", name="uq_platforms_id_company"),
         CheckConstraint(
             "platform_type IN ('website', 'admin_panel', 'api_service', "
             "'social_media', 'mobile_app', 'other')",
