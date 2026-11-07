@@ -68,7 +68,10 @@ class CredentialVersion(Base):
     )
 
     credential_reference: Mapped["CredentialReference"] = relationship(
-        back_populates="versions"
+        back_populates="versions",
+        # Disambiguate: credential_references.current_version_id is a second,
+        # parent-to-child FK path between these tables.
+        foreign_keys="CredentialVersion.credential_reference_id",
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

@@ -32,6 +32,14 @@ os.environ["REDIS_URL"] = TEST_REDIS_URL
 os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("LOG_FORMAT", "console")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+# Deterministic 32-byte master key for tests only (never used outside pytest).
+import base64  # noqa: E402
+import json  # noqa: E402
+
+_TEST_MASTER_KEY = base64.b64encode(bytes(range(32))).decode("ascii")
+os.environ["CREDENTIAL_MASTER_KEYS"] = json.dumps({"1": _TEST_MASTER_KEY})
+os.environ.setdefault("CREDENTIAL_ACTIVE_KEY_VERSION", "1")
+os.environ.setdefault("PLATFORM_BOOTSTRAP_COMPANY_IDS", "*")
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -45,10 +53,24 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 from alembic import command  # noqa: E402
+from app.api.deps import build_provider_executor  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.core.redis import RedisConnectionManager  # noqa: E402
+from app.integrations.providers import build_default_registry  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.security.authorization import Principal  # noqa: E402
+from app.security.crypto import MasterKeyBox  # noqa: E402
 
-TABLES = ("audit_events", "credential_references", "workflow_executions", "platforms", "companies")
+TABLES = (
+    "audit_events",
+    "connection_events",
+    "credential_versions",
+    "credential_references",
+    "workflow_executions",
+    "platform_connections",
+    "platforms",
+    "companies",
+)
 
 
 # --------------------------------------------------------------------------
@@ -151,6 +173,10 @@ def app(clean_database, engine, session_factory, redis_manager):
     application.state.engine = engine
     application.state.session_factory = session_factory
     application.state.redis_manager = redis_manager
+    application.state.master_key_box = MasterKeyBox.from_settings(get_settings())
+    application.state.provider_registry = build_default_registry()
+    application.state.provider_executor = build_provider_executor(get_settings())
+    application.state.principal = Principal(subject="test-runner", company_ids=frozenset({"*"}))
     return application
 
 

@@ -49,6 +49,25 @@ class Settings(BaseSettings):
     redis_socket_connect_timeout: float = Field(default=5.0, gt=0)
     redis_max_connections: int = Field(default=10, ge=1)
 
+    # --- Credential encryption (AES-256-GCM, see app.security.crypto) ---------
+    # JSON object mapping master-key version -> base64-encoded 32-byte key,
+    # e.g. CREDENTIAL_MASTER_KEYS='{"1": "base64key...", "2": "base64new..."}'.
+    # Generate a key with: openssl rand -base64 32
+    credential_master_keys: str = Field(default="{}")
+    # Key version used for new ciphertexts; must exist in credential_master_keys.
+    credential_active_key_version: int = Field(default=1, ge=1)
+
+    # --- Provider execution ----------------------------------------------------
+    provider_default_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    provider_max_attempts: int = Field(default=3, ge=1, le=10)
+    provider_retry_backoff_seconds: float = Field(default=0.5, ge=0, le=30)
+
+    # --- Authorization boundary (see app.security.authorization) ---------------
+    # Comma-separated company UUIDs the bootstrap principal may act for.
+    # "*" grants all companies and is ONLY valid outside production; production
+    # requires an explicit list (fail-secure default deny).
+    bootstrap_principal_company_ids: str = "*"
+
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
     n8n_api_key: str | None = None
@@ -67,6 +86,33 @@ class Settings(BaseSettings):
     def _validate_database_url(cls, value: str) -> str:
         if not value.startswith("postgresql+asyncpg://"):
             raise ValueError("database_url must use the postgresql+asyncpg:// driver scheme")
+        return value
+
+    @field_validator("credential_master_keys")
+    @classmethod
+    def _validate_master_keys_json(cls, value: str) -> str:
+        import json
+
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("credential_master_keys must be valid JSON") from exc
+        if not isinstance(parsed, dict) or not all(isinstance(k, str) for k in parsed):
+            raise ValueError("credential_master_keys must be a JSON object of version -> key")
+        return value
+
+    @field_validator("bootstrap_principal_company_ids")
+    @classmethod
+    def _validate_bootstrap_companies(cls, value: str) -> str:
+        value = value.strip()
+        if value == "*":
+            return value
+        import uuid as _uuid
+
+        for part in value.split(","):
+            part = part.strip()
+            if part:
+                _uuid.UUID(part)  # raises ValueError on malformed ids
         return value
 
     @property

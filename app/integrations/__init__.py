@@ -1,5 +1,10 @@
-"""External service integrations (n8n, future AI providers).
+"""External service integrations (n8n, AI providers, platform providers).
 
-Phase 1 only prepares configuration (see Settings n8n_* fields); integration
-clients arrive with the workflow orchestration phase and belong here.
+Phase 2 introduces the provider adapter architecture under
+``app.integrations.providers``. The n8n orchestration client arrives in a
+later phase and belongs here as well.
 """
+
+from app.integrations.providers import build_default_registry
+
+__all__ = ["build_default_registry"]

@@ -35,6 +35,12 @@ class NotFoundError(AppError):
     default_message = "The requested resource was not found."
 
 
+class ForbiddenError(AppError):
+    status_code = 403
+    code = "forbidden"
+    default_message = "You are not allowed to perform this action."
+
+
 class ConflictError(AppError):
     status_code = 409
     code = "conflict"

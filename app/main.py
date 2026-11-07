@@ -9,12 +9,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import api_router
+from app.api.deps import build_provider_executor
 from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import CorrelationIdMiddleware
 from app.core.redis import RedisConnectionManager
 from app.database.session import create_engine, create_session_factory
+from app.integrations.providers import build_default_registry
+from app.security.authorization import build_principal_from_settings
+from app.security.crypto import MasterKeyBox
 
 logger = logging.getLogger("app.main")
 
@@ -48,10 +52,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logger.error("redis initialization failed: %s", type(exc).__name__)
 
+    # Credential encryption: fail fast at startup on a bad configuration
+    # rather than failing every credential resolution at request time.
+    master_key_box = MasterKeyBox.from_settings(settings)
+    logger.info("credential master keys loaded (active version %d)", master_key_box.active_key_version)
+
+    provider_registry = build_default_registry()
+    provider_executor = build_provider_executor(settings)
+    principal = build_principal_from_settings(settings)
+
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis_manager = redis_manager
     app.state.settings = settings
+    app.state.master_key_box = master_key_box
+    app.state.provider_registry = provider_registry
+    app.state.provider_executor = provider_executor
+    app.state.principal = principal
 
     yield
 
