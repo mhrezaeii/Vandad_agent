@@ -38,7 +38,9 @@ class WorkflowNodeIn(BaseModel):
     @classmethod
     def _validate_settings(cls, value: dict[str, Any]) -> dict[str, Any]:
         timeout = value.get("timeout_seconds")
-        if timeout is not None and (not isinstance(timeout, (int, float)) or not 0 < float(timeout) <= MAX_NODE_TIMEOUT_SECONDS):
+        if timeout is not None and (
+            not isinstance(timeout, (int, float)) or not 0 < float(timeout) <= MAX_NODE_TIMEOUT_SECONDS
+        ):
             raise ValueError(f"timeout_seconds must be in (0, {MAX_NODE_TIMEOUT_SECONDS}]")
         retries = value.get("max_retries")
         if retries is not None and (not isinstance(retries, int) or not 0 <= retries <= MAX_NODE_RETRIES):

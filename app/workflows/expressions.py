@@ -143,7 +143,7 @@ def _evaluate(root: dict, node: ast.AST) -> object:
         return _arith(node.op, left, right)
     if isinstance(node, ast.Compare):
         left = _evaluate(root, node.left)
-        for operator, comparator in zip(node.ops, node.comparators):
+        for operator, comparator in zip(node.ops, node.comparators, strict=True):
             right = _evaluate(root, comparator)
             if isinstance(operator, ast.Eq):
                 ok = left == right
@@ -180,7 +180,13 @@ def _arith(op: ast.AST, left: object, right: object) -> object:
     """Arithmetic restricted to numbers (booleans excluded) and string concat."""
     if isinstance(op, ast.Add) and isinstance(left, str) and isinstance(right, str):
         return left + right
-    if isinstance(left, bool) or isinstance(right, bool) or not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+    numeric = (int, float)
+    if (
+        isinstance(left, bool)
+        or isinstance(right, bool)
+        or not isinstance(left, numeric)
+        or not isinstance(right, numeric)
+    ):
         raise ExpressionError("arithmetic requires numbers")
     if isinstance(op, ast.Add):
         return left + right

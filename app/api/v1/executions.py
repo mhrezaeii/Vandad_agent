@@ -24,7 +24,9 @@ from app.schemas.workflow import (
     WorkflowExecutionListResponse,
     WorkflowExecutionRead,
     WorkflowLogListResponse,
+    WorkflowLogRead,
     WorkflowStepListResponse,
+    WorkflowStepRead,
 )
 from app.security.authorization import CompanyScope
 from app.services.workflow_execution_service import WorkflowExecutionService

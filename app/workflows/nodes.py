@@ -178,7 +178,9 @@ def validate_execution_settings(settings: dict[str, Any]) -> list[ConfigIssue]:
 
     timeout = settings.get("timeout_seconds")
     if timeout is not None and (
-        not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not (0 < float(timeout) <= MAX_NODE_TIMEOUT_SECONDS)
+        not isinstance(timeout, (int, float))
+        or isinstance(timeout, bool)
+        or not (0 < float(timeout) <= MAX_NODE_TIMEOUT_SECONDS)
     ):
         issues.append(ConfigIssue("timeout_seconds", f"must be a number in (0, {MAX_NODE_TIMEOUT_SECONDS}]"))
 

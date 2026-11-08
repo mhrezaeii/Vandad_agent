@@ -133,7 +133,11 @@ class GraphValidator:
         for node in triggers:
             if node.node_key in incoming:
                 graph.issues.append(
-                    ValidationIssue("trigger_with_incoming_edge", "trigger nodes cannot have incoming edges", node.node_key)
+                    ValidationIssue(
+                        "trigger_with_incoming_edge",
+                        "trigger nodes cannot have incoming edges",
+                        node.node_key,
+                    )
                 )
 
         # Cycles: any cycle is unsupported in this engine version.
@@ -227,7 +231,9 @@ class GraphValidator:
         return seen
 
 
-async def load_version_graph(session: AsyncSession, version_id: uuid.UUID) -> tuple[list[WorkflowNode], list[tuple[str, str, str | None]]]:
+async def load_version_graph(
+    session: AsyncSession, version_id: uuid.UUID
+) -> tuple[list[WorkflowNode], list[tuple[str, str, str | None]]]:
     """Load a version's nodes and edges as plain tuples for the validator/engine."""
     nodes = list(
         (

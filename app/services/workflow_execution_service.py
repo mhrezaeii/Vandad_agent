@@ -143,7 +143,12 @@ class WorkflowExecutionService:
                 f"Execution is already terminal ('{execution.status}').",
                 details=[{"field": "status", "value": execution.status}],
             )
-        if execution.status in (WorkflowStatus.PENDING.value, WorkflowStatus.QUEUED.value, WorkflowStatus.WAITING.value):
+        cancellable_now = (
+            WorkflowStatus.PENDING.value,
+            WorkflowStatus.QUEUED.value,
+            WorkflowStatus.WAITING.value,
+        )
+        if execution.status in cancellable_now:
             execution.status = WorkflowStatus.CANCELLED.value
             execution.completed_at = datetime.now(UTC)
             execution.context_snapshot = None

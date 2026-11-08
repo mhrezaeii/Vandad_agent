@@ -175,7 +175,17 @@ class WorkflowService:
             company_id=company_id,
             resource_type=_WORKFLOW_RESOURCE,
             resource_id=workflow.id,
-            metadata={"changed": [k for k, v in (("name", name), ("description", description), ("graph", nodes is not None or edges is not None)) if v is not None]},
+            metadata={
+                "changed": [
+                    key
+                    for key, changed in (
+                        ("name", name),
+                        ("description", description),
+                        ("graph", nodes is not None or edges is not None),
+                    )
+                    if changed
+                ]
+            },
         )
         await self.session.flush()
         await self.session.refresh(workflow)

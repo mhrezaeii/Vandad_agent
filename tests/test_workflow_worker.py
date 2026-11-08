@@ -131,7 +131,6 @@ async def test_worker_tolerates_missing_execution_then_drops(
     monkeypatch.setattr(worker_main, "JOB_MAX_ATTEMPTS", 2)
     monkeypatch.setattr(worker_main, "JOB_RETRY_DELAY_SECONDS", 0.01)
 
-    worker = SimpleNamespace(session_factory=None)
     job = WorkflowJob(execution_id=uuid.uuid4(), company_id=uuid.uuid4())  # never created
 
     # _fail_job must not blow up on a missing row.
