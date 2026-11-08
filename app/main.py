@@ -14,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import CorrelationIdMiddleware
+from app.core.queue import WorkflowQueue
 from app.core.redis import RedisConnectionManager
 from app.database.session import create_engine, create_session_factory
 from app.integrations.providers import build_default_registry
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logger.error("redis initialization failed: %s", type(exc).__name__)
 
+    # Workflow job queue (Redis-backed); unavailable when Redis is down.
+    workflow_queue = None
+    if redis_manager.client is not None:
+        workflow_queue = WorkflowQueue(redis_manager.client)
+
     # Credential encryption: fail fast at startup on a bad configuration
     # rather than failing every credential resolution at request time.
     master_key_box = MasterKeyBox.from_settings(settings)
@@ -69,6 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.provider_registry = provider_registry
     app.state.provider_executor = provider_executor
     app.state.principal = principal
+    app.state.workflow_queue = workflow_queue
 
     yield
 

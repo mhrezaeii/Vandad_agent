@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from fastapi import Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.queue import WorkflowQueue
 from app.core.redis import RedisConnectionManager
 from app.integrations.providers import ProviderExecutor, ProviderRegistry, RetryPolicy
 from app.security.authorization import (
@@ -25,6 +26,8 @@ from app.services.connection_service import ConnectionService
 from app.services.connection_validation_service import ConnectionValidationService
 from app.services.platform_service import PlatformService
 from app.services.readiness_service import ReadinessService
+from app.services.workflow_execution_service import WorkflowExecutionService
+from app.services.workflow_service import WorkflowService
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -109,6 +112,43 @@ def get_master_key_box(request: Request) -> MasterKeyBox:
 
 def get_principal(request: Request) -> Principal:
     return request.app.state.principal
+
+
+def get_workflow_queue(request: Request) -> WorkflowQueue:
+    queue = getattr(request.app.state, "workflow_queue", None)
+    if queue is None:
+        from app.core.exceptions import DependencyUnavailableError
+
+        raise DependencyUnavailableError("The workflow queue is not available on this instance.")
+    return queue
+
+
+async def get_workflow_service(request: Request) -> AsyncIterator[WorkflowService]:
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        try:
+            yield WorkflowService(session, request.app.state.provider_registry)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def get_workflow_execution_service(request: Request) -> AsyncIterator[WorkflowExecutionService]:
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        try:
+            yield WorkflowExecutionService(
+                session,
+                request.app.state.provider_registry,
+                request.app.state.provider_executor,
+                request.app.state.master_key_box,
+                queue=getattr(request.app.state, "workflow_queue", None),
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def company_scope(request: Request) -> CompanyScope:
