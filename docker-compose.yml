@@ -37,6 +37,38 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    command: ["python", "-m", "app.workers.main"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_SCHEDULER_INTERVAL: ${WORKER_SCHEDULER_INTERVAL:-5}
+    env_file:
+      - .env
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # The worker has no HTTP surface; verify the process can reach Postgres.
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('postgres', 5432), 3); s.close()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   postgres:
     image: postgres:16-alpine
     environment:
