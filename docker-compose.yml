@@ -78,7 +78,8 @@ services:
     restart: unless-stopped
 
   n8n:
-    image: n8nio/n8n:latest  # consider pinning a specific minor for reproducibility
+    # Pinned by digest for reproducibility (n8nio/n8n:latest @ 2026-11-07).
+    image: n8nio/n8n@sha256:8602f5dfacbe2c931eeafd010de0e68182310e9f309921e780ab69182e92b3ae
     environment:
       N8N_HOST: ${N8N_HOST:-localhost}
       N8N_PORT: "5678"
