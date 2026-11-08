@@ -18,6 +18,7 @@ dependencies = [
     "redis>=5.2",
     "httpx>=0.28",
     "cryptography>=44",
+    "croniter>=6.0",
 ]
 
 [project.optional-dependencies]

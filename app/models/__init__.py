@@ -9,7 +9,30 @@ from app.models.credential_version import CredentialVersion, CredentialVersionSt
 from app.models.mixins import TimestampMixin
 from app.models.platform import IntegrationType, Platform, PlatformStatus, PlatformType
 from app.models.platform_connection import ConnectionStatus, PlatformConnection
-from app.models.workflow_execution import WorkflowExecution, WorkflowStatus, WorkflowType
+from app.models.workflow import Workflow, WorkflowStatus as WorkflowDefinitionStatus
+from app.models.workflow_execution import (
+    WorkflowExecution,
+    WorkflowStatus,
+    WorkflowTriggerType,
+    WorkflowType,
+)
+from app.models.workflow_execution_step import (
+    WorkflowExecutionLog,
+    WorkflowLogLevel,
+    WorkflowExecutionStep,
+    WorkflowStepStatus,
+)
+from app.models.workflow_schedule import (
+    WorkflowSchedule,
+    WorkflowScheduleMissedPolicy,
+    WorkflowScheduleType,
+)
+from app.models.workflow_version import (
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowVersion,
+    WorkflowVersionStatus,
+)
 
 __all__ = [
     "ActorType",
@@ -30,7 +53,22 @@ __all__ = [
     "PlatformStatus",
     "PlatformType",
     "TimestampMixin",
+    "Workflow",
+    "WorkflowDefinitionStatus",
+    "WorkflowEdge",
     "WorkflowExecution",
+    "WorkflowExecutionLog",
+    "WorkflowExecutionStep",
+    "WorkflowLogLevel",
+    "WorkflowNode",
+    "WorkflowSchedule",
+    "WorkflowScheduleMissedPolicy",
+    "WorkflowScheduleType",
     "WorkflowStatus",
+    "WorkflowStepStatus",
+    "WorkflowTriggerType",
     "WorkflowType",
+    "WorkflowVersion",
+    "WorkflowVersionStatus",
 ]
+
