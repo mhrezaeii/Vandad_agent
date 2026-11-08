@@ -38,6 +38,12 @@ class ProviderRegistry:
             raise DuplicateProviderError(adapter.provider_id)
         self._adapters[adapter.provider_id] = adapter
 
+    def replace(self, adapter: ProviderAdapter) -> None:
+        """Swap an existing registration (used by tests to inject transports)."""
+        if adapter.provider_id not in self._adapters:
+            raise UnknownProviderError(adapter.provider_id)
+        self._adapters[adapter.provider_id] = adapter
+
     def get(self, provider_id: str) -> ProviderAdapter:
         try:
             return self._adapters[provider_id]

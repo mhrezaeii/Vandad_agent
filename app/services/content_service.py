@@ -1,0 +1,708 @@
+"""Content production service: brands, characters, projects, workflows.
+
+Orchestrates the video pipeline on top of the existing engine:
+
+- ``ensure_vandefence_brand``  — idempotent first-brand bootstrap
+- ``ensure_workflow``          — idempotent workflow definitions bound to the
+  operator-selected provider connections
+- ``generate_script``          — starts the script workflow execution
+- ``approve_script``           — operator gate (script_ready -> approved)
+- ``generate_video``           — starts the video workflow execution; the paid
+  HeyGen submission happens exactly once inside ``content.submit_video``
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.exceptions import ConflictError, NotFoundError
+from app.integrations.providers import (
+    ProviderExecutor,
+    ProviderRegistry,
+)
+from app.integrations.providers.base import ProviderError, ProviderExecutionContext
+from app.models import (
+    BrandCharacter,
+    CharacterStatus,
+    ContentBrand,
+    ContentBrandStatus,
+    ContentProject,
+    PlatformConnection,
+    ProjectStatus,
+    Workflow,
+    WorkflowDefinitionStatus,
+    WorkflowExecution,
+    WorkflowTriggerType,
+)
+from app.security.authorization import CompanyScope
+from app.security.crypto import MasterKeyBox
+from app.services.audit_service import AuditService
+from app.services.credential_service import CredentialService
+from app.services.workflow_execution_service import WorkflowExecutionService
+from app.services.workflow_service import WorkflowService
+
+BRAND_RESOURCE = "brand"
+PROJECT_RESOURCE = "project"
+CHARACTER_RESOURCE = "brand_character"
+
+SCRIPT_WORKFLOW_NAME = "vandefence.script.v1"
+VIDEO_WORKFLOW_NAME = "vandefence.video.v1"
+
+VANDEFENCE_BRAND: dict[str, Any] = {
+    "name": "Vandefence",
+    "domain": "vandefence.ir",
+    "industry": "Cybersecurity",
+    "language": "fa-IR",
+    "video_width": 1080,
+    "video_height": 1920,
+    "tone": (
+        "حرفه‌ای، فنی و معتبر؛ لحن واضح و مطمئن بدون اغراق و بدون ادعاهای "
+        "اثبات‌نشده درباره عملکرد یا امنیت."
+    ),
+    "visual_config": {
+        "background": "dark navy",
+        "accent": "electric blue",
+        "style": "minimal cybersecurity graphics",
+    },
+}
+
+SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
+    "nodes": [
+        {"node_key": "start", "node_type": "trigger.manual", "name": "trigger"},
+        {
+            "node_key": "script_generation",
+            "node_type": "action.provider",
+            "name": "generate persian script",
+            "configuration": {"connection_id": "__LLM_CONNECTION__", "operation": "execute"},
+            "input_mapping": {
+                "params": {
+                    "$template": (
+                        '{"system": "تو یک کپی‌رایتر فارسی برای برند امنیتی Vandefence هستی. '
+                        "فقط JSON معتبر با کلیدهای title، script، segments و cta برگردان؛ "
+                        "segments آرایه‌ای از رشته‌های فارسی است. هیچ ادعای اثبات‌نشده درباره "
+                        'محصول یا عملکرد ننویس.", '
+                        '"user": "یک اسکریپت گفتاری حدوداً ۳۰ ثانیه‌ای (۶۰ تا ۸۰ واژه) به '
+                        "زبان فارسی روان برای ویدیوی عمودی درباره موضوع زیر بنویس: شروع با "
+                        "قلاب جذاب، توضیح فنی دقیق، پایان کوتاه با CTA. موضوع: "
+                        '{{ trigger.topic }}"}'
+                    )
+                }
+            },
+            "execution_settings": {"timeout_seconds": 120, "max_retries": 2},
+        },
+        {
+            "node_key": "record_script",
+            "node_type": "content.update_project",
+            "name": "persist script",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+        },
+        {
+            "node_key": "finish",
+            "node_type": "control.complete",
+            "name": "done",
+            "configuration": {"outcome": "completed"},
+        },
+    ],
+    "edges": [
+        {"from_key": "start", "to_key": "script_generation"},
+        {"from_key": "script_generation", "to_key": "record_script"},
+        {"from_key": "record_script", "to_key": "finish"},
+    ],
+}
+
+VIDEO_WORKFLOW_GRAPH: dict[str, Any] = {
+    "nodes": [
+        {"node_key": "start", "node_type": "trigger.manual", "name": "trigger"},
+        {
+            "node_key": "submit",
+            "node_type": "content.submit_video",
+            "name": "submit to heygen (idempotent)",
+            "configuration": {"connection_id": "__HEYGEN_CONNECTION__"},
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {
+                "timeout_seconds": 60,
+                "max_retries": 2,
+                "idempotent": False,
+            },
+        },
+        {
+            "node_key": "wait",
+            "node_type": "control.delay",
+            "name": "initial provider wait",
+            "configuration": {"seconds": 30},
+        },
+        {
+            "node_key": "poll",
+            "node_type": "content.poll_video",
+            "name": "poll heygen status",
+            "configuration": {"connection_id": "__HEYGEN_CONNECTION__"},
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            # Still-processing is a transient error: the engine retries with
+            # backoff (~60 x 30s = up to ~30 min), re-polling from the persisted
+            # provider_job_id. Never resubmits.
+            "execution_settings": {
+                "timeout_seconds": 30,
+                "max_retries": 60,
+                "backoff_seconds": 30,
+                "idempotent": True,
+            },
+        },
+        {
+            "node_key": "download",
+            "node_type": "content.download_video",
+            "name": "download raw video",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 900, "max_retries": 2},
+        },
+        {
+            "node_key": "render",
+            "node_type": "content.render_video",
+            "name": "render branded video",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 1800, "max_retries": 1},
+        },
+        {
+            "node_key": "finish",
+            "node_type": "control.complete",
+            "name": "done",
+            "configuration": {"outcome": "completed"},
+        },
+    ],
+    "edges": [
+        {"from_key": "start", "to_key": "submit"},
+        {"from_key": "submit", "to_key": "wait"},
+        {"from_key": "wait", "to_key": "poll"},
+        {"from_key": "poll", "to_key": "download"},
+        {"from_key": "download", "to_key": "render"},
+        {"from_key": "render", "to_key": "finish"},
+    ],
+}
+
+
+def _bind_connection(graph: dict[str, Any], placeholder: str, connection_id: uuid.UUID) -> dict[str, Any]:
+    """Return a deep copy of *graph* with the placeholder connection bound."""
+    import copy
+
+    bound = copy.deepcopy(graph)
+    for node in bound["nodes"]:
+        configuration = node.get("configuration") or {}
+        if configuration.get("connection_id") == placeholder:
+            configuration["connection_id"] = str(connection_id)
+            node["configuration"] = configuration
+    return bound
+
+
+class ContentService:
+    def __init__(
+        self,
+        session: AsyncSession,
+        registry: ProviderRegistry,
+        executor: ProviderExecutor,
+        master_key_box: MasterKeyBox,
+        workflow_queue=None,  # noqa: ANN001 - WorkflowQueue | None
+    ) -> None:
+        self.session = session
+        self.registry = registry
+        self.executor = executor
+        self._keys = master_key_box
+        self.queue = workflow_queue
+        self.audit = AuditService(session)
+        self._workflow_service = WorkflowService(session, registry)
+        self._execution_service = WorkflowExecutionService(
+            session, registry, executor, master_key_box, queue=workflow_queue
+        )
+
+    # ------------------------------------------------------------------ brands
+    async def ensure_vandefence_brand(self, *, company_id: uuid.UUID) -> ContentBrand:
+        """Idempotent first-brand bootstrap (safe on every startup)."""
+        brand = (
+            await self.session.execute(
+                select(ContentBrand).where(
+                    ContentBrand.company_id == company_id,
+                    ContentBrand.name == VANDEFENCE_BRAND["name"],
+                )
+            )
+        ).scalar_one_or_none()
+        if brand is not None:
+            return brand
+        brand = ContentBrand(company_id=company_id, **VANDEFENCE_BRAND)
+        self.session.add(brand)
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.brand_created",
+            action="create",
+            company_id=company_id,
+            resource_type=BRAND_RESOURCE,
+            resource_id=brand.id,
+            metadata={"name": brand.name, "domain": brand.domain},
+        )
+        await self.session.flush()
+        return brand
+
+    async def get_brand(self, brand_id: uuid.UUID, *, company_id: uuid.UUID) -> ContentBrand:
+        brand = await self.session.get(ContentBrand, brand_id)
+        if brand is None or brand.company_id != company_id:
+            raise NotFoundError(
+                "Brand not found.", details=[{"field": "brand_id", "value": str(brand_id)}]
+            )
+        return brand
+
+    async def list_brands(self, *, company_id: uuid.UUID) -> list[ContentBrand]:
+        return list(
+            (
+                await self.session.execute(
+                    select(ContentBrand)
+                    .where(
+                        ContentBrand.company_id == company_id,
+                        ContentBrand.status == ContentBrandStatus.ACTIVE.value,
+                    )
+                    .order_by(ContentBrand.name)
+                )
+            ).scalars().all()
+        )
+
+    # -------------------------------------------------------------- character
+    async def get_character(self, brand_id: uuid.UUID, *, company_id: uuid.UUID) -> BrandCharacter:
+        await self.get_brand(brand_id, company_id=company_id)
+        character = (
+            await self.session.execute(
+                select(BrandCharacter).where(BrandCharacter.brand_id == brand_id)
+            )
+        ).scalar_one_or_none()
+        if character is None:
+            brand = await self.get_brand(brand_id, company_id=company_id)
+            character = BrandCharacter(
+                brand_id=brand.id,
+                company_id=company_id,
+                provider="heygen",
+                status=CharacterStatus.NOT_CREATED.value,
+                language=brand.language,
+            )
+            self.session.add(character)
+            await self.session.flush()
+        return character
+
+    async def create_character(
+        self,
+        brand_id: uuid.UUID,
+        *,
+        company_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        source_image_url: str | None,
+        voice_id: str | None = None,
+    ) -> BrandCharacter:
+        """Start the verified HeyGen photo-avatar creation flow.
+
+        Requires an explicit ``source_image_url`` asset the provider can fetch.
+        A persistent character is created ONCE per brand — never per video.
+        """
+        brand = await self.get_brand(brand_id, company_id=company_id)
+        character = await self.get_character(brand_id, company_id=company_id)
+        if character.status == CharacterStatus.ACTIVE.value:
+            raise ConflictError(
+                "An active character already exists for this brand.",
+                details=[{"character_id": str(character.id)}],
+            )
+        if character.status == CharacterStatus.CREATING.value:
+            raise ConflictError("Character creation is already in progress.")
+        if not source_image_url:
+            raise ConflictError(
+                "A source portrait image_url is required to create the character "
+                "(explicit asset fetched by the provider).",
+                details=[{"field": "source_image_url"}],
+            )
+
+        character.source_image_url = source_image_url
+        character.voice_id = voice_id or character.voice_id
+        character.status = CharacterStatus.CREATING.value
+        character.creation_metadata = {"requested_at": self._now_iso()}
+
+        try:
+            metadata = await self._heygen_operation(
+                connection_id=connection_id,
+                company_id=company_id,
+                operation="create_photo_avatar",
+                params={"name": f"{brand.name} character", "image_url": source_image_url},
+            )
+        except ProviderError as exc:
+            character.status = CharacterStatus.FAILED.value
+            character.creation_metadata = {
+                **(character.creation_metadata or {}),
+                "last_error": exc.message,
+                "error_code": exc.code,
+            }
+            await self.session.flush()
+            raise
+
+        character.provider_group_id = metadata.get("provider_group_id")
+        character.status = CharacterStatus.TRAINING.value
+        character.creation_metadata = {
+            **(character.creation_metadata or {}),
+            "created_at": self._now_iso(),
+            **metadata,
+        }
+        self.audit.record(
+            event_type="content.character_creation_started",
+            action="create",
+            company_id=company_id,
+            resource_type=CHARACTER_RESOURCE,
+            resource_id=character.id,
+            metadata={"provider": "heygen", "group_id": character.provider_group_id},
+        )
+        await self.session.flush()
+        return character
+
+    async def refresh_character(
+        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, connection_id: uuid.UUID
+    ) -> BrandCharacter:
+        """Poll photo-avatar training; persist the persistent avatar id on success."""
+        character = await self.get_character(brand_id, company_id=company_id)
+        if character.provider_group_id is None:
+            raise ConflictError("Character creation has not started.")
+        metadata = await self._heygen_operation(
+            connection_id=connection_id,
+            company_id=company_id,
+            operation="photo_avatar_status",
+            params={"provider_group_id": character.provider_group_id},
+        )
+        character.last_checked_at = datetime.now(UTC)
+        avatar_id = metadata.get("provider_avatar_id")
+        if avatar_id:
+            character.provider_avatar_id = str(avatar_id)
+            character.avatar_kind = "photo_avatar"
+            character.status = CharacterStatus.ACTIVE.value
+            character.creation_metadata = {**(character.creation_metadata or {}), **metadata}
+            self.audit.record(
+                event_type="content.character_activated",
+                action="activate",
+                company_id=company_id,
+                resource_type=CHARACTER_RESOURCE,
+                resource_id=character.id,
+                metadata={"provider_avatar_id": str(avatar_id)},
+            )
+        await self.session.flush()
+        return character
+
+    async def set_character_status(
+        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, active: bool
+    ) -> BrandCharacter:
+        character = await self.get_character(brand_id, company_id=company_id)
+        if character.status == CharacterStatus.NOT_CREATED.value:
+            raise ConflictError("The character has not been created yet.")
+        character.status = CharacterStatus.ACTIVE.value if active else CharacterStatus.INACTIVE.value
+        self.audit.record(
+            event_type="content.character_status_changed",
+            action="activate" if active else "deactivate",
+            company_id=company_id,
+            resource_type=CHARACTER_RESOURCE,
+            resource_id=character.id,
+            metadata={"status": character.status},
+        )
+        await self.session.flush()
+        return character
+
+    # ---------------------------------------------------------------- projects
+    async def create_project(
+        self, *, scope: CompanyScope, brand_id: uuid.UUID, topic: str
+    ) -> ContentProject:
+        brand = await self.get_brand(brand_id, company_id=scope.company_id)
+        project = ContentProject(
+            company_id=scope.company_id,
+            brand_id=brand.id,
+            topic=topic,
+            status=ProjectStatus.DRAFT.value,
+        )
+        self.session.add(project)
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.project_created",
+            action="create",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={"brand": brand.name, "topic": topic[:200]},
+        )
+        await self.session.flush()
+        return project
+
+    async def get_project(self, project_id: uuid.UUID, *, company_id: uuid.UUID) -> ContentProject:
+        project = await self.session.get(ContentProject, project_id)
+        if project is None or project.company_id != company_id:
+            raise NotFoundError(
+                "Project not found.", details=[{"field": "project_id", "value": str(project_id)}]
+            )
+        return project
+
+    # --------------------------------------------------------- script + video
+    async def generate_script(
+        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+    ) -> ContentProject:
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.status not in (ProjectStatus.DRAFT.value, ProjectStatus.SCRIPT_FAILED.value):
+            raise ConflictError(
+                f"Script generation is not allowed from status '{project.status}'.",
+                details=[{"status": project.status}],
+            )
+        await self.ensure_workflow(
+            SCRIPT_WORKFLOW_NAME, SCRIPT_WORKFLOW_GRAPH, company_id=scope.company_id,
+            connection_id=connection_id,
+        )
+        workflow = await self._require_published(SCRIPT_WORKFLOW_NAME, scope.company_id)
+        execution, _created = await self._execution_service.execute_workflow(
+            workflow.id,
+            scope=scope,
+            input_metadata={"project_id": str(project.id), "topic": project.topic},
+            idempotency_key=f"script:{project.id}",
+            trigger_type=WorkflowTriggerType.API,
+            trigger_reference=str(project.id),
+        )
+        project.status = ProjectStatus.SCRIPT_GENERATING.value
+        project.script_workflow_execution_id = execution.id
+        self.audit.record(
+            event_type="content.script_generation_started",
+            action="generate_script",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={"execution_id": str(execution.id)},
+        )
+        await self.session.flush()
+        return project
+
+    async def approve_script(self, project_id: uuid.UUID, *, scope: CompanyScope) -> ContentProject:
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.status != ProjectStatus.SCRIPT_READY.value:
+            raise ConflictError(
+                f"Only script_ready projects can be approved (status '{project.status}').",
+                details=[{"status": project.status}],
+            )
+        if not project.script_text:
+            raise ConflictError("The project has no script to approve.")
+        project.status = ProjectStatus.APPROVED.value
+        self.audit.record(
+            event_type="content.script_approved",
+            action="approve_script",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={},
+        )
+        await self.session.flush()
+        return project
+
+    async def generate_video(
+        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+    ) -> ContentProject:
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.status != ProjectStatus.APPROVED.value:
+            raise ConflictError(
+                f"Only approved projects can generate video (status '{project.status}').",
+                details=[{"status": project.status}],
+            )
+        if project.provider_job_id:
+            raise ConflictError(
+                "This project already has a paid HeyGen submission.",
+                details=[{"provider_job_id": project.provider_job_id}],
+            )
+        character = await self.get_character(project.brand_id, company_id=scope.company_id)
+        if character.status != CharacterStatus.ACTIVE.value or not character.provider_avatar_id:
+            raise ConflictError(
+                "The brand character is not active in HeyGen; create and activate it first.",
+                details=[{"status": character.status}],
+            )
+        await self.ensure_workflow(
+            VIDEO_WORKFLOW_NAME, VIDEO_WORKFLOW_GRAPH, company_id=scope.company_id,
+            connection_id=connection_id,
+        )
+        workflow = await self._require_published(VIDEO_WORKFLOW_NAME, scope.company_id)
+        execution, _created = await self._execution_service.execute_workflow(
+            workflow.id,
+            scope=scope,
+            input_metadata={"project_id": str(project.id)},
+            idempotency_key=f"video:{project.id}",
+            trigger_type=WorkflowTriggerType.API,
+            trigger_reference=str(project.id),
+        )
+        project.status = ProjectStatus.VIDEO_GENERATING.value
+        project.video_workflow_execution_id = execution.id
+        self.audit.record(
+            event_type="content.video_generation_started",
+            action="generate_video",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={"execution_id": str(execution.id)},
+        )
+        await self.session.flush()
+        return project
+
+    # ------------------------------------------------------------- introspection
+    async def get_job_status(self, job_id: uuid.UUID, *, company_id: uuid.UUID) -> dict[str, Any]:
+        project = (
+            await self.session.execute(
+                select(ContentProject).where(
+                    ContentProject.video_workflow_execution_id == job_id
+                )
+            )
+        ).scalar_one_or_none()
+        if project is None or project.company_id != company_id:
+            raise NotFoundError("Job not found.", details=[{"job_id": str(job_id)}])
+        execution = None
+        if project.video_workflow_execution_id:
+            execution = await self.session.get(WorkflowExecution, project.video_workflow_execution_id)
+        return {
+            "project_id": str(project.id),
+            "status": project.status,
+            "provider_job_id": project.provider_job_id,
+            "provider_status": project.provider_status,
+            "raw_artifact_id": str(project.raw_artifact_id) if project.raw_artifact_id else None,
+            "final_artifact_id": str(project.final_artifact_id) if project.final_artifact_id else None,
+            "execution_status": execution.status if execution else None,
+            "cost_metadata": project.cost_metadata,
+            "llm_usage": project.llm_usage,
+        }
+
+    async def list_videos(self, *, company_id: uuid.UUID) -> list[ContentProject]:
+        return list(
+            (
+                await self.session.execute(
+                    select(ContentProject)
+                    .where(
+                        ContentProject.company_id == company_id,
+                        ContentProject.status == ProjectStatus.COMPLETED.value,
+                    )
+                    .order_by(ContentProject.updated_at.desc())
+                )
+            ).scalars().all()
+        )
+
+    # ---------------------------------------------------------- workflow seeds
+    async def ensure_workflow(
+        self,
+        name: str,
+        graph: dict[str, Any],
+        *,
+        company_id: uuid.UUID,
+        connection_id: uuid.UUID,
+    ) -> Workflow:
+        """Idempotently ensure a published workflow bound to the given connection.
+
+        Re-binds (new draft + publish) only when the stored graph references a
+        different connection than the operator selected.
+        """
+        bound_graph = _bind_connection(graph, "__LLM_CONNECTION__" if "script" in name else "__HEYGEN_CONNECTION__", connection_id)
+        bound_graph = _bind_connection(bound_graph, "__HEYGEN_CONNECTION__", connection_id)
+
+        workflow = (
+            await self.session.execute(
+                select(Workflow).where(
+                    Workflow.company_id == company_id, Workflow.name == name
+                )
+            )
+        ).scalar_one_or_none()
+        if workflow is not None:
+            if workflow.status == WorkflowDefinitionStatus.PUBLISHED.value and workflow.current_version_id:
+                from app.workflows.validation import load_version_graph
+
+                nodes, _edges = await load_version_graph(self.session, workflow.current_version_id)
+                used_connections = {
+                    node.configuration.get("connection_id")
+                    for node in nodes
+                    if node.configuration.get("connection_id")
+                }
+                if str(connection_id) in used_connections:
+                    return workflow
+            scope = CompanyScope(company_id=company_id, principal=_system_principal())
+            await self._workflow_service.update_workflow(
+                workflow.id,
+                company_id=company_id,
+                nodes=bound_graph["nodes"],
+                edges=bound_graph["edges"],
+            )
+            await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
+            await self.session.refresh(workflow)
+            return workflow
+
+        scope = CompanyScope(company_id=company_id, principal=_system_principal())
+        workflow = await self._workflow_service.create_workflow(
+            scope=scope,
+            name=name,
+            description=f"Auto-provisioned {name} pipeline",
+            nodes=bound_graph["nodes"],
+            edges=bound_graph["edges"],
+        )
+        return await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
+
+    async def _require_published(self, name: str, company_id: uuid.UUID) -> Workflow:
+        workflow = (
+            await self.session.execute(
+                select(Workflow).where(
+                    Workflow.company_id == company_id, Workflow.name == name
+                )
+            )
+        ).scalar_one_or_none()
+        if workflow is None or workflow.status != WorkflowDefinitionStatus.PUBLISHED.value:
+            raise ConflictError(f"Required workflow '{name}' is not published for this company.")
+        return workflow
+
+    # ----------------------------------------------------------- heygen helper
+    async def _heygen_operation(
+        self,
+        *,
+        connection_id: uuid.UUID,
+        company_id: uuid.UUID,
+        operation: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        adapter = self.registry.get("heygen")
+        connection = await self.session.get(PlatformConnection, connection_id)
+        if connection is None or connection.company_id != company_id:
+            raise NotFoundError(
+                "Connection not found.",
+                details=[{"field": "connection_id", "value": str(connection_id)}],
+            )
+        credential = None
+        credential_type = None
+        secret_reference = None
+        if connection.credential_reference_id is not None:
+            resolved = await CredentialService(self.session, self._keys).resolve_credential(
+                connection.credential_reference_id, company_id=company_id
+            )
+            credential, credential_type, secret_reference = (
+                resolved.payload,
+                resolved.credential_type,
+                resolved.secret_reference,
+            )
+        context = ProviderExecutionContext(
+            provider_id="heygen",
+            connection_id=connection.id,
+            company_id=company_id,
+            platform_id=connection.platform_id,
+            configuration={**connection.configuration, **params},
+            credential=credential,
+            credential_type=credential_type,
+            secret_reference=secret_reference,
+            timeout_seconds=60.0,
+            operation=operation,
+        )
+        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
+        if not outcome.success:
+            raise outcome.error or ProviderError(
+                "The HeyGen operation failed.", code="heygen_failure"
+            )
+        return outcome.result.metadata or {}
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(UTC).isoformat()
+
+
+def _system_principal():
+    from app.security.authorization import Principal  # noqa: PLC0415
+
+    return Principal(subject="content-service", company_ids=frozenset({"*"}))

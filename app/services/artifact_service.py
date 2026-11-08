@@ -49,8 +49,7 @@ class ArtifactService:
         self,
         session: AsyncSession,
         storage: ArtifactStorage,
-        *,
-        max_size_bytes: int,
+        max_size_bytes: int = 2 * 1024**3,
     ) -> None:
         self.session = session
         self.storage = storage

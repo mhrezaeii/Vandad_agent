@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.artifacts import artifact_router as artifacts_router
 from app.api.v1.artifacts import router as execution_artifacts_router
 from app.api.v1.connections import router as connections_router
+from app.api.v1.content import router as content_router
 from app.api.v1.executions import router as executions_router
 from app.api.v1.executions import schedule_router as schedules_router
 from app.api.v1.health import router as health_router
@@ -22,3 +23,4 @@ api_v1_router.include_router(executions_router)
 api_v1_router.include_router(schedules_router)
 api_v1_router.include_router(execution_artifacts_router)
 api_v1_router.include_router(artifacts_router)
+api_v1_router.include_router(content_router)

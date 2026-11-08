@@ -63,6 +63,10 @@ def classify_exception(exc: Exception) -> ProviderError:
             "The provider could not be reached.", code="provider_unreachable"
         )
     # Unknown failures are treated as permanent: fail safe, never retry blindly.
+    logger.warning(
+        "provider operation raised an unexpected %s; classified permanent",
+        type(exc).__name__,
+    )
     return ProviderPermanentError(
         "The provider operation failed.", code="provider_failure"
     )

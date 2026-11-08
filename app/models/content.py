@@ -16,7 +16,6 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
-    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -63,7 +62,7 @@ class ContentBrand(Base, TimestampMixin):
         server_default=ContentBrandStatus.ACTIVE.value,
     )
 
-    characters: Mapped[list["BrandCharacter"]] = relationship(
+    characters: Mapped[list[BrandCharacter]] = relationship(
         back_populates="brand", cascade="all, delete-orphan", passive_deletes=True
     )
 

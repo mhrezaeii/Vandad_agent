@@ -22,6 +22,11 @@ class NodeType:
     DATA_TRANSFORM = "data.transform"
     CONTROL_DELAY = "control.delay"
     CONTROL_COMPLETE = "control.complete"
+    CONTENT_UPDATE_PROJECT = "content.update_project"
+    CONTENT_SUBMIT_VIDEO = "content.submit_video"
+    CONTENT_POLL_VIDEO = "content.poll_video"
+    CONTENT_DOWNLOAD_VIDEO = "content.download_video"
+    CONTENT_RENDER_VIDEO = "content.render_video"
 
 
 VALID_NODE_TYPES = frozenset(
@@ -32,14 +37,19 @@ VALID_NODE_TYPES = frozenset(
         NodeType.DATA_TRANSFORM,
         NodeType.CONTROL_DELAY,
         NodeType.CONTROL_COMPLETE,
+        NodeType.CONTENT_UPDATE_PROJECT,
+        NodeType.CONTENT_SUBMIT_VIDEO,
+        NodeType.CONTENT_POLL_VIDEO,
+        NodeType.CONTENT_DOWNLOAD_VIDEO,
+        NodeType.CONTENT_RENDER_VIDEO,
     }
 )
 
 TRIGGER_NODE_TYPES = frozenset({NodeType.TRIGGER_MANUAL})
 
 # Execution-setting bounds shared by every node type.
-MAX_NODE_TIMEOUT_SECONDS = 600
-MAX_NODE_RETRIES = 5
+MAX_NODE_TIMEOUT_SECONDS = 1800  # long media operations (download/render)
+MAX_NODE_RETRIES = 60
 MAX_DELAY_SECONDS = 3600
 
 
@@ -143,6 +153,12 @@ def _validate_trigger_manual(config: dict[str, Any]) -> list[ConfigIssue]:
     return []
 
 
+def _validate_content_node(config: dict[str, Any]) -> list[ConfigIssue]:
+    # project_id arrives via input_mapping from the trigger; connection_id is
+    # bound at workflow provisioning time.
+    return []
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], list[ConfigIssue]]] = {
     NodeType.TRIGGER_MANUAL: _validate_trigger_manual,
     NodeType.ACTION_PROVIDER: _validate_provider_action,
@@ -150,6 +166,11 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], list[ConfigIssue]]] = {
     NodeType.DATA_TRANSFORM: _validate_transform,
     NodeType.CONTROL_DELAY: _validate_delay,
     NodeType.CONTROL_COMPLETE: _validate_complete,
+    NodeType.CONTENT_UPDATE_PROJECT: _validate_content_node,
+    NodeType.CONTENT_SUBMIT_VIDEO: _validate_content_node,
+    NodeType.CONTENT_POLL_VIDEO: _validate_content_node,
+    NodeType.CONTENT_DOWNLOAD_VIDEO: _validate_content_node,
+    NodeType.CONTENT_RENDER_VIDEO: _validate_content_node,
 }
 
 # Default execution settings merged with per-node overrides by the engine.
@@ -208,7 +229,11 @@ def validate_input_mapping(mapping: dict[str, Any]) -> list[ConfigIssue]:
     issues: list[ConfigIssue] = []
     if not isinstance(mapping, dict):
         return [ConfigIssue("input_mapping", "must be an object")]
-    from app.workflows.mapping import TEMPLATE_PATTERN, is_reference_path
+    from app.workflows.mapping import (
+        TEMPLATE_PATTERN,
+        is_reference_path,
+        validate_reference_path,
+    )
 
     for key, value in mapping.items():
         if not isinstance(key, str) or not key:

@@ -3,6 +3,7 @@
 
 from app.models.audit_event import ActorType, AuditEvent
 from app.models.company import Company, CompanyStatus
+from app.models.connection_event import ConnectionEvent
 from app.models.content import (
     BrandCharacter,
     CharacterStatus,
@@ -11,7 +12,6 @@ from app.models.content import (
     ContentProject,
     ProjectStatus,
 )
-from app.models.connection_event import ConnectionEvent
 from app.models.credential_reference import CredentialReference, CredentialStatus, CredentialStorageType, CredentialType
 from app.models.credential_version import CredentialVersion, CredentialVersionStatus
 from app.models.mixins import TimestampMixin

@@ -63,7 +63,7 @@ from app.workflows.validation import load_version_graph
 logger = logging.getLogger("app.workflow_engine")
 
 EXECUTION_DEFAULT_TIMEOUT_SECONDS = 300
-_MAX_TRANSIENT_SLEEP = 8.0
+_MAX_TRANSIENT_SLEEP = 30.0
 
 
 class ExecutionOutcome:
@@ -122,11 +122,14 @@ class WorkflowEngine:
         registry: ProviderRegistry,
         executor: ProviderExecutor,
         master_key_box: MasterKeyBox,
+        *,
+        artifact_storage=None,  # ArtifactStorage | None (media-producing nodes)
     ) -> None:
         self.session = session
         self.registry = registry
         self.executor = executor
         self._keys = master_key_box
+        self.artifact_storage = artifact_storage
 
     # ------------------------------------------------------------------ public
     async def run_execution(self, execution_id: uuid.UUID, *, company_id: uuid.UUID) -> EngineResult:
@@ -373,6 +376,13 @@ class WorkflowEngine:
             timeout = effective_timeout if effective_timeout is not None else spec.timeout_seconds
             return await self._run_provider_action(execution, spec, params, timeout_seconds=timeout)
 
+        if node.node_type.startswith("content."):
+            from app.workflows.nodes_content import dispatch_content_node
+
+            return await dispatch_content_node(
+                self, execution, node, params, effective_timeout or spec.timeout_seconds
+            )
+
         raise ProviderError(f"Unsupported node type at runtime: {node.node_type}", code="invalid_node_type")
 
     async def _handle_delay(
@@ -552,12 +562,13 @@ class WorkflowEngine:
         message: str,
         *,
         step: WorkflowExecutionStep | None = None,
+        node_key: str | None = None,
     ) -> None:
         self.session.add(
             WorkflowExecutionLog(
                 execution_id=execution.id,
                 step_id=step.id if step else None,
-                node_key=step.node_key if step else None,
+                node_key=step.node_key if step else node_key,
                 level=level,
                 message=message[:1000],
                 correlation_id=get_correlation_id(),
