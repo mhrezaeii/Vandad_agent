@@ -3,6 +3,14 @@
 
 from app.models.audit_event import ActorType, AuditEvent
 from app.models.company import Company, CompanyStatus
+from app.models.content import (
+    BrandCharacter,
+    CharacterStatus,
+    ContentBrand,
+    ContentBrandStatus,
+    ContentProject,
+    ProjectStatus,
+)
 from app.models.connection_event import ConnectionEvent
 from app.models.credential_reference import CredentialReference, CredentialStatus, CredentialStorageType, CredentialType
 from app.models.credential_version import CredentialVersion, CredentialVersionStatus
@@ -40,20 +48,26 @@ __all__ = [
     "ActorType",
     "ArtifactKind",
     "AuditEvent",
+    "BrandCharacter",
     "Company",
     "CompanyStatus",
+    "ContentBrand",
+    "ContentBrandStatus",
+    "ContentProject",
     "ConnectionEvent",
     "ConnectionStatus",
     "CredentialReference",
     "CredentialStatus",
     "CredentialStorageType",
     "CredentialType",
+    "CharacterStatus",
     "CredentialVersion",
     "CredentialVersionStatus",
     "IntegrationType",
     "Platform",
     "PlatformConnection",
     "PlatformStatus",
+    "ProjectStatus",
     "PlatformType",
     "TimestampMixin",
     "Workflow",
