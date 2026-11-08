@@ -19,8 +19,15 @@ ALLOWED_TRANSITIONS: dict[ConnectionStatus, frozenset[ConnectionStatus]] = {
     ConnectionStatus.VALIDATING: frozenset(
         {ConnectionStatus.CONNECTED, ConnectionStatus.DEGRADED, ConnectionStatus.ERROR, ConnectionStatus.CONFIGURED}
     ),
+    # CONFIGURED is reachable when configuration changes invalidate the healthy state.
     ConnectionStatus.CONNECTED: frozenset(
-        {ConnectionStatus.VALIDATING, ConnectionStatus.DEGRADED, ConnectionStatus.DISCONNECTED, ConnectionStatus.ERROR}
+        {
+            ConnectionStatus.VALIDATING,
+            ConnectionStatus.CONFIGURED,
+            ConnectionStatus.DEGRADED,
+            ConnectionStatus.DISCONNECTED,
+            ConnectionStatus.ERROR,
+        }
     ),
     ConnectionStatus.DEGRADED: frozenset(
         {ConnectionStatus.VALIDATING, ConnectionStatus.CONNECTED, ConnectionStatus.DISCONNECTED, ConnectionStatus.ERROR}

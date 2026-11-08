@@ -24,6 +24,7 @@ from app.models import (
     CredentialReference,
     CredentialStatus,
     CredentialStorageType,
+    CredentialType,
     CredentialVersion,
     CredentialVersionStatus,
     Platform,
@@ -84,10 +85,10 @@ class CredentialService:
 
         reference = CredentialReference(
             platform_id=platform_id,
-            credential_type=credential_type.value,
+            credential_type=CredentialType(credential_type).value,
             secret_reference=secret_reference,
             status=CredentialStatus.ACTIVE.value,
-            storage_type=storage_type.value,
+            storage_type=CredentialStorageType(storage_type).value,
         )
         self.session.add(reference)
         await self.session.flush()

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -94,11 +93,12 @@ class ProviderExecutor:
         attempts_allowed = resolved_policy.max_attempts if is_idempotent else 1
 
         last_error: ProviderError | None = None
+        attempts_used = 0
         for attempt in range(1, attempts_allowed + 1):
-            started = time.perf_counter()
+            attempts_used = attempt
             try:
                 result = await asyncio.wait_for(operation(context), timeout=context.timeout_seconds)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 last_error = ProviderTimeoutError(
                     f"Provider operation timed out after {context.timeout_seconds:.1f}s."
                 )
@@ -127,7 +127,7 @@ class ProviderExecutor:
             )
             await asyncio.sleep(delay)
 
-        return ExecutionOutcome(result=None, error=last_error, attempts=attempts_allowed)
+        return ExecutionOutcome(result=None, error=last_error, attempts=attempts_used)
 
     def build_context(
         self,

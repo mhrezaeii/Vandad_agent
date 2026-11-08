@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
 from app.integrations.providers import (
+    ExecutionOutcome,
     ProviderCapability,
     ProviderError,
     ProviderExecutor,
@@ -24,9 +24,9 @@ from app.integrations.providers import (
 )
 from app.models import (
     ConnectionStatus,
-    CredentialStorageType,
 )
 from app.security.crypto import MasterKeyBox
+from app.security.redaction import redact_text
 from app.services.connection_service import ConnectionService
 from app.services.credential_service import CredentialService
 
@@ -124,6 +124,20 @@ class ConnectionValidationService:
             adapter, context, adapter.validate_connection, idempotent=True
         )
 
+        # A provider that *returns* a failure result (instead of raising) reports
+        # its own sanitized diagnosis — treat it as a permanent failure with the
+        # provider-authored message (redaction still applies downstream).
+        if outcome.error is None and outcome.result is not None and not outcome.result.success:
+            from app.integrations.providers.base import ProviderPermanentError
+
+            outcome = ExecutionOutcome(
+                result=None,
+                error=ProviderPermanentError(
+                    outcome.result.message, code="provider_reported_failure"
+                ),
+                attempts=outcome.attempts,
+            )
+
         if outcome.success:
             result = outcome.result
             degraded = bool(result.metadata.get("degraded"))
@@ -138,7 +152,7 @@ class ConnectionValidationService:
                 success=True,
                 status_after=updated.status,
                 provider_id=adapter.provider_id,
-                message=result.message,
+                message=redact_text(result.message),
                 error_code=None,
                 latency_ms=result.latency_ms,
                 attempts=outcome.attempts,
@@ -163,7 +177,7 @@ class ConnectionValidationService:
             success=False,
             status_after=updated.status,
             provider_id=adapter.provider_id,
-            message=error.message,
+            message=redact_text(error.message),
             error_code=error.code,
             latency_ms=None,
             attempts=outcome.attempts,
@@ -204,7 +218,7 @@ class ConnectionValidationService:
                 success=True,
                 status_after=connection.status,
                 provider_id=adapter.provider_id,
-                message=outcome.result.message,
+                message=redact_text(outcome.result.message),
                 error_code=None,
                 latency_ms=outcome.result.latency_ms,
                 attempts=outcome.attempts,

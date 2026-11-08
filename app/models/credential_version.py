@@ -57,7 +57,10 @@ class CredentialVersion(Base):
     encrypted_payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     encryption_key_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=CredentialVersionStatus.ACTIVE.value, server_default=CredentialVersionStatus.ACTIVE.value
+        String(32),
+        nullable=False,
+        default=CredentialVersionStatus.ACTIVE.value,
+        server_default=CredentialVersionStatus.ACTIVE.value,
     )
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, server_default=None
@@ -67,7 +70,7 @@ class CredentialVersion(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    credential_reference: Mapped["CredentialReference"] = relationship(
+    credential_reference: Mapped[CredentialReference] = relationship(
         back_populates="versions",
         # Disambiguate: credential_references.current_version_id is a second,
         # parent-to-child FK path between these tables.

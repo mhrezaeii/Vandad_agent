@@ -37,7 +37,8 @@ import base64  # noqa: E402
 import json  # noqa: E402
 
 _TEST_MASTER_KEY = base64.b64encode(bytes(range(32))).decode("ascii")
-os.environ["CREDENTIAL_MASTER_KEYS"] = json.dumps({"1": _TEST_MASTER_KEY})
+TEST_MASTER_KEY_CONFIG = {"1": _TEST_MASTER_KEY}
+os.environ["CREDENTIAL_MASTER_KEYS"] = json.dumps(TEST_MASTER_KEY_CONFIG)
 os.environ.setdefault("CREDENTIAL_ACTIVE_KEY_VERSION", "1")
 os.environ.setdefault("PLATFORM_BOOTSTRAP_COMPANY_IDS", "*")
 
@@ -197,3 +198,30 @@ def platform_payload() -> dict:
         "description": "Internal admin panel",
         "configuration": {"login_url": "https://admin.example.com/login"},
     }
+
+
+@pytest.fixture
+async def company_and_platform(db_session):
+    """A company with one platform, committed and available for API tests."""
+    from app.models import Company, Platform
+
+    company = Company(name="Acme Corp", slug="acme-corp")
+    db_session.add(company)
+    await db_session.flush()
+    platform = Platform(
+        company_id=company.id,
+        name="Acme Admin",
+        slug="acme-admin",
+        platform_type="admin_panel",
+    )
+    db_session.add(platform)
+    await db_session.commit()
+    return company, platform
+
+
+@pytest.fixture
+def fast_retry_policy():
+    """Retry policy with no backoff delay, for fast reliability tests."""
+    from app.integrations.providers import RetryPolicy
+
+    return RetryPolicy(max_attempts=3, backoff_base_seconds=0.0, backoff_cap_seconds=0.0)

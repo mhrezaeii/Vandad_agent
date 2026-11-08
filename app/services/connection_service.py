@@ -56,7 +56,7 @@ class ConnectionService:
         configuration: dict[str, Any] | None = None,
         credential_reference_id: uuid.UUID | None = None,
     ) -> PlatformConnection:
-        adapter = self._require_provider(provider)
+        self._require_provider(provider)
         platform = await self._require_platform(platform_id)
         if platform.company_id != company_id:
             # Tenant mismatch: do not reveal the platform's existence.
@@ -106,6 +106,7 @@ class ConnectionService:
             resource_id=connection.id,
             metadata={"name": name, "provider": provider, "status": initial_status},
         )
+        await self.session.flush()
         return connection
 
     # --- lifecycle ------------------------------------------------------------
@@ -115,6 +116,7 @@ class ConnectionService:
         connection = await self.get_connection(connection_id, company_id=company_id)
         connection.configuration = configuration
         await self.session.flush()
+        await self.session.refresh(connection)
 
         # Configuration changes require re-validation before the connection can
         # be considered healthy again.
@@ -143,6 +145,7 @@ class ConnectionService:
             resource_id=connection.id,
             metadata={"changed_keys": sorted(configuration.keys())},
         )
+        await self.session.flush()
         return connection
 
     async def mark_validating(self, connection: PlatformConnection) -> PlatformConnection:
@@ -208,18 +211,8 @@ class ConnectionService:
                 "attempts": attempts,
             },
         )
+        await self.session.flush()
         return updated
-
-    async def activate(self, connection_id: uuid.UUID, *, company_id: uuid.UUID) -> PlatformConnection:
-        """Activation is explicit: move a usable connection into VALIDATING.
-
-        The caller (validation service) completes the transition based on the
-        test result. States that can never be validated directly are rejected.
-        """
-        connection = await self.get_connection(connection_id, company_id=company_id)
-        if connection.status == ConnectionStatus.VALIDATING.value:
-            raise ConflictError("Connection is already being validated.")
-        return await self.mark_validating(connection)
 
     async def deactivate(self, connection_id: uuid.UUID, *, company_id: uuid.UUID) -> PlatformConnection:
         connection = await self.get_connection(connection_id, company_id=company_id)
@@ -297,7 +290,6 @@ class ConnectionService:
         connection.status = target.value
         if target is ConnectionStatus.CONNECTED and connection.activated_at is None:
             connection.activated_at = datetime.now(UTC)
-        await self.session.flush()
         self.connections.add_event(
             connection_id=connection.id,
             event_type=event_type,
@@ -308,6 +300,9 @@ class ConnectionService:
             event_metadata=metadata,
             correlation_id=get_correlation_id(),
         )
+        await self.session.flush()
+        # Reload server-managed columns (updated_at) before serialization.
+        await self.session.refresh(connection)
         return connection
 
     def _require_provider(self, provider: str):

@@ -171,6 +171,7 @@ async def update_connection(
                 )
             connection.name = updates["name"]
             await service.session.flush()
+            await service.session.refresh(connection)
     return ConnectionRead.model_validate(connection)
 
 
@@ -188,11 +189,14 @@ async def delete_connection(
 async def activate_connection(
     connection_id: uuid.UUID,
     scope: Annotated[CompanyScope, Depends(company_scope)],
-    service: Annotated[ConnectionService, Depends(get_connection_service)],
     validation: Annotated[ConnectionValidationService, Depends(get_connection_validation_service)],
 ) -> ConnectionTestResult:
-    """Activate = validate + connect. Runs the full validation cycle."""
-    await service.activate(connection_id, company_id=scope.company_id)
+    """Activate = validate + connect.
+
+    Runs the full validation cycle in a single unit of work: the connection
+    moves to VALIDATING and lands on CONNECTED/DEGRADED/ERROR from the result.
+    (Two separate sessions here would deadlock on the connection row lock.)
+    """
     result = await validation.test_connection(connection_id, company_id=scope.company_id)
     return ConnectionTestResult(
         success=result.success,

@@ -111,17 +111,16 @@ def get_principal(request: Request) -> Principal:
     return request.app.state.principal
 
 
-async def company_scope(
-    request: Request,
-    principal: Principal | None = None,
-) -> CompanyScope:
+async def company_scope(request: Request) -> CompanyScope:
     """Resolve and authorize the acting company for the request.
 
     The company context arrives via the ``X-Company-ID`` header. Requests
     without it resolve to the default company. Authorization is enforced by
-    ``authorize_company_access`` — the single decision point.
+    ``authorize_company_access`` — the single decision point. The acting
+    principal always comes from ``app.state`` (never from request parameters,
+    so it can never be spoofed or accidentally treated as a request body).
     """
-    acting_principal: Principal = principal or request.app.state.principal
+    acting_principal: Principal = request.app.state.principal
     raw_company_id = request.headers.get("X-Company-ID")
 
     if raw_company_id:
@@ -153,7 +152,8 @@ async def _resolve_default_company_id(request: Request) -> uuid.UUID:
         company = result.scalar_one_or_none()
         if company is not None:
             return company.id
-        session.add(Company(name="Default Company", slug="default"))
+        company = Company(name="Default Company", slug="default")
+        session.add(company)
         try:
             await session.commit()
         except IntegrityError:

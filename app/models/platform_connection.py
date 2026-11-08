@@ -99,7 +99,9 @@ class PlatformConnection(Base, TimestampMixin):
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     company: Mapped[Company] = relationship()
-    platform: Mapped[Platform] = relationship()
+    # viewonly: tenant/company columns are written at creation time only; this
+    # relationship exists for convenient platform lookups.
+    platform: Mapped[Platform] = relationship(viewonly=True)
     credential_reference: Mapped[CredentialReference | None] = relationship()
     events: Mapped[list[ConnectionEvent]] = relationship(
         back_populates="connection",

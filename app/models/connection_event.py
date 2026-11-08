@@ -18,7 +18,6 @@ from sqlalchemy import (
     Index,
     String,
     Uuid,
-    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -50,8 +49,10 @@ class ConnectionEvent(Base):
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # clock_timestamp() (not now()): rows inserted within one transaction must
+    # get strictly increasing timestamps so history ordering is stable.
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
 
     connection: Mapped[PlatformConnection] = relationship(back_populates="events")
