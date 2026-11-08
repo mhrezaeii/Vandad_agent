@@ -20,8 +20,8 @@ from app.models import PlatformConnection, WorkflowNode
 from app.security.redaction import redact_text
 from app.workflows.nodes import (
     TRIGGER_NODE_TYPES,
-    NodeType,
     VALID_NODE_TYPES,
+    NodeType,
     validate_execution_settings,
     validate_input_mapping,
     validate_node_configuration,

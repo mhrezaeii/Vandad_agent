@@ -14,7 +14,6 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.correlation import get_correlation_id
 from app.core.exceptions import ConflictError, NotFoundError
 from app.integrations.providers import ProviderRegistry
 from app.models import (
@@ -324,6 +323,13 @@ class WorkflowService:
         if workflow.current_version_id is not None:
             return workflow.current_version_id
         raise ConflictError("Workflow has no versions yet.")
+
+    async def latest_version_id(self, workflow: Workflow) -> uuid.UUID | None:
+        """Draft version if present, else the current published version."""
+        try:
+            return await self._draft_or_latest_version_id(workflow)
+        except ConflictError:
+            return None
 
     async def _current_draft_version(self, workflow: Workflow) -> WorkflowVersion | None:
         result = await self.session.execute(

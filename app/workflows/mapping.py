@@ -75,11 +75,17 @@ def resolve_path(path: str, context: dict[str, Any]) -> Any:
 
 
 def resolve_input_mapping(mapping: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    """Materialize a node's input mapping into concrete parameter values."""
+    """Materialize a node's input mapping into concrete parameter values.
+
+    String values: reference paths resolve, strings containing ``{{ }}``
+    templates interpolate, everything else stays literal.
+    """
     resolved: dict[str, Any] = {}
     for key, value in mapping.items():
         if isinstance(value, str) and is_reference_path(value):
             resolved[key] = resolve_path(value, context)
+        elif isinstance(value, str) and TEMPLATE_PATTERN.search(value):
+            resolved[key] = interpolate_template(value, context)
         elif isinstance(value, dict) and "$template" in value:
             resolved[key] = interpolate_template(value["$template"], context)
         elif isinstance(value, dict) and "$from" in value:
@@ -103,13 +109,22 @@ def interpolate_template(template: str, context: dict[str, Any]) -> str:
 
 
 def project_output(output_mapping: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-    """Project a provider result through the node's output mapping."""
+    """Project a provider result through the node's output mapping.
+
+    Paths are ``result.<path>`` where ``result`` names the root object itself.
+    """
     if not output_mapping:
         return result
     projected: dict[str, Any] = {}
     for key, path in output_mapping.items():
+        text = str(path)
+        if text == "result":
+            projected[key] = result
+            continue
+        if text.startswith("result."):
+            text = text[len("result."):]
         target: Any = result
-        for segment in str(path).split("."):
+        for segment in text.split("."):
             if isinstance(target, dict):
                 target = target.get(segment)
             else:

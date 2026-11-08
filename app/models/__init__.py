@@ -9,7 +9,8 @@ from app.models.credential_version import CredentialVersion, CredentialVersionSt
 from app.models.mixins import TimestampMixin
 from app.models.platform import IntegrationType, Platform, PlatformStatus, PlatformType
 from app.models.platform_connection import ConnectionStatus, PlatformConnection
-from app.models.workflow import Workflow, WorkflowStatus as WorkflowDefinitionStatus
+from app.models.workflow import Workflow
+from app.models.workflow import WorkflowStatus as WorkflowDefinitionStatus
 from app.models.workflow_execution import (
     WorkflowExecution,
     WorkflowStatus,
@@ -18,8 +19,8 @@ from app.models.workflow_execution import (
 )
 from app.models.workflow_execution_step import (
     WorkflowExecutionLog,
-    WorkflowLogLevel,
     WorkflowExecutionStep,
+    WorkflowLogLevel,
     WorkflowStepStatus,
 )
 from app.models.workflow_schedule import (

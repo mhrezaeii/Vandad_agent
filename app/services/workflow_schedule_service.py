@@ -13,7 +13,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -21,14 +20,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
-from app.core.queue import WorkflowJob, WorkflowQueue
+from app.core.queue import WorkflowQueue
 from app.models import (
     Workflow,
     WorkflowDefinitionStatus,
     WorkflowSchedule,
     WorkflowScheduleMissedPolicy,
     WorkflowScheduleType,
-    WorkflowStatus,
     WorkflowTriggerType,
 )
 from app.services.audit_service import AuditService
@@ -94,7 +92,8 @@ class WorkflowScheduleService:
             missed_policy=missed_policy.value,
             enabled=enabled,
         )
-        schedule.next_run_at = self._first_next_run(schedule)
+        if enabled:
+            schedule.next_run_at = self._first_next_run(schedule)
         self.session.add(schedule)
         await self.session.flush()
         self.audit.record(
@@ -163,6 +162,9 @@ class WorkflowScheduleService:
             schedule.enabled = enabled
             if enabled:
                 schedule.next_run_at = self._first_next_run(schedule)
+            else:
+                # A disabled schedule has nothing pending.
+                schedule.next_run_at = None
         self.audit.record(
             event_type="workflow.schedule_updated",
             action="update",
@@ -230,8 +232,8 @@ class WorkflowScheduleService:
                 )
 
             if should_execute:
-                execution, created = await self._execute_scheduled(schedule, workflow, scheduled_for)
-                if created:
+                execution, was_created = await self._execute_scheduled(schedule, workflow, scheduled_for)
+                if was_created:
                     created.append(execution.id)
                 schedule.last_run_at = now
                 schedule.last_execution_id = execution.id
@@ -275,6 +277,9 @@ class WorkflowScheduleService:
         now_local = now.astimezone(tz)
 
         if schedule_type is WorkflowScheduleType.ONCE:
+            # Already fired? A 'once' schedule never fires twice.
+            if schedule.last_run_at is not None:
+                return None
             at = schedule.schedule_config.get("at")
             if not at:
                 return None
@@ -284,8 +289,9 @@ class WorkflowScheduleService:
                 return None
             if target.tzinfo is None:
                 target = target.replace(tzinfo=tz)
-            # A past 'once' target never fires again.
-            return target if target > now else None
+            # A past-but-unfired 'once' target is due immediately (the poller
+            # fires it once; the idempotency key guards duplicates).
+            return target
 
         if schedule_type is WorkflowScheduleType.INTERVAL:
             interval = int(schedule.schedule_config.get("interval_seconds", 0))

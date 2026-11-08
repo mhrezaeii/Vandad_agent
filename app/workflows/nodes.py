@@ -10,8 +10,9 @@ data — nothing here is ever executed as code.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 
 class NodeType:

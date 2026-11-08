@@ -36,7 +36,6 @@ from app.integrations.providers import (
     ProviderExecutor,
     ProviderRegistry,
     ProviderTransientError,
-    RetryPolicy,
 )
 from app.models import (
     ConnectionStatus,
@@ -44,7 +43,6 @@ from app.models import (
     WorkflowExecution,
     WorkflowExecutionLog,
     WorkflowExecutionStep,
-    WorkflowLogLevel,
     WorkflowNode,
     WorkflowStepStatus,
 )
@@ -52,15 +50,13 @@ from app.security.crypto import MasterKeyBox
 from app.services.credential_service import CredentialService
 from app.workflows.expressions import ExpressionError, safe_evaluate
 from app.workflows.mapping import (
-    interpolate_template,
     project_output,
     resolve_input_mapping,
 )
 from app.workflows.nodes import (
     MAX_DELAY_SECONDS,
-    MAX_NODE_RETRIES,
-    NodeType,
     TRIGGER_NODE_TYPES,
+    NodeType,
 )
 from app.workflows.validation import load_version_graph
 
@@ -204,26 +200,27 @@ class WorkflowEngine:
             steps_run += 1
             step_outcome = await self._execute_node(execution, spec, context, deadline)
 
-            if step_outcome == ExecutionOutcome.WAITING:
-                outcome = ExecutionOutcome.WAITING
+            if step_outcome in (ExecutionOutcome.WAITING, ExecutionOutcome.TIMED_OUT):
+                # Waiting: job is re-enqueued with an eta. Timed out: the overall
+                # budget was exhausted mid-node.
+                outcome = step_outcome
                 break
 
             node_status = context["nodes"].get(node_key, {}).get("status")
-            if node_status == "failed":
-                if spec.continue_on_error:
-                    self._log(execution, "warning", f"Node '{node_key}' failed; continue_on_error is set.")
-                else:
-                    outcome = ExecutionOutcome.FAILED
-                    break
+            if node_status == "failed" and not spec.continue_on_error:
+                outcome = ExecutionOutcome.FAILED
+                break
 
-            if node_status == "completed":
+            if node_status in ("completed", "failed", "skipped"):
+                # continue_on_error failures still traverse their outgoing edges;
+                # downstream nodes must tolerate missing inputs.
+                if node_status == "failed":
+                    self._log(execution, "warning", f"Node '{node_key}' failed; continue_on_error is set.")
                 for target, condition in adjacency.get(node_key, []):
                     if condition and not self._evaluate_condition(condition, context, execution):
                         self._log(execution, "info", f"Edge to '{target}' not taken (condition false).")
                         continue
                     ready.append(target)
-            elif node_status == "skipped":
-                continue
 
         if outcome is None:
             outcome = ExecutionOutcome.COMPLETED
@@ -258,8 +255,16 @@ class WorkflowEngine:
 
         for attempt in range(1, attempts_allowed + 1):
             step.attempt = attempt
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                last_error = ProviderError(
+                    "The execution ran out of its overall time budget.", code="execution_timeout"
+                )
+                break
             try:
-                output = await self._dispatch_node(execution, spec, context)
+                output = await self._dispatch_node(
+                    execution, spec, context, effective_timeout=min(spec.timeout_seconds, remaining)
+                )
             except _DelayRequested as delay:
                 # Pause the execution: step stays 'waiting', context snapshot is
                 # persisted and the worker re-enqueues with an eta.
@@ -316,10 +321,17 @@ class WorkflowEngine:
         step.error_message = error.message[:1000]
         self._log(execution, "error", f"Node '{node.node_key}' failed: {error.message}", step=step)
         await self.session.flush()
+        # A node that timed out with no budget left means the EXECUTION timed out.
+        if error.code in ("provider_timeout", "execution_timeout") and time.monotonic() >= deadline:
+            return ExecutionOutcome.TIMED_OUT
         return ExecutionOutcome.FAILED
 
     async def _dispatch_node(
-        self, execution: WorkflowExecution, spec: _NodeSpec, context: dict[str, Any]
+        self,
+        execution: WorkflowExecution,
+        spec: _NodeSpec,
+        context: dict[str, Any],
+        effective_timeout: float | None = None,
     ) -> dict[str, Any]:
         node = spec.node
         params = resolve_input_mapping(node.input_mapping, context)
@@ -354,7 +366,8 @@ class WorkflowEngine:
             return {"outcome": "completed", "message": params.get("message", "")}
 
         if node.node_type == NodeType.ACTION_PROVIDER:
-            return await self._run_provider_action(execution, spec, params)
+            timeout = effective_timeout if effective_timeout is not None else spec.timeout_seconds
+            return await self._run_provider_action(execution, spec, params, timeout_seconds=timeout)
 
         raise ProviderError(f"Unsupported node type at runtime: {node.node_type}", code="invalid_node_type")
 
@@ -374,7 +387,12 @@ class WorkflowEngine:
         raise _DelayRequested(seconds)
 
     async def _run_provider_action(
-        self, execution: WorkflowExecution, spec: _NodeSpec, params: dict[str, Any]
+        self,
+        execution: WorkflowExecution,
+        spec: _NodeSpec,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: float,
     ) -> dict[str, Any]:
         node = spec.node
         connection_id = node.configuration.get("connection_id")
@@ -413,17 +431,20 @@ class WorkflowEngine:
 
         reserved = {"connection_id", "operation"}
         action_params = {key: value for key, value in params.items() if key not in reserved}
+        # Dotted keys ("params.value") address nested configuration entries and
+        # are deep-merged over the connection's static configuration.
+        node_configuration = _deep_merge(connection.configuration, _expand_dotted(action_params))
         context = self.executor.build_context(
             adapter=adapter,
             connection_id=connection.id,
             company_id=execution.company_id,
             platform_id=connection.platform_id,
-            configuration={**connection.configuration, **action_params},
+            configuration=node_configuration,
             credential=credential,
             credential_type=credential_type,
             secret_reference=secret_reference,
             operation=operation,
-            timeout_seconds=spec.timeout_seconds,
+            timeout_seconds=timeout_seconds,
         )
         operation_callable = {
             "execute": adapter.execute,
@@ -552,3 +573,30 @@ def _safe_output(output: dict[str, Any] | None) -> dict[str, Any] | None:
     if output is None:
         return None
     return {key: value for key, value in list(output.items())[:50]}
+
+
+def _expand_dotted(params: dict[str, Any]) -> dict[str, Any]:
+    """Expand {"params.value": 1} into {"params": {"value": 1}}."""
+    expanded: dict[str, Any] = {}
+    for key, value in params.items():
+        parts = key.split(".")
+        target = expanded
+        for segment in parts[:-1]:
+            child = target.get(segment)
+            if not isinstance(child, dict):
+                child = {}
+                target[segment] = child
+            target = child
+        target[parts[-1]] = value
+    return expanded
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge *override* into *base* without mutating either; dicts merge recursively."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

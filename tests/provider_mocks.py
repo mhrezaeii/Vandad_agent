@@ -20,11 +20,13 @@ from app.integrations.providers.base import (
 
 
 class ScriptedProvider(ProviderAdapter):
-    """Runs a scripted list of behaviors per validate_connection call."""
+    """Runs a scripted list of behaviors per operation call."""
 
     provider_id = "scripted"
     display_name = "Scripted Test Provider"
-    capabilities = frozenset({ProviderCapability.CONNECTION_VALIDATION, ProviderCapability.HEALTH_CHECK})
+    capabilities = frozenset(
+        {ProviderCapability.CONNECTION_VALIDATION, ProviderCapability.HEALTH_CHECK, ProviderCapability.EXECUTION}
+    )
 
     def __init__(self, script: list | None = None) -> None:
         self.script: list = list(script or [])
@@ -35,6 +37,13 @@ class ScriptedProvider(ProviderAdapter):
 
     async def validate_connection(self, context: ProviderExecutionContext) -> ProviderResult:
         self.calls += 1
+        return await self._run_script()
+
+    async def execute(self, context: ProviderExecutionContext) -> ProviderResult:
+        self.calls += 1
+        return await self._run_script()
+
+    async def _run_script(self) -> ProviderResult:
         if not self.script:
             return ProviderResult(provider_id=self.provider_id, success=True, message="scripted ok")
         behavior = self.script.pop(0)

@@ -23,14 +23,15 @@ from app.models import (
     WorkflowDefinitionStatus,
     WorkflowExecution,
     WorkflowExecutionStep,
+    WorkflowNode,
     WorkflowStatus,
+    WorkflowStepStatus,
     WorkflowTriggerType,
     WorkflowVersion,
     WorkflowVersionStatus,
 )
 from app.security.authorization import CompanyScope
 from app.services.audit_service import AuditService
-from app.workflows.engine import WorkflowEngine
 
 logger = logging.getLogger("app.workflow_execution")
 

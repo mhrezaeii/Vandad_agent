@@ -31,6 +31,12 @@ _ALLOWED = (
     ast.UnaryOp,
     ast.Not,
     ast.USub,
+    ast.BinOp,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Mod,
     ast.Compare,
     ast.Eq,
     ast.NotEq,
@@ -131,6 +137,10 @@ def _evaluate(root: dict, node: ast.AST) -> object:
                 return -operand
             raise ExpressionError("unary minus requires a number")
         raise ExpressionError("unsupported unary operator")
+    if isinstance(node, ast.BinOp):
+        left = _evaluate(root, node.left)
+        right = _evaluate(root, node.right)
+        return _arith(node.op, left, right)
     if isinstance(node, ast.Compare):
         left = _evaluate(root, node.left)
         for operator, comparator in zip(node.ops, node.comparators):
@@ -164,6 +174,29 @@ def _evaluate(root: dict, node: ast.AST) -> object:
     if isinstance(node, ast.Name):
         return root.get(node.id)
     return _lookup(root, node)
+
+
+def _arith(op: ast.AST, left: object, right: object) -> object:
+    """Arithmetic restricted to numbers (booleans excluded) and string concat."""
+    if isinstance(op, ast.Add) and isinstance(left, str) and isinstance(right, str):
+        return left + right
+    if isinstance(left, bool) or isinstance(right, bool) or not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+        raise ExpressionError("arithmetic requires numbers")
+    if isinstance(op, ast.Add):
+        return left + right
+    if isinstance(op, ast.Sub):
+        return left - right
+    if isinstance(op, ast.Mult):
+        return left * right
+    if isinstance(op, ast.Div):
+        if right == 0:
+            raise ExpressionError("division by zero")
+        return left / right
+    if isinstance(op, ast.Mod):
+        if right == 0:
+            raise ExpressionError("modulo by zero")
+        return left % right
+    raise ExpressionError("unsupported arithmetic operator")
 
 
 def _ordered(left: object, right: object) -> int:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +68,13 @@ TABLES = (
     "connection_events",
     "credential_versions",
     "credential_references",
+    "workflow_execution_logs",
+    "workflow_execution_steps",
+    "workflow_schedules",
+    "workflow_edges",
+    "workflow_nodes",
+    "workflow_versions",
+    "workflows",
     "workflow_executions",
     "platform_connections",
     "platforms",
@@ -178,7 +186,82 @@ def app(clean_database, engine, session_factory, redis_manager):
     application.state.provider_registry = build_default_registry()
     application.state.provider_executor = build_provider_executor(get_settings())
     application.state.principal = Principal(subject="test-runner", company_ids=frozenset({"*"}))
+    from app.core.queue import WorkflowQueue  # noqa: PLC0415
+
+    application.state.workflow_queue = (
+        WorkflowQueue(redis_manager.client) if redis_manager.client is not None else None
+    )
     return application
+
+
+@pytest.fixture
+async def workflow_factory(db_session, session_factory):
+    """Create (and optionally publish) workflows directly through the service."""
+
+    from app.integrations.providers import build_default_registry
+    from app.security.authorization import CompanyScope, Principal
+    from app.services.workflow_service import WorkflowService
+
+    principal = Principal(subject="test-runner", company_ids=frozenset({"*"}))
+
+    async def _make(company_id, nodes, edges, *, publish=True, name=None):
+        service = WorkflowService(db_session, build_default_registry())
+        scope = CompanyScope(company_id=company_id, principal=principal)
+        workflow = await service.create_workflow(
+            scope=scope,
+            name=name or f"wf-{uuid.uuid4().hex[:8]}",
+            description=None,
+            nodes=nodes,
+            edges=edges,
+        )
+        if publish:
+            workflow = await service.publish_workflow(workflow.id, company_id=company_id)
+        return workflow
+
+    return _make
+
+
+@pytest.fixture
+async def workflow_queue(redis_manager):
+    from app.core.queue import (  # noqa: PLC0415
+        DELAYED_KEY,
+        MAIN_KEY,
+        PROCESSING_KEY,
+        WorkflowQueue,
+    )
+
+    assert redis_manager.client is not None
+    # Isolate queue state per test (Redis persists across tests).
+    await redis_manager.client.delete(MAIN_KEY, PROCESSING_KEY, DELAYED_KEY)
+    return WorkflowQueue(redis_manager.client)
+
+
+@pytest.fixture
+def key_box():
+    from app.security.crypto import MasterKeyBox  # noqa: PLC0415
+    from tests.conftest import TEST_MASTER_KEY_CONFIG  # noqa: PLC0415
+
+    return MasterKeyBox(
+        {int(v): base64.b64decode(k) for v, k in TEST_MASTER_KEY_CONFIG.items()},
+        active_key_version=1,
+    )
+
+
+@pytest.fixture
+def engine_pair(key_box):
+    """(registry, executor) pair for in-process engine tests."""
+    from app.integrations.providers import (  # noqa: PLC0415
+        ProviderExecutor,
+        RetryPolicy,
+        build_default_registry,
+    )
+
+    registry = build_default_registry()
+    executor = ProviderExecutor(
+        default_policy=RetryPolicy(max_attempts=1, backoff_base_seconds=0.0),
+        default_timeout_seconds=3.0,
+    )
+    return registry, executor
 
 
 @pytest.fixture

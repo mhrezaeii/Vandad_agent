@@ -13,23 +13,23 @@ from app.api.deps import (
     get_workflow_service,
     pagination_params,
 )
-from app.core.exceptions import NotFoundError, UnprocessableEntityError
-from app.security.authorization import CompanyScope
+from app.core.exceptions import UnprocessableEntityError
 from app.schemas.workflow import (
     ScheduleCreate,
     ScheduleListResponse,
     ScheduleRead,
-    ScheduleUpdate,
     WorkflowCreate,
     WorkflowDetailRead,
-    WorkflowExecutionListResponse,
+    WorkflowEdgeRead,
+    WorkflowExecuteRequest,
     WorkflowExecutionRead,
     WorkflowListResponse,
-    WorkflowLogListResponse,
-    WorkflowStepListResponse,
+    WorkflowNodeRead,
+    WorkflowRead,
     WorkflowUpdate,
     WorkflowValidationResponse,
 )
+from app.security.authorization import CompanyScope
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.services.workflow_service import WorkflowService
 from app.workflows.validation import WorkflowValidationError
@@ -91,7 +91,8 @@ async def list_workflows(
 async def _detail(service: WorkflowService, workflow_id: uuid.UUID, scope: CompanyScope) -> WorkflowDetailRead:
     workflow = await service.get_workflow(workflow_id, company_id=scope.company_id)
     detail = WorkflowDetailRead.model_validate(workflow)
-    version_id = workflow.current_version_id
+    # Show the draft graph when one exists, else the published snapshot.
+    version_id = await service.latest_version_id(workflow)
     if version_id is not None:
         from app.workflows.validation import load_version_graph
 
