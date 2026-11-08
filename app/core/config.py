@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # requires an explicit list (fail-secure default deny).
     bootstrap_principal_company_ids: str = "*"
 
+    # --- Artifact storage (see app.storage) --------------------------------------
+    # Root directory for generated workflow artifacts (mounted volume in Docker).
+    artifact_storage_root: str = "data/artifacts"
+    # Hard cap per artifact; streaming writes abort beyond it.
+    artifact_max_size_bytes: int = Field(default=2 * 1024**3, ge=1)
+
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
     n8n_api_key: str | None = None

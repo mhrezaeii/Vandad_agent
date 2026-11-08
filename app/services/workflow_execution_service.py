@@ -229,7 +229,9 @@ class WorkflowExecutionService:
         An execution is abandoned when it is running/waiting with a stale
         heartbeat. It is re-queued only when no completed non-idempotent
         action step exists (those may already have side effects); otherwise it
-        is marked failed. Returns counters for observability.
+        is marked failed. WAITING executions whose context snapshot carries a
+        *future* ``delay_until`` are intentionally deferred, not abandoned —
+        the delayed queue owns their resumption. Returns counters.
         """
         threshold = datetime.now(UTC) - timedelta(seconds=stale_after_seconds)
         rows = await self.session.execute(
@@ -242,8 +244,11 @@ class WorkflowExecutionService:
             ).limit(requeue_limit)
         )
         abandoned = list(rows.scalars().all())
-        requeued = failed = 0
+        requeued = failed = deferred = 0
         for execution in abandoned:
+            if self._is_deferred_waiting(execution):
+                deferred += 1
+                continue  # scheduled resumption pending; not abandoned
             has_side_effects = await self._has_completed_non_idempotent_steps(execution.id)
             if has_side_effects:
                 execution.status = WorkflowStatus.FAILED.value
@@ -262,13 +267,33 @@ class WorkflowExecutionService:
                         )
                     )
                 requeued += 1
-        if abandoned:
+        if requeued or failed:
             logger.warning(
                 "recovered %d abandoned execution(s): requeued=%d failed=%d",
-                len(abandoned), requeued, failed,
+                requeued + failed, requeued, failed,
             )
         await self.session.flush()
-        return {"abandoned": len(abandoned), "requeued": requeued, "failed": failed}
+        return {
+            "abandoned": requeued + failed,
+            "requeued": requeued,
+            "failed": failed,
+            "deferred": deferred,
+        }
+
+    @staticmethod
+    def _is_deferred_waiting(execution) -> bool:  # noqa: ANN001 - WorkflowExecution
+        """True when a WAITING execution has a scheduled resumption in the future."""
+        if execution.status != WorkflowStatus.WAITING.value:
+            return False
+        snapshot = execution.context_snapshot or {}
+        raw = snapshot.get("delay_until")
+        if not raw:
+            return False
+        try:
+            delay_until = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return False
+        return delay_until > datetime.now(UTC)
 
     async def _has_completed_non_idempotent_steps(self, execution_id: uuid.UUID) -> bool:
         execution = await self.session.get(WorkflowExecution, execution_id)

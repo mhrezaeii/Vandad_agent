@@ -9,7 +9,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.workflows.nodes import (
-    MAX_DELAY_SECONDS,
     MAX_NODE_RETRIES,
     MAX_NODE_TIMEOUT_SECONDS,
     VALID_NODE_TYPES,
@@ -254,7 +253,20 @@ class ScheduleListResponse(BaseModel):
     total: int
 
 
-def _delay_bounds_check(config: dict[str, Any]) -> None:
-    seconds = config.get("seconds")
-    if seconds is not None and (not isinstance(seconds, (int, float)) or not 0 < float(seconds) <= MAX_DELAY_SECONDS):
-        raise ValueError(f"delay seconds must be in (0, {MAX_DELAY_SECONDS}]")
+class WorkflowArtifactRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    company_id: uuid.UUID
+    execution_id: uuid.UUID
+    kind: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    original_filename: str | None
+    created_at: datetime
+
+
+class WorkflowArtifactListResponse(BaseModel):
+    items: list[WorkflowArtifactRead]
+    total: int

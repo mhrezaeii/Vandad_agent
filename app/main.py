@@ -20,6 +20,7 @@ from app.database.session import create_engine, create_session_factory
 from app.integrations.providers import build_default_registry
 from app.security.authorization import build_principal_from_settings
 from app.security.crypto import MasterKeyBox
+from app.storage.local import LocalArtifactStorage
 
 logger = logging.getLogger("app.main")
 
@@ -67,6 +68,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider_executor = build_provider_executor(settings)
     principal = build_principal_from_settings(settings)
 
+    # Artifact storage (local volume for MVP; interface is backend-agnostic).
+    artifact_storage = LocalArtifactStorage(
+        settings.artifact_storage_root, max_size_bytes=settings.artifact_max_size_bytes
+    )
+
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis_manager = redis_manager
@@ -76,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.provider_executor = provider_executor
     app.state.principal = principal
     app.state.workflow_queue = workflow_queue
+    app.state.artifact_storage = artifact_storage
 
     yield
 

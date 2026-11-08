@@ -2,11 +2,13 @@
 
 Run with ``python -m app.workers.main`` (docker-compose service ``worker``).
 
-- configurable concurrency (``WORKER_CONCURRENCY``)
+- bounded concurrency: ``WORKER_CONCURRENCY`` limits the number of *executing*
+  jobs via a semaphore acquired before each claim
 - reliable claim: main -> processing (atomically), acked on completion
 - startup recovery: in-flight jobs from a dead worker are pushed back
+- deferred waiting executions are re-enqueued through the delayed queue
 - heartbeat per running execution; abandoned executions recovered by a poller
-- graceful shutdown: stop claiming, finish the in-flight job, close resources
+- graceful shutdown: stop claiming, finish in-flight jobs, close resources
 - worker-level job retry with backoff for transient failures (missing
   execution rows right after enqueue, transient DB loss)
 """
@@ -36,12 +38,18 @@ logger = logging.getLogger("app.worker")
 JOB_MAX_ATTEMPTS = 3
 JOB_RETRY_DELAY_SECONDS = 2.0
 
+# Statuses a claimed job may run in; anything else is skipped gracefully.
+RUNNABLE_EXECUTION_STATUSES = frozenset({"pending", "queued", "waiting"})
+TERMINAL_EXECUTION_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "timed_out", "succeeded"}
+)
+
 
 class WorkflowWorker:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.worker_id = f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-        self.concurrency = int(os.getenv("WORKER_CONCURRENCY", "4"))
+        self.concurrency = max(1, int(os.getenv("WORKER_CONCURRENCY", "4")))
         self.poll_interval = float(os.getenv("WORKER_POLL_INTERVAL", "0.5"))
         self.recovery_interval = float(os.getenv("WORKER_RECOVERY_INTERVAL", "60"))
 
@@ -59,6 +67,9 @@ class WorkflowWorker:
 
         self._stopping = asyncio.Event()
         self._inflight: set[asyncio.Task] = set()
+        # Bounds *executing* jobs, not merely consumer loops: a slot is held
+        # from just before a claim until the job finishes (or fails/cancels).
+        self._job_slots = asyncio.Semaphore(self.concurrency)
 
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
@@ -96,25 +107,43 @@ class WorkflowWorker:
         await self.engine_db.dispose()
         logger.info("worker %s stopped cleanly", self.worker_id)
 
-    def _stopping_set(self) -> None:  # pragma: no cover - signal path
-        self._stopping.set()
-
     # -------------------------------------------------------------------- loops
     async def _consume_loop(self, index: int) -> None:
+        """Claim jobs only while a concurrency slot is available.
+
+        The slot is acquired *before* claiming so the worker never takes more
+        jobs from the queue than it can execute simultaneously, and it is
+        released by the job task itself (or here on every early-exit path).
+        """
         while not self._stopping.is_set():
+            await self._job_slots.acquire()
+            if self._stopping.is_set():
+                self._job_slots.release()
+                return
             try:
                 job = await self.queue.claim()
-                if job is None:
-                    await asyncio.sleep(self.poll_interval)
-                    continue
-                task = asyncio.create_task(self._process_job(job))
-                self._inflight.add(task)
-                task.add_done_callback(self._inflight.discard)
             except asyncio.CancelledError:
-                return
+                self._job_slots.release()
+                raise
             except Exception:  # noqa: BLE001 - keep the consumer alive
-                logger.exception("consumer loop %d error", index)
+                self._job_slots.release()
+                logger.exception("consumer loop %d claim error", index)
                 await asyncio.sleep(1.0)
+                continue
+            if job is None:
+                self._job_slots.release()
+                await asyncio.sleep(self.poll_interval)
+                continue
+            task = asyncio.create_task(self._process_job_with_release(job))
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
+
+    async def _process_job_with_release(self, job: WorkflowJob) -> None:
+        """Run one job and always return its concurrency slot."""
+        try:
+            await self._process_job(job)
+        finally:
+            self._job_slots.release()
 
     async def _process_job(self, job: WorkflowJob) -> None:
         for attempt in range(1, JOB_MAX_ATTEMPTS + 1):
@@ -137,19 +166,44 @@ class WorkflowWorker:
                         logger.error("job %s tenant mismatch; dropping", job.execution_id)
                         await self.queue.complete(job)
                         return
-                    if execution.status in ("completed", "failed", "cancelled", "timed_out", "succeeded"):
+                    if execution.status in TERMINAL_EXECUTION_STATUSES:
                         await self.queue.complete(job)
                         return
+                    if execution.status == "running":
+                        # Another worker holds this execution (duplicate claim);
+                        # never run it twice.
+                        logger.warning(
+                            "execution %s already running elsewhere; skipping duplicate claim",
+                            job.execution_id,
+                        )
+                        await self.queue.complete(job)
+                        return
+                    if execution.status == "waiting":
+                        # A scheduled delay may not have elapsed yet (e.g. the
+                        # job was reclaimed after a crash): defer again until
+                        # the snapshot's delay_until instead of resuming early.
+                        if await self._defer_waiting_execution(execution, job):
+                            await session.commit()
+                            await self.queue.complete(job)
+                            return
 
                     execution.worker_id = self.worker_id
                     execution.heartbeat_at = datetime.now(UTC)
                     await session.commit()
 
-                    await engine.run_execution(job.execution_id, company_id=job.company_id)
+                    result = await engine.run_execution(job.execution_id, company_id=job.company_id)
                     await session.commit()
+
+                    if result.outcome == "waiting":
+                        # The engine parked on a delay node: schedule resumption
+                        # through the delayed queue (crash-safe: if this worker
+                        # dies before the zadd, the job stays in `processing`
+                        # and the next start defers it again via delay_until).
+                        await self._schedule_resumption(execution, job)
                 await self.queue.complete(job)
                 logger.info(
-                    "job for execution %s processed (attempt %d)", job.execution_id, job.attempt
+                    "job for execution %s processed (attempt %d, outcome %s)",
+                    job.execution_id, job.attempt, result.outcome,
                 )
                 return
             except asyncio.CancelledError:
@@ -164,15 +218,75 @@ class WorkflowWorker:
                     return
                 await asyncio.sleep(JOB_RETRY_DELAY_SECONDS * attempt)
 
+    async def _defer_waiting_execution(self, execution, job: WorkflowJob) -> bool:  # noqa: ANN001 - WorkflowExecution
+        """Re-defer a reclaimed WAITING execution whose delay has not elapsed.
+
+        Returns True when the execution was re-scheduled on the delayed queue
+        (the caller must ack the job and not run the engine).
+        """
+        snapshot = execution.context_snapshot or {}
+        delay_until_raw = snapshot.get("delay_until")
+        if not delay_until_raw:
+            return False
+        try:
+            delay_until = datetime.fromisoformat(str(delay_until_raw))
+        except ValueError:
+            return False
+        remaining = (delay_until - datetime.now(UTC)).total_seconds()
+        if remaining <= 0:
+            return False
+        if self.queue is None:
+            return False
+        await self.queue.enqueue_delayed(
+            WorkflowJob(
+                execution_id=job.execution_id,
+                company_id=job.company_id,
+                attempt=job.attempt,
+            ),
+            delay_seconds=remaining,
+        )
+        execution.heartbeat_at = datetime.now(UTC)
+        logger.info(
+            "execution %s deferred again for %.1fs (reclaimed before eta)",
+            job.execution_id, remaining,
+        )
+        return True
+
+    async def _schedule_resumption(self, execution, job: WorkflowJob) -> None:  # noqa: ANN001
+        """Re-enqueue a WAITING execution on the delayed queue for its eta.
+
+        Duplicate safety: the queued job carries the same deterministic
+        payload; if it somehow lands twice, the second claim sees the
+        execution running/terminal and is dropped without side effects.
+        """
+        if self.queue is None:
+            logger.error("no queue available; execution %s stays waiting", job.execution_id)
+            return
+        delay_seconds = 0.0
+        output = execution.output_metadata or {}
+        raw = output.get("delay_seconds")
+        if isinstance(raw, (int, float)) and raw > 0:
+            delay_seconds = float(raw)
+        await self.queue.enqueue_delayed(
+            WorkflowJob(
+                execution_id=job.execution_id,
+                company_id=job.company_id,
+                attempt=job.attempt,
+            ),
+            delay_seconds=delay_seconds,
+        )
+        logger.info(
+            "execution %s scheduled for resumption in %.1fs",
+            job.execution_id, delay_seconds,
+        )
+
     async def _fail_job(self, job: WorkflowJob) -> None:
         try:
             async with self.session_factory() as session:
                 from app.models import WorkflowExecution  # noqa: PLC0415
 
                 execution = await session.get(WorkflowExecution, job.execution_id)
-                if execution is not None and execution.status not in (
-                    "completed", "failed", "cancelled", "timed_out", "succeeded"
-                ):
+                if execution is not None and execution.status not in TERMINAL_EXECUTION_STATUSES:
                     execution.status = "failed"
                     execution.error_message = "Worker failed to process the job after repeated attempts."
                     execution.completed_at = datetime.now(UTC)

@@ -176,7 +176,7 @@ async def redis_manager():
 
 
 @pytest.fixture
-def app(clean_database, engine, session_factory, redis_manager):
+def app(clean_database, engine, session_factory, redis_manager, tmp_path):
     """Application instance wired to test infrastructure (lifespan not run)."""
     application = create_app()
     application.state.engine = engine
@@ -187,9 +187,13 @@ def app(clean_database, engine, session_factory, redis_manager):
     application.state.provider_executor = build_provider_executor(get_settings())
     application.state.principal = Principal(subject="test-runner", company_ids=frozenset({"*"}))
     from app.core.queue import WorkflowQueue  # noqa: PLC0415
+    from app.storage.local import LocalArtifactStorage  # noqa: PLC0415
 
     application.state.workflow_queue = (
         WorkflowQueue(redis_manager.client) if redis_manager.client is not None else None
+    )
+    application.state.artifact_storage = LocalArtifactStorage(
+        tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024
     )
     return application
 

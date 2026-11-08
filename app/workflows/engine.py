@@ -22,7 +22,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -267,7 +267,7 @@ class WorkflowEngine:
                 )
             except _DelayRequested as delay:
                 # Pause the execution: step stays 'waiting', context snapshot is
-                # persisted and the worker re-enqueues with an eta.
+                # persisted and the worker schedules resumption at the eta.
                 step.status = WorkflowStepStatus.WAITING.value
                 self._log(
                     execution,
@@ -276,10 +276,14 @@ class WorkflowEngine:
                     step=step,
                 )
                 successors = await self._successor_keys(execution.workflow_version_id, node.node_key)
+                now = datetime.now(UTC)
                 execution.context_snapshot = {
                     "nodes": context["nodes"],
                     "resume_ready": successors,
                     "delay_node_key": node.node_key,
+                    # Authoritative eta: the worker defers reclaimed jobs until
+                    # this instant instead of resuming early after a crash.
+                    "delay_until": (now + timedelta(seconds=delay.seconds)).isoformat(),
                 }
                 execution.status = "waiting"
                 execution.output_metadata = {"delay_seconds": delay.seconds}

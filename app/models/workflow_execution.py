@@ -135,7 +135,9 @@ class WorkflowExecution(Base, TimestampMixin):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     # Recovery bookkeeping: queue attempt count and worker liveness.
-    queue_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    queue_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

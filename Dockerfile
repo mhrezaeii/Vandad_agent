@@ -31,6 +31,11 @@ RUN groupadd --gid 1000 appgroup \
 
 WORKDIR /app
 
+# Persistent artifact storage root; the directory must exist with correct
+# ownership so a mounted named volume inherits it (non-root writes).
+RUN mkdir -p /app/data/artifacts \
+    && chown -R appuser:appgroup /app/data
+
 COPY --from=builder /opt/venv /opt/venv
 COPY alembic.ini ./
 COPY alembic ./alembic

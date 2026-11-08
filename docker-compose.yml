@@ -8,6 +8,7 @@ volumes:
   postgres_data:
   redis_data:
   n8n_data:
+  artifact_data:
 
 services:
   api:
@@ -24,10 +25,13 @@ services:
       # Service-internal URLs (override anything inherited from .env)
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT:-/app/data/artifacts}
     env_file:
       - .env
     ports:
       - "${API_PORT:-8000}:8000"
+    volumes:
+      - artifact_data:/app/data/artifacts
     networks:
       - backend
     depends_on:
@@ -51,8 +55,11 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_SCHEDULER_INTERVAL: ${WORKER_SCHEDULER_INTERVAL:-5}
+      ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT:-/app/data/artifacts}
     env_file:
       - .env
+    volumes:
+      - artifact_data:/app/data/artifacts
     networks:
       - backend
     depends_on:

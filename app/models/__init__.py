@@ -11,6 +11,7 @@ from app.models.platform import IntegrationType, Platform, PlatformStatus, Platf
 from app.models.platform_connection import ConnectionStatus, PlatformConnection
 from app.models.workflow import Workflow
 from app.models.workflow import WorkflowStatus as WorkflowDefinitionStatus
+from app.models.workflow_artifact import ArtifactKind, WorkflowArtifact
 from app.models.workflow_execution import (
     WorkflowExecution,
     WorkflowStatus,
@@ -37,6 +38,7 @@ from app.models.workflow_version import (
 
 __all__ = [
     "ActorType",
+    "ArtifactKind",
     "AuditEvent",
     "Company",
     "CompanyStatus",
@@ -55,6 +57,7 @@ __all__ = [
     "PlatformType",
     "TimestampMixin",
     "Workflow",
+    "WorkflowArtifact",
     "WorkflowDefinitionStatus",
     "WorkflowEdge",
     "WorkflowExecution",
