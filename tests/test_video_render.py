@@ -18,7 +18,7 @@ FONT_DIR = None  # resolved lazily; host may not carry Vazirmatn
 
 
 def _find_persian_font() -> str | None:
-    for candidate_dir in ("C:/Windows/Fonts", "/usr/share/fonts"):
+    for _candidate_dir in ("C:/Windows/Fonts", "/usr/share/fonts"):
         pass
     return None
 
@@ -57,7 +57,7 @@ async def test_render_produces_valid_mp4_with_subtitle_stream(tmp_path):
                     break
                 yield chunk
 
-    stored = await storage.save(f"executions/{uuid.uuid4()}/video/raw.mp4", chunks)
+    await storage.save(f"executions/{uuid.uuid4()}/video/raw.mp4", chunks)
 
 
     # A sessionless service variant: ArtifactService only needs the session for
@@ -81,7 +81,11 @@ async def test_render_produces_valid_mp4_with_subtitle_stream(tmp_path):
     ass_path.write_text(ass, encoding="utf-8")
 
     output = tmp_path / "final.mp4"
-    vf = f"scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2,ass='{ass_path}':fontsdir='{tmp_path / 'fonts'}'"
+    vf = (
+        "scale=320:240:force_original_aspect_ratio=decrease,"
+        "pad=320:240:(ow-iw)/2:(oh-ih)/2,"
+        f"ass='{ass_path}':fontsdir='{tmp_path / 'fonts'}'"
+    )
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
         "-i", str(raw),

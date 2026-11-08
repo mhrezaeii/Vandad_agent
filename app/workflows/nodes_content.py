@@ -31,6 +31,7 @@ from app.integrations.providers.base import (
     ProviderError,
     ProviderExecutionContext,
     ProviderPermanentError,
+    ProviderTransientError,
 )
 from app.models import (
     ArtifactKind,

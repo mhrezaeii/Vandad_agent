@@ -18,7 +18,9 @@ from app.integrations.providers.heygen import HeyGenProvider
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 
 
-def _context(operation: str, configuration: dict, *, credential_text: str = "secret-key-123") -> ProviderExecutionContext:
+def _context(
+    operation: str, configuration: dict, *, credential_text: str = "secret-key-123"
+) -> ProviderExecutionContext:
     from app.security.secret_value import SecretValue
 
     return ProviderExecutionContext(
@@ -155,7 +157,7 @@ async def test_heygen_submit_video_returns_job_id():
 
 
 async def test_heygen_status_processing_is_transient_completed_has_url():
-    adapter = HeyGenProvider()
+    HeyGenProvider()
     processing = _context("video_status", {
         "params": {"provider_job_id": "hg-1"},
         "url": "https://api.heygen.com",

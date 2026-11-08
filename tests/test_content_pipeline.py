@@ -85,7 +85,9 @@ def content_service(db_session, engine_pair, redis_manager):
     )
 
 
-async def _brand_with_character(db_session, content_service, company_id, *, active=True) -> tuple[ContentBrand, BrandCharacter]:
+async def _brand_with_character(
+    db_session, content_service, company_id, *, active=True
+) -> tuple[ContentBrand, BrandCharacter]:
     brand = await content_service.ensure_vandefence_brand(company_id=company_id)
     character = await content_service.get_character(brand.id, company_id=company_id)
     character.provider = "heygen"
@@ -142,7 +144,7 @@ async def test_script_generation_persists_llm_output(
     }, 200)]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        for method, fragment, body, status_code in llm_routes:
+        for _method, fragment, body, status_code in llm_routes:
             if fragment in str(request.url):
                 return httpx.Response(status_code, json=body)
         return httpx.Response(404, json={})
@@ -321,7 +323,7 @@ async def test_content_tenant_isolation(db_session, content_service, workflow_fa
         await content_service.get_project(project.id, company_id=stranger.id)
     with pytest.raises(NotFoundError):
         await content_service.get_brand(brand.id, company_id=stranger.id)
-    foreign_status = await content_service.get_job_status(
+    await content_service.get_job_status(
         project.video_workflow_execution_id or uuid.uuid4(), company_id=stranger.id
     ) if False else None
     with pytest.raises(NotFoundError):
@@ -347,7 +349,7 @@ def test_persian_subsegments_split_and_time():
 
 
 def test_ass_subtitle_contains_persian_and_rtl_style():
-    segments = build_segments("پایش متمرکز امنیتی اهمیت دارد.", total_seconds=10)
+    build_segments("پایش متمرکز امنیتی اهمیت دارد.", total_seconds=10)
     ass = build_ass_for_script("پایش متمرکز امنیتی اهمیت دارد.", total_seconds=10,
                                width=1080, height=1920)
     assert "پایش" in ass

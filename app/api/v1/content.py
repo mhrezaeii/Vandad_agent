@@ -22,11 +22,9 @@ from app.schemas.content import (
 )
 from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
-from app.storage.local import LocalArtifactStorage
 
 
 def get_content_service(request: Request) -> ContentService:
-    settings = get_settings()
     return ContentService(
         request.app.state.session_factory,
         request.app.state.provider_registry,
@@ -34,11 +32,6 @@ def get_content_service(request: Request) -> ContentService:
         request.app.state.master_key_box,
         workflow_queue=getattr(request.app.state, "workflow_queue", None),
     )
-
-
-def _artifact_service(request: Request, content_service: ContentService) -> LocalArtifactStorage:
-    _ = content_service
-    return request.app.state.artifact_storage
 
 
 router = APIRouter(prefix="/content", tags=["content"])

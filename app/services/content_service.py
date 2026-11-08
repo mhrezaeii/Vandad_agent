@@ -595,7 +595,8 @@ class ContentService:
         Re-binds (new draft + publish) only when the stored graph references a
         different connection than the operator selected.
         """
-        bound_graph = _bind_connection(graph, "__LLM_CONNECTION__" if "script" in name else "__HEYGEN_CONNECTION__", connection_id)
+        llm_placeholder = "__LLM_CONNECTION__" if "script" in name else "__HEYGEN_CONNECTION__"
+        bound_graph = _bind_connection(graph, llm_placeholder, connection_id)
         bound_graph = _bind_connection(bound_graph, "__HEYGEN_CONNECTION__", connection_id)
 
         workflow = (
