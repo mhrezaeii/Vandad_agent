@@ -102,6 +102,25 @@ class LlmOpenAiProvider(ProviderAdapter):
                 "LLM response shape was unexpected.", code="llm_bad_response"
             ) from exc
 
+        # Token usage is standard; cost is only recorded when the endpoint
+        # actually reports it (e.g. OpenRouter usage.cost). Never invent prices.
+        usage_metadata: dict[str, Any] = {
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
+        for cost_key in ("cost", "total_cost", "cost_usd", "cost_credits"):
+            if usage.get(cost_key) is not None:
+                usage_metadata[cost_key] = usage[cost_key]
+        for currency_key in ("currency", "cost_currency"):
+            if usage.get(currency_key) is not None:
+                usage_metadata[currency_key] = usage[currency_key]
+        if any(key in usage_metadata for key in ("cost", "total_cost", "cost_usd", "cost_credits")):
+            usage_metadata["pricing_metadata"] = {
+                "source": "llm_response_usage",
+                "version": "openai_compatible_v1",
+            }
+
         return ProviderResult(
             provider_id=self.provider_id,
             success=True,
@@ -110,11 +129,7 @@ class LlmOpenAiProvider(ProviderAdapter):
             metadata={
                 "content": choice,
                 "model": response_payload.get("model", model),
-                "usage": {
-                    "prompt_tokens": usage.get("prompt_tokens"),
-                    "completion_tokens": usage.get("completion_tokens"),
-                    "total_tokens": usage.get("total_tokens"),
-                },
+                "usage": usage_metadata,
             },
         )
 

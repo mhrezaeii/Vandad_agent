@@ -38,6 +38,7 @@ class BrandCharacterRead(BaseModel):
     language: str
     status: str
     creation_metadata: dict[str, Any]
+    last_checked_at: datetime | None
 
 
 class CharacterCreateRequest(BaseModel):
@@ -49,6 +50,20 @@ class CharacterCreateRequest(BaseModel):
         description="Explicit portrait asset the provider fetches (required on creation).",
     )
     voice_id: str | None = Field(default=None, max_length=255)
+
+
+class CharacterStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool = Field(description="Activate or deactivate the persistent character.")
+
+
+class ContentConnectionRequest(BaseModel):
+    """Provider connection selected for one pipeline step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: uuid.UUID
 
 
 class ContentProjectCreate(BaseModel):
@@ -71,10 +86,13 @@ class ContentProjectRead(BaseModel):
     video_title: str | None
     call_to_action: str | None
     llm_usage: dict[str, Any] | None
+    script_workflow_execution_id: uuid.UUID | None
+    video_workflow_execution_id: uuid.UUID | None
     provider_job_id: str | None
     provider_status: str | None
     raw_artifact_id: uuid.UUID | None
     final_artifact_id: uuid.UUID | None
+    cost_metadata: dict[str, Any] | None
     error_message: str | None
     created_at: datetime
     updated_at: datetime

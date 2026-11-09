@@ -148,7 +148,11 @@ async def _run_provider_operation(
             resolved.secret_reference,
         )
 
-    action_params = {k: v for k, v in params.items() if k not in {"connection_id", "project_id"}}
+    # Node-level options (response_format, temperature, model overrides, ...)
+    # flow to the adapter, while connection/routing keys are stripped.
+    action_params = {**node.configuration, **params}
+    for routing_key in ("connection_id", "project_id", "provider", "operation"):
+        action_params.pop(routing_key, None)
     context: ProviderExecutionContext = engine.executor.build_context(
         adapter=adapter,
         connection_id=connection.id,
@@ -205,8 +209,19 @@ async def _update_project(
     if isinstance(cta, str) and cta.strip():
         updates["call_to_action"] = cta[:500]
     usage = params.get("llm_usage") or (llm_output or {}).get("usage")
-    if isinstance(usage, dict) and usage.get("total_tokens"):
-        updates["llm_usage"] = usage
+    if isinstance(usage, dict) and any(
+        usage.get(key) is not None
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost", "total_cost")
+    ):
+        usage_metadata = dict(usage)
+        model = params.get("llm_model") or (llm_output or {}).get("model")
+        if model:
+            usage_metadata["model"] = model
+        usage_metadata.setdefault(
+            "pricing_metadata",
+            {"source": "llm_response_usage", "version": "openai_compatible_v1"},
+        )
+        updates["llm_usage"] = usage_metadata
 
     for field, value in updates.items():
         setattr(project, field, value)
@@ -293,25 +308,24 @@ async def _submit_video(
             code="invalid_configuration",
         )
 
+    # Stable idempotency key: HeyGen replays the original response for a retry
+    # within 24h and returns 409 while the first request is in flight, so a
+    # worker restart can never start (or bill) a second generation.
+    idempotency_key = f"vandad-video-{project.id}"
     metadata = await _run_provider_operation(
         engine,
         execution,
         node,
         {
             "params": {
-                "video_input": {
-                    "character": {
-                        "type": "avatar",
-                        "avatar_id": character.provider_avatar_id,
-                        "voice": {
-                            "type": "text",
-                            "voice_id": str(voice_id),
-                            "input_text": project.script_text,
-                        },
-                    }
-                },
-                "dimension": {"width": brand.video_width, "height": brand.video_height},
-                "test": bool(params.get("test", False)),
+                "avatar_id": character.provider_avatar_id,
+                "voice_id": str(voice_id),
+                "script": project.script_text,
+                "idempotency_key": idempotency_key,
+                "motion_prompt": params.get("motion_prompt")
+                or (brand.visual_config or {}).get("motion_prompt"),
+                "expressiveness": params.get("expressiveness")
+                or (brand.visual_config or {}).get("expressiveness"),
             },
         },
         connection_id=uuid.UUID(str(connection_id)),
@@ -329,10 +343,13 @@ async def _submit_video(
     project.status = ProjectStatus.VIDEO_GENERATING.value
     project.submission_metadata = {
         "submitted_at": datetime.now(UTC).isoformat(),
+        "provider_api": "heygen_v3_videos",
+        "idempotency_key": idempotency_key,
         "avatar_id": character.provider_avatar_id,
+        "avatar_kind": character.avatar_kind,
         "voice_id": str(voice_id),
-        "dimension": {"width": brand.video_width, "height": brand.video_height},
-        "test_mode": bool(params.get("test", False)),
+        "brand_video": {"width": brand.video_width, "height": brand.video_height},
+        "provider_reported_status": metadata.get("status"),
     }
     AuditService(engine.session).record(
         event_type="video.submitted",
@@ -372,11 +389,23 @@ async def _poll_video(
     )
     project.provider_status = str(metadata.get("status", "processing"))
     project.provider_video_url = metadata.get("video_url")
+    cost = dict(project.cost_metadata or {})
+    cost["provider"] = "heygen"
+    cost["provider_api"] = "heygen_v3_videos"
     if isinstance(metadata.get("duration"), (int, float)):
-        cost = dict(project.cost_metadata or {})
         cost["reported_duration_seconds"] = metadata["duration"]
-        cost["pricing_metadata"] = {"source": "heygen_status_response", "version": "v1_status"}
-        project.cost_metadata = cost
+    for field in ("width", "height", "completed_at", "thumbnail_url", "subtitle_url"):
+        if metadata.get(field) is not None:
+            cost[field] = metadata[field]
+    # HeyGen does not report a per-video price in the status response. Record
+    # the pricing source/version and leave actual_cost unset rather than
+    # inventing a number; an operator/billing sync can fill it in.
+    cost["pricing_metadata"] = {
+        "source": "heygen_v3_videos_status",
+        "version": "v3",
+        "actual_cost_available": False,
+    }
+    project.cost_metadata = cost
     await engine.session.flush()
     return metadata
 
@@ -416,6 +445,14 @@ async def _download_video(
     )
     project.raw_artifact_id = artifact.id
     project.provider_status = "downloaded"
+    cost = dict(project.cost_metadata or {})
+    cost["raw_artifact"] = {
+        "artifact_id": str(artifact.id),
+        "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256,
+        "content_type": artifact.content_type,
+    }
+    project.cost_metadata = cost
     await engine.session.flush()
     engine._log(  # noqa: SLF001
         execution,
@@ -437,8 +474,10 @@ async def _render_video(
     if engine.artifact_storage is None:
         raise ProviderPermanentError("Artifact storage is not configured.", code="storage_unavailable")
 
+    from app.core.config import get_settings  # noqa: PLC0415
     from app.services.video_render_service import VideoRenderService  # noqa: PLC0415
 
+    settings = get_settings()
     brand = await engine.session.get(ContentBrand, project.brand_id)
     if brand is None or brand.company_id != execution.company_id:
         raise NotFoundError("Brand not found for this project.")
@@ -447,9 +486,10 @@ async def _render_video(
         engine.session,
         engine.artifact_storage,
         max_size_bytes=2 * 1024**3,
-        ffmpeg_bin=str(node.configuration.get("ffmpeg_bin", "ffmpeg")),
-        fonts_dir=str(node.configuration.get("fonts_dir", "fonts")),
-        font_name=str(node.configuration.get("font_name", "Vazirmatn")),
+        ffmpeg_bin=str(node.configuration.get("ffmpeg_bin", settings.video_ffmpeg_bin)),
+        ffprobe_bin=str(node.configuration.get("ffprobe_bin", settings.video_ffprobe_bin)),
+        fonts_dir=str(node.configuration.get("fonts_dir", settings.video_fonts_dir)),
+        font_name=str(node.configuration.get("font_name", settings.video_font_name)),
     )
     subtitle_text = params.get("subtitle_text") or project.script_text or ""
     artifact, subtitle_path_used = await render_service.render_branded_video(
@@ -465,6 +505,21 @@ async def _render_video(
     )
     project.final_artifact_id = artifact.id
     project.status = ProjectStatus.COMPLETED.value
+    cost = dict(project.cost_metadata or {})
+    cost["final_artifact"] = {
+        "artifact_id": str(artifact.id),
+        "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256,
+        "content_type": artifact.content_type,
+        "width": brand.video_width,
+        "height": brand.video_height,
+    }
+    cost["render"] = {
+        "service": "ffmpeg",
+        "subtitles": "persian_ass",
+        "font": str(node.configuration.get("font_name", "Vazirmatn")),
+    }
+    project.cost_metadata = cost
     await engine.session.flush()
     engine._log(  # noqa: SLF001
         execution,

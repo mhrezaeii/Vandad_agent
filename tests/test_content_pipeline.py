@@ -208,11 +208,11 @@ async def test_approve_and_video_submission_is_idempotent(
     submit_calls: list[int] = []
 
     def heygen_handler(request: httpx.Request) -> httpx.Response:
-        if "/v2/video/generate" in str(request.url):
+        if "/v3/videos" in str(request.url) and request.method == "POST":
             submit_calls.append(1)
-            return httpx.Response(200, json={"code": 100, "data": {"video_id": "hg-paid-1"}})
-        if "/v1/video_status.get" in str(request.url):
-            return httpx.Response(200, json={"code": 100, "data": {
+            return httpx.Response(200, json={"video_id": "hg-paid-1"})
+        if "/v3/videos/hg-paid-1" in str(request.url):
+            return httpx.Response(200, json={"data": {
                 "status": "processing"}})
         return httpx.Response(404, json={})
 

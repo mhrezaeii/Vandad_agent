@@ -80,6 +80,8 @@ def _make_worker(
     worker.registry = registry
     worker.executor = executor
     worker.queue = queue
+    # Media nodes need storage; these hardening tests never touch artifacts.
+    worker.artifact_storage = None
     worker._stopping = asyncio.Event()
     worker._inflight = set()
     worker._job_slots = asyncio.Semaphore(concurrency)

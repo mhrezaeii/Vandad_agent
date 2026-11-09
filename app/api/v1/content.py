@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -13,7 +14,9 @@ from app.core.exceptions import NotFoundError
 from app.schemas.content import (
     BrandCharacterRead,
     CharacterCreateRequest,
+    CharacterStatusRequest,
     ContentBrandRead,
+    ContentConnectionRequest,
     ContentJobRead,
     ContentProjectCreate,
     ContentProjectRead,
@@ -24,14 +27,26 @@ from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
 
 
-def get_content_service(request: Request) -> ContentService:
-    return ContentService(
-        request.app.state.session_factory,
-        request.app.state.provider_registry,
-        request.app.state.provider_executor,
-        request.app.state.master_key_box,
-        workflow_queue=getattr(request.app.state, "workflow_queue", None),
-    )
+async def get_content_service(request: Request) -> AsyncIterator[ContentService]:
+    """Request-scoped unit of work for content operations.
+
+    ``ContentService`` mutates rows and relies on the surrounding transaction;
+    the session is committed on success and rolled back on any error.
+    """
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        try:
+            yield ContentService(
+                session,
+                request.app.state.provider_registry,
+                request.app.state.provider_executor,
+                request.app.state.master_key_box,
+                workflow_queue=getattr(request.app.state, "workflow_queue", None),
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 router = APIRouter(prefix="/content", tags=["content"])
@@ -58,7 +73,7 @@ async def get_character(
     return BrandCharacterRead.model_validate(character)
 
 
-@router.post("/brands/{brand_id}/character", response_model=BrandCharacterRead)
+@router.post("/brands/{brand_id}/character", response_model=BrandCharacterRead, status_code=201)
 async def create_character(
     brand_id: uuid.UUID,
     payload: CharacterCreateRequest,
@@ -94,12 +109,12 @@ async def refresh_character(
 @router.post("/brands/{brand_id}/character/status", response_model=BrandCharacterRead)
 async def set_character_status(
     brand_id: uuid.UUID,
-    payload: ProjectScriptApproval,  # {"active": bool}
+    payload: CharacterStatusRequest,
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> BrandCharacterRead:
     character = await service.set_character_status(
-        brand_id, company_id=scope.company_id, active=bool(payload.approved)
+        brand_id, company_id=scope.company_id, active=payload.active
     )
     return BrandCharacterRead.model_validate(character)
 
@@ -130,7 +145,7 @@ async def get_project(
 @router.post("/projects/{project_id}/generate-script", response_model=ContentProjectRead)
 async def generate_script(
     project_id: uuid.UUID,
-    payload: CharacterCreateRequest,  # reuse: connection_id required
+    payload: ContentConnectionRequest,
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
@@ -154,7 +169,7 @@ async def approve_script(
 @router.post("/projects/{project_id}/generate-video", response_model=ContentProjectRead)
 async def generate_video(
     project_id: uuid.UUID,
-    payload: CharacterCreateRequest,  # reuse: connection_id required
+    payload: ContentConnectionRequest,
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
@@ -210,13 +225,15 @@ async def download_video(
         raise NotFoundError("Video not found.", details=[{"video_id": str(video_id)}])
     from app.services.artifact_service import ArtifactService  # noqa: PLC0415
 
-    artifact_service = ArtifactService(
-        request.app.state.session_factory,
-        request.app.state.artifact_storage,
-    )
-    artifact, stream = await artifact_service.open_artifact_stream(
-        project.final_artifact_id, company_id=scope.company_id
-    )
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        artifact_service = ArtifactService(
+            session,
+            request.app.state.artifact_storage,
+        )
+        artifact, stream = await artifact_service.open_artifact_stream(
+            project.final_artifact_id, company_id=scope.company_id
+        )
     return StreamingResponse(
         stream,
         media_type=artifact.content_type,

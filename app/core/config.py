@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     # Hard cap per artifact; streaming writes abort beyond it.
     artifact_max_size_bytes: int = Field(default=2 * 1024**3, ge=1)
 
+    # --- Video rendering (see app.services.video_render_service) ----------------
+    # Directory containing Persian-capable fonts (the Docker image installs
+    # fonts-vazirmatn under /usr/share/fonts). If it does not exist, libass
+    # falls back to the system fontconfig.
+    video_fonts_dir: str = "/usr/share/fonts"
+    video_font_name: str = "Vazirmatn"
+    video_ffmpeg_bin: str = "ffmpeg"
+    video_ffprobe_bin: str = "ffprobe"
+
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
     n8n_api_key: str | None = None

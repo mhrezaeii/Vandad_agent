@@ -150,6 +150,17 @@ def build_ass_for_script(
     width: int,
     height: int,
     font_name: str = "Vazirmatn",
+    font_size: int | None = None,
+    primary_color: str = "&H00FFFFFF",
+    outline_color: str = "&H00101010",
 ) -> str:
     segments = build_segments(script_text, total_seconds)
-    return build_ass_subtitle(segments, width=width, height=height, font_name=font_name)
+    return build_ass_subtitle(
+        segments,
+        width=width,
+        height=height,
+        font_name=font_name,
+        font_size=font_size,
+        primary_color=primary_color,
+        outline_color=outline_color,
+    )

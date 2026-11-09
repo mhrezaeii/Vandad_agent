@@ -66,8 +66,22 @@ VANDEFENCE_BRAND: dict[str, Any] = {
     ),
     "visual_config": {
         "background": "dark navy",
+        "background_color": "#0A1128",
         "accent": "electric blue",
+        "accent_color": "#00A3FF",
         "style": "minimal cybersecurity graphics",
+        # Rendering template (all optional assets are only used when present).
+        "fit": "cover",
+        "subtitle_font_size": 56,
+        "subtitle_primary_color": "&H00FFFFFF",
+        "subtitle_outline_color": "&H00101010",
+        "logo_path": "assets/vandefence-logo.png",
+        "logo_scale": 0.18,
+        "logo_margin": 40,
+        "music_path": None,
+        "music_volume": 0.12,
+        "intro_path": None,
+        "outro_path": None,
     },
 }
 
@@ -78,17 +92,26 @@ SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
             "node_key": "script_generation",
             "node_type": "action.provider",
             "name": "generate persian script",
-            "configuration": {"connection_id": "__LLM_CONNECTION__", "operation": "execute"},
+            "configuration": {
+                "connection_id": "__LLM_CONNECTION__",
+                "operation": "execute",
+                "response_format": "json_object",
+                "temperature": 0.4,
+                "max_tokens": 900,
+            },
             "input_mapping": {
                 "params": {
                     "$template": (
-                        '{"system": "تو یک کپی‌رایتر فارسی برای برند امنیتی Vandefence هستی. '
-                        "فقط JSON معتبر با کلیدهای title، script، segments و cta برگردان؛ "
-                        "segments آرایه‌ای از رشته‌های فارسی است. هیچ ادعای اثبات‌نشده درباره "
-                        'محصول یا عملکرد ننویس.", '
-                        '"user": "یک اسکریپت گفتاری حدوداً ۳۰ ثانیه‌ای (۶۰ تا ۸۰ واژه) به '
-                        "زبان فارسی روان برای ویدیوی عمودی درباره موضوع زیر بنویس: شروع با "
-                        "قلاب جذاب، توضیح فنی دقیق، پایان کوتاه با CTA. موضوع: "
+                        '{"system": "تو یک کپی‌رایتر فنی فارسی برای برند امنیتی Vandefence هستی. '
+                        "خروجی را فقط به صورت JSON معتبر با کلیدهای title (عنوان کوتاه فارسی)، "
+                        "script (متن گفتاری کامل فارسی)، segments (آرایه‌ای از جمله‌های کوتاه فارسی) "
+                        "و cta (دعوت به اقدام کوتاه) برگردان. متن باید دقیق، محافظه‌کارانه و بدون "
+                        "ادعای اثبات‌نشده درباره محصول، عملکرد، مشتری یا تضمین امنیتی باشد؛ از "
+                        'بازاریابی ترس‌محور و اغراق پرهیز کن.", '
+                        '"user": "یک اسکریپت گفتاری طبیعی و روان فارسی برای ویدیوی عمودی ۳۰ ثانیه‌ای '
+                        "(حدود ۷۵ تا ۸۵ واژه) درباره موضوع زیر بنویس. ساختار: قلاب روشن در جمله اول، "
+                        "توضیح فنی درست و ملموس در بدنه، جمع‌بندی کوتاه و CTA در پایان. اگر قابلیت "
+                        "یا عدد مشخصی را نمی‌دانی، آن را ادعا نکن. موضوع: "
                         '{{ trigger.topic }}"}'
                     )
                 }
@@ -310,6 +333,17 @@ class ContentService:
             )
         if character.status == CharacterStatus.CREATING.value:
             raise ConflictError("Character creation is already in progress.")
+        # A character is created ONCE per brand. Only a never-created or failed
+        # character may start (or restart) the paid photo-avatar training flow.
+        if character.status not in (
+            CharacterStatus.NOT_CREATED.value,
+            CharacterStatus.FAILED.value,
+        ):
+            raise ConflictError(
+                "A character already exists for this brand; reactivate it instead "
+                "of creating a new paid avatar.",
+                details=[{"character_id": str(character.id), "status": character.status}],
+            )
         if not source_image_url:
             raise ConflictError(
                 "A source portrait image_url is required to create the character "
@@ -327,7 +361,13 @@ class ContentService:
                 connection_id=connection_id,
                 company_id=company_id,
                 operation="create_photo_avatar",
-                params={"name": f"{brand.name} character", "image_url": source_image_url},
+                params={
+                    "name": f"{brand.name} character",
+                    "image_url": source_image_url,
+                    # Stable key: a retried creation request cannot start (and
+                    # bill) a second photo-avatar training job.
+                    "idempotency_key": f"vandad-avatar-{character.id}",
+                },
             )
         except ProviderError as exc:
             character.status = CharacterStatus.FAILED.value
@@ -339,7 +379,9 @@ class ContentService:
             await self.session.flush()
             raise
 
+        character.provider_avatar_id = metadata.get("provider_avatar_id")
         character.provider_group_id = metadata.get("provider_group_id")
+        character.avatar_kind = "photo_avatar"
         character.status = CharacterStatus.TRAINING.value
         character.creation_metadata = {
             **(character.creation_metadata or {}),
@@ -352,7 +394,11 @@ class ContentService:
             company_id=company_id,
             resource_type=CHARACTER_RESOURCE,
             resource_id=character.id,
-            metadata={"provider": "heygen", "group_id": character.provider_group_id},
+            metadata={
+                "provider": "heygen",
+                "provider_avatar_id": character.provider_avatar_id,
+                "group_id": character.provider_group_id,
+            },
         )
         await self.session.flush()
         return character
@@ -362,29 +408,42 @@ class ContentService:
     ) -> BrandCharacter:
         """Poll photo-avatar training; persist the persistent avatar id on success."""
         character = await self.get_character(brand_id, company_id=company_id)
-        if character.provider_group_id is None:
+        if character.provider_avatar_id is None:
             raise ConflictError("Character creation has not started.")
-        metadata = await self._heygen_operation(
-            connection_id=connection_id,
-            company_id=company_id,
-            operation="photo_avatar_status",
-            params={"provider_group_id": character.provider_group_id},
-        )
-        character.last_checked_at = datetime.now(UTC)
-        avatar_id = metadata.get("provider_avatar_id")
-        if avatar_id:
-            character.provider_avatar_id = str(avatar_id)
-            character.avatar_kind = "photo_avatar"
-            character.status = CharacterStatus.ACTIVE.value
-            character.creation_metadata = {**(character.creation_metadata or {}), **metadata}
-            self.audit.record(
-                event_type="content.character_activated",
-                action="activate",
+        try:
+            metadata = await self._heygen_operation(
+                connection_id=connection_id,
                 company_id=company_id,
-                resource_type=CHARACTER_RESOURCE,
-                resource_id=character.id,
-                metadata={"provider_avatar_id": str(avatar_id)},
+                operation="photo_avatar_status",
+                params={"provider_avatar_id": character.provider_avatar_id},
             )
+        except ProviderError as exc:
+            if exc.code != "still_training":
+                raise
+            # Training is asynchronous; a poll is not an error. Keep the
+            # persisted look id and report the in-progress status.
+            character.last_checked_at = datetime.now(UTC)
+            character.creation_metadata = {
+                **(character.creation_metadata or {}),
+                "last_checked_at": self._now_iso(),
+                "last_status": "training",
+            }
+            await self.session.flush()
+            return character
+        character.last_checked_at = datetime.now(UTC)
+        avatar_id = metadata.get("provider_avatar_id") or character.provider_avatar_id
+        character.provider_avatar_id = str(avatar_id)
+        character.avatar_kind = "photo_avatar"
+        character.status = CharacterStatus.ACTIVE.value
+        character.creation_metadata = {**(character.creation_metadata or {}), **metadata}
+        self.audit.record(
+            event_type="content.character_activated",
+            action="activate",
+            company_id=company_id,
+            resource_type=CHARACTER_RESOURCE,
+            resource_id=character.id,
+            metadata={"provider_avatar_id": str(avatar_id)},
+        )
         await self.session.flush()
         return character
 
@@ -472,6 +531,9 @@ class ContentService:
             metadata={"execution_id": str(execution.id)},
         )
         await self.session.flush()
+        # onupdate server defaults are not returned by UPDATE; reload so the
+        # response serialization never triggers lazy IO outside the session.
+        await self.session.refresh(project)
         return project
 
     async def approve_script(self, project_id: uuid.UUID, *, scope: CompanyScope) -> ContentProject:
@@ -493,6 +555,7 @@ class ContentService:
             metadata={},
         )
         await self.session.flush()
+        await self.session.refresh(project)
         return project
 
     async def generate_video(
@@ -539,6 +602,7 @@ class ContentService:
             metadata={"execution_id": str(execution.id)},
         )
         await self.session.flush()
+        await self.session.refresh(project)
         return project
 
     # ------------------------------------------------------------- introspection
@@ -684,7 +748,12 @@ class ContentService:
             connection_id=connection.id,
             company_id=company_id,
             platform_id=connection.platform_id,
-            configuration={**connection.configuration, **params},
+            configuration={
+                **connection.configuration,
+                # Adapter operations read their arguments from ``params``; merge
+                # per-call arguments over any connection-level defaults.
+                "params": {**(connection.configuration or {}).get("params", {}), **params},
+            },
             credential=credential,
             credential_type=credential_type,
             secret_reference=secret_reference,

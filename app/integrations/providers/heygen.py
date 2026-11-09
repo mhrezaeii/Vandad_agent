@@ -1,25 +1,29 @@
-"""HeyGen provider adapter (v2 video generation + v1 status polling + v2 photo
-avatar creation), implementing the official API surface:
+"""HeyGen provider adapter — official v3 API surface.
+
+Verified against the current HeyGen documentation (developers.heygen.com,
+November 2026):
 
 - Auth header: ``X-Api-Key``.
-- ``heygen.submit_video``   — POST /v2/video/generate
-  body: {video_inputs: [{character: {type, avatar_id|talking_photo_id,
-  voice: {type: "text", voice_id, input_text}}}], dimension: {width, height},
-  test: bool}  ->  {data: {video_id}}
-- ``heygen.video_status``   — GET /v1/video_status.get?video_id=...
-  -> {data: {status: pending|processing|completed|failed, video_url, duration,
-  error}}
-- ``heygen.create_photo_avatar`` — POST /v2/photo_avatar/avatar_group/create
-  ({name, image_url}) -> {data: {group_id, avatar_id...}} then POST
-  /v2/photo_avatar/train — training is polled via
-  GET /v2/photo_avatar/avatar_group/{group_id}.
+- ``submit_video``          — POST /v3/videos
+  body: {type: "avatar", avatar_id, voice_id, script, voice_settings?,
+  motion_prompt?, expressiveness?, callback_id?}  ->  {video_id}
+  Supports the documented ``Idempotency-Key`` header so a retried request
+  cannot start (and bill) a second generation.
+- ``video_status``          — GET /v3/videos/{video_id}
+  -> {data: {status: pending|processing|completed|failed|cancelled,
+  video_url, duration, thumbnail_url, subtitle_url, failure_code,
+  failure_message, ...}}
+- ``create_photo_avatar``   — POST /v3/avatars
+  body: {type: "photo", name, file: {type: "url", url}}
+  -> {avatar_item: {id}}  (the look/avatar id used for video generation)
+- ``photo_avatar_status``   — GET /v3/avatars/looks/{look_id}
+  -> {status: processing|completed|failed, preview_image_url,
+  supported_api_engines, error}
+- ``list_voices``           — GET /v3/voices
 
-Endpoint/base configuration: ``url`` (default https://api.heygen.com).
-Verification note: HeyGen's docs site is Cloudflare-gated from this network;
-the surface above was verified against multiple mirrors of the official
-reference (developers.heygen.com/reference/create-video, /reference/get-video,
-and the photo-avatar reference) and must be re-verified live with a real key
-before first production use.
+No undocumented endpoints or request fields are used. Older v1/v2 payload
+shapes are rejected so a misconfigured workflow fails loudly instead of
+silently sending an unsupported body.
 """
 
 from __future__ import annotations
@@ -43,7 +47,9 @@ DEFAULT_HEYGEN_BASE = "https://api.heygen.com"
 OPERATIONS = frozenset(
     {"submit_video", "video_status", "create_photo_avatar", "photo_avatar_status", "list_voices"}
 )
-HEYGEN_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+HEYGEN_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+HEYGEN_STATUSES = frozenset({"pending", "processing", "completed", "failed", "cancelled"})
+MAX_IDEMPOTENCY_KEY_LENGTH = 255
 
 
 class HeyGenProvider(ProviderAdapter):
@@ -52,7 +58,7 @@ class HeyGenProvider(ProviderAdapter):
 
     provider_id = "heygen"
     display_name = "HeyGen"
-    description = "Talking-avatar video generation via the official HeyGen API."
+    description = "Talking-avatar video generation via the official HeyGen v3 API."
     capabilities = frozenset({ProviderCapability.EXECUTION, ProviderCapability.HEALTH_CHECK})
     credential_requirements = (
         ProviderCredentialRequirement("api_key", required=True, description="HeyGen X-Api-Key."),
@@ -80,33 +86,51 @@ class HeyGenProvider(ProviderAdapter):
 
     # ------------------------------------------------------------------ submit
     async def _submit_video(self, context: ProviderExecutionContext) -> ProviderResult:
-        config = context.configuration
-        params = self._params(config)
-        video_input = params.get("video_input")
-        if not isinstance(video_input, dict):
+        params = self._params(context.configuration)
+        avatar_id = params.get("avatar_id")
+        voice_id = params.get("voice_id")
+        script = params.get("script")
+        if not avatar_id or not voice_id or not script:
             raise ProviderPermanentError(
-                "params.video_input is required for submit_video.", code="invalid_configuration"
-            )
-        dimension = params.get("dimension")
-        if not isinstance(dimension, dict):
-            raise ProviderPermanentError(
-                "params.dimension {width, height} is required.", code="invalid_configuration"
+                "params.avatar_id, params.voice_id and params.script are required "
+                "for submit_video (POST /v3/videos).",
+                code="invalid_configuration",
             )
         payload: dict[str, Any] = {
-            "video_inputs": [video_input],
-            "dimension": {"width": int(dimension["width"]), "height": int(dimension["height"])},
-            "test": bool(params.get("test", False)),
+            "type": "avatar",
+            "avatar_id": str(avatar_id),
+            "voice_id": str(voice_id),
+            "script": str(script),
         }
-        body = json.dumps(payload).encode("utf-8")
+        voice_settings = params.get("voice_settings")
+        if isinstance(voice_settings, dict):
+            payload["voice_settings"] = voice_settings
+        for optional_key in ("motion_prompt", "expressiveness", "callback_id"):
+            value = params.get(optional_key)
+            if isinstance(value, str) and value.strip():
+                payload[optional_key] = value
+
+        idempotency_key = params.get("idempotency_key")
+        if idempotency_key is not None:
+            idempotency_key = str(idempotency_key)
+            if not (1 <= len(idempotency_key) <= MAX_IDEMPOTENCY_KEY_LENGTH):
+                raise ProviderPermanentError(
+                    "idempotency_key must be 1-255 characters.", code="invalid_configuration"
+                )
+
         started = time.perf_counter()
         status, payload_json = await self._request(
-            context, "POST", "/v2/video/generate", body=body
+            context,
+            "POST",
+            "/v3/videos",
+            body=json.dumps(payload).encode("utf-8"),
+            idempotency_key=idempotency_key,
         )
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
-        if status != 200:
+        if status not in (200, 201, 202):
             self._raise_for_status(status, payload_json, submit=True)
-        data = payload_json.get("data") or {}
-        video_id = data.get("video_id")
+        data = self._data(payload_json)
+        video_id = data.get("video_id") or data.get("id") or payload_json.get("video_id")
         if not video_id:
             raise ProviderPermanentError(
                 "HeyGen accepted the request but returned no video_id.",
@@ -117,7 +141,11 @@ class HeyGenProvider(ProviderAdapter):
             success=True,
             message="Generation submitted.",
             latency_ms=latency_ms,
-            metadata={"provider_job_id": video_id},
+            metadata={
+                "provider_job_id": str(video_id),
+                "status": str(data.get("status", "pending")),
+                "idempotency_key": idempotency_key,
+            },
         )
 
     async def _video_status(self, context: ProviderExecutionContext) -> ProviderResult:
@@ -128,21 +156,22 @@ class HeyGenProvider(ProviderAdapter):
                 "params.provider_job_id is required for video_status.", code="invalid_configuration"
             )
         status, payload_json = await self._request(
-            context, "GET", "/v1/video_status.get", query={"video_id": str(video_id)}
+            context, "GET", f"/v3/videos/{video_id}"
         )
         if status != 200:
             self._raise_for_status(status, payload_json, submit=False)
-        data = payload_json.get("data") or {}
+        data = self._data(payload_json)
         heygen_status = str(data.get("status", "")).lower()
-        if heygen_status not in {"pending", "processing", "completed", "failed"}:
+        if heygen_status not in HEYGEN_STATUSES:
             raise ProviderPermanentError(
                 f"HeyGen returned unknown status {heygen_status!r}.", code="heygen_bad_response"
             )
-        if heygen_status == "failed":
-            error = data.get("error") or {}
-            message = error.get("message") if isinstance(error, dict) else str(error)
+        if heygen_status in {"failed", "cancelled"}:
+            message = data.get("failure_message") or data.get("error")
+            if isinstance(message, dict):
+                message = message.get("message")
             raise ProviderPermanentError(
-                f"HeyGen generation failed: {message or 'unknown error'}.",
+                f"HeyGen generation {heygen_status}: {message or 'unknown error'}.",
                 code="heygen_generation_failed",
             )
         if heygen_status in {"pending", "processing"}:
@@ -158,20 +187,28 @@ class HeyGenProvider(ProviderAdapter):
                 "HeyGen completed but the video URL is not ready yet.",
                 code="video_url_pending",
             )
+        metadata = {
+            "status": "completed",
+            "video_url": video_url,
+            "duration": data.get("duration"),
+            "provider_job_id": str(video_id),
+            "thumbnail_url": data.get("thumbnail_url"),
+            "subtitle_url": data.get("subtitle_url"),
+            "captioned_video_url": data.get("captioned_video_url"),
+            "width": data.get("width"),
+            "height": data.get("height"),
+            "completed_at": data.get("completed_at"),
+        }
         return ProviderResult(
             provider_id=self.provider_id,
             success=True,
             message="Generation completed.",
-            metadata={
-                "status": "completed",
-                "video_url": video_url,
-                "duration": data.get("duration"),
-                "provider_job_id": str(video_id),
-            },
+            metadata={k: v for k, v in metadata.items() if v is not None},
         )
 
     # ----------------------------------------------------------- photo avatar
     async def _create_photo_avatar(self, context: ProviderExecutionContext) -> ProviderResult:
+        """Create a photo avatar via POST /v3/avatars (async look training)."""
         params = self._params(context.configuration)
         name = params.get("name")
         image_url = params.get("image_url")
@@ -180,81 +217,95 @@ class HeyGenProvider(ProviderAdapter):
                 "params.name and params.image_url are required to create a photo avatar.",
                 code="invalid_configuration",
             )
-        body = json.dumps({"name": str(name), "image_url": str(image_url)}).encode("utf-8")
+        payload = {
+            "type": "photo",
+            "name": str(name),
+            "file": {"type": "url", "url": str(image_url)},
+        }
+        idempotency_key = params.get("idempotency_key")
         status, payload_json = await self._request(
-            context, "POST", "/v2/photo_avatar/avatar_group/create", body=body
+            context,
+            "POST",
+            "/v3/avatars",
+            body=json.dumps(payload).encode("utf-8"),
+            idempotency_key=str(idempotency_key) if idempotency_key else None,
         )
-        if status != 200:
+        if status not in (200, 201, 202):
             self._raise_for_status(status, payload_json, submit=True)
-        data = payload_json.get("data") or {}
-        group_id = data.get("group_id") or data.get("id")
-        if not group_id:
-            raise ProviderPermanentError(
-                "HeyGen returned no avatar group id.", code="heygen_bad_response"
-            )
-        # Kick off training; completion is polled via photo_avatar_status.
-        train_body = json.dumps({"group_id": str(group_id)}).encode("utf-8")
-        train_status, _train_payload = await self._request(
-            context, "POST", "/v2/photo_avatar/train", body=train_body
+        data = self._data(payload_json)
+        avatar_item = data.get("avatar_item") or payload_json.get("avatar_item") or {}
+        avatar_id = (
+            avatar_item.get("id")
+            or data.get("id")
+            or data.get("avatar_id")
+            or payload_json.get("avatar_id")
         )
-        if train_status not in (200, 201):
-            self._raise_for_status(train_status, _train_payload, submit=True)
+        if not avatar_id:
+            raise ProviderPermanentError(
+                "HeyGen returned no avatar/look id for the photo avatar.",
+                code="heygen_bad_response",
+            )
         return ProviderResult(
             provider_id=self.provider_id,
             success=True,
-            message="Photo avatar group created; training started.",
-            metadata={"provider_group_id": str(group_id)},
+            message="Photo avatar created; look training is asynchronous.",
+            metadata={
+                "provider_avatar_id": str(avatar_id),
+                "provider_group_id": data.get("avatar_group_id") or data.get("group_id"),
+                "status": str(avatar_item.get("status") or data.get("status") or "processing"),
+            },
         )
 
     async def _photo_avatar_status(self, context: ProviderExecutionContext) -> ProviderResult:
         params = self._params(context.configuration)
-        group_id = params.get("provider_group_id")
-        if not group_id:
+        look_id = params.get("provider_avatar_id") or params.get("look_id")
+        if not look_id:
             raise ProviderPermanentError(
-                "params.provider_group_id is required.", code="invalid_configuration"
+                "params.provider_avatar_id (look id) is required.", code="invalid_configuration"
             )
         status, payload_json = await self._request(
-            context, "GET", f"/v2/photo_avatar/avatar_group/{group_id}"
+            context, "GET", f"/v3/avatars/looks/{look_id}"
         )
         if status != 200:
             self._raise_for_status(status, payload_json, submit=False)
-        data = payload_json.get("data") or {}
+        data = self._data(payload_json)
         training_status = str(data.get("status", "")).lower()
-        # Look for the first avatar_id inside the group's looks.
-        avatar_id = None
-        looks = data.get("looks") or data.get("photo_avatars") or []
-        if isinstance(looks, list):
-            for look in looks:
-                if isinstance(look, dict) and look.get("avatar_id"):
-                    avatar_id = str(look["avatar_id"])
-                    break
         if training_status in {"processing", "training", "pending"}:
             raise ProviderTransientError(
                 "Photo avatar training is still in progress.", code="still_training"
             )
         if training_status in {"failed", "error"}:
+            error = data.get("error") or {}
+            message = error.get("message") if isinstance(error, dict) else str(error)
             raise ProviderPermanentError(
-                "HeyGen photo avatar training failed.", code="heygen_training_failed"
+                f"HeyGen photo avatar training failed: {message or 'unknown error'}.",
+                code="heygen_training_failed",
             )
-        if not avatar_id:
-            raise ProviderTransientError(
-                "Training finished but no avatar_id is available yet.",
-                code="avatar_id_pending",
+        if training_status != "completed":
+            raise ProviderPermanentError(
+                f"HeyGen returned unknown avatar status {training_status!r}.",
+                code="heygen_bad_response",
             )
         return ProviderResult(
             provider_id=self.provider_id,
             success=True,
             message="Photo avatar ready.",
-            metadata={"provider_group_id": str(group_id), "provider_avatar_id": avatar_id},
+            metadata={
+                "provider_avatar_id": str(look_id),
+                "status": "completed",
+                "preview_image_url": data.get("preview_image_url"),
+                "supported_api_engines": data.get("supported_api_engines"),
+            },
         )
 
     async def _list_voices(
         self, context: ProviderExecutionContext, *, limit: int | None = None
     ) -> ProviderResult:
-        status, payload_json = await self._request(context, "GET", "/v2/voices")
+        status, payload_json = await self._request(context, "GET", "/v3/voices")
         if status != 200:
             self._raise_for_status(status, payload_json, submit=False)
-        voices = (payload_json.get("data") or {}).get("voices") or []
+        data = self._data(payload_json)
+        voices = data.get("voices") or []
         if limit is not None:
             voices = voices[:limit]
         return ProviderResult(
@@ -269,8 +320,15 @@ class HeyGenProvider(ProviderAdapter):
     def _params(config: dict[str, Any]) -> dict[str, Any]:
         params = config.get("params", {})
         if not isinstance(params, dict):
-            raise ProviderPermanentError("Configuration 'params' must be an object.", code="invalid_configuration")
+            raise ProviderPermanentError(
+                "Configuration 'params' must be an object.", code="invalid_configuration"
+            )
         return params
+
+    @staticmethod
+    def _data(payload: dict[str, Any]) -> dict[str, Any]:
+        data = payload.get("data")
+        return data if isinstance(data, dict) else payload
 
     @staticmethod
     def _base_url(config: dict[str, Any]) -> str:
@@ -284,6 +342,7 @@ class HeyGenProvider(ProviderAdapter):
         *,
         body: bytes | None = None,
         query: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
     ) -> tuple[int, dict[str, Any]]:
         if context.credential is None or context.credential.is_empty():
             raise ProviderPermanentError(
@@ -297,6 +356,8 @@ class HeyGenProvider(ProviderAdapter):
         }
         if body is not None:
             headers["Content-Type"] = "application/json"
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
         client = (
             self._client_factory(context.timeout_seconds)
             if self._client_factory is not None
@@ -335,6 +396,17 @@ class HeyGenProvider(ProviderAdapter):
         if status == 401:
             raise ProviderPermanentError(
                 "HeyGen rejected the API key.", code="heygen_auth_failed"
+            )
+        if status == 409:
+            # Documented Idempotency-Key behavior: the original request is still
+            # in flight. Wait and retry with the same key; never resubmit anew.
+            raise ProviderTransientError(
+                "HeyGen request is still in progress for this idempotency key.",
+                code="request_in_progress",
+            )
+        if status in (408, 504):
+            raise ProviderTransientError(
+                f"HeyGen gateway timeout (status {status}).", code="heygen_gateway_timeout"
             )
         if status == 429:
             raise ProviderTransientError("HeyGen rate limit reached.", code="heygen_rate_limited")
