@@ -44,6 +44,14 @@ class ContentBrand(Base, TimestampMixin):
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Operator-facing name (may contain spaces/diacritics; ``name`` stays the
+    # stable unique key used for idempotent seeding and duplicate checks).
+    display_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Call-to-action template: text/label/url/hashtags (see BrandCtaConfig).
+    cta_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
     language: Mapped[str] = mapped_column(String(20), nullable=False, default="fa-IR")

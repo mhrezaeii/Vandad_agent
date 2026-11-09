@@ -2,7 +2,8 @@
 
 Orchestrates the video pipeline on top of the existing engine:
 
-- ``ensure_vandefence_brand``  — idempotent first-brand bootstrap
+- ``ensure_default_brands``    — idempotent seeding of the five default brands
+- ``ensure_vandefence_brand``  — idempotent first-brand bootstrap (compat)
 - ``ensure_workflow``          — idempotent workflow definitions bound to the
   operator-selected provider connections
 - ``generate_script``          — starts the script workflow execution
@@ -17,10 +18,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    UnprocessableEntityError,
+)
 from app.integrations.providers import (
     ProviderExecutor,
     ProviderRegistry,
@@ -84,6 +90,58 @@ VANDEFENCE_BRAND: dict[str, Any] = {
         "outro_path": None,
     },
 }
+
+# Vandefence keeps its full existing profile; the extra profile fields are
+# explicit so the idempotent seeder and the legacy bootstrap create identical
+# rows.
+VANDEFENCE_BRAND_SPEC: dict[str, Any] = {
+    **VANDEFENCE_BRAND,
+    "display_name": "Vandefence",
+    "description": None,
+    "cta_config": {},
+}
+
+# Canonical brand set seeded for every company (order is informational only).
+# Only ``name``, ``display_name`` and safe defaults are provisioned here: no
+# brand-specific business behavior is encoded, and no invented domain/tone is
+# asserted for brands whose real profile is not known yet.
+DEFAULT_BRANDS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "NobatVakil",
+        "display_name": "NobatVakil",
+        "language": "fa-IR",
+        "tone": None,
+        "description": None,
+        "cta_config": {},
+    },
+    {
+        "name": "NobatMoshaver",
+        "display_name": "NobatMoshaver",
+        "language": "fa-IR",
+        "tone": None,
+        "description": None,
+        "cta_config": {},
+    },
+    VANDEFENCE_BRAND_SPEC,
+    {
+        "name": "VakilBin",
+        "display_name": "VakilBin",
+        "language": "fa-IR",
+        "tone": None,
+        "description": None,
+        "cta_config": {},
+    },
+    {
+        "name": "Vandiar",
+        "display_name": "Vandiar",
+        "language": "fa-IR",
+        "tone": None,
+        "description": None,
+        "cta_config": {},
+    },
+)
+
+DEFAULT_BRAND_NAMES: tuple[str, ...] = tuple(spec["name"] for spec in DEFAULT_BRANDS)
 
 SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
     "nodes": [
@@ -241,19 +299,28 @@ class ContentService:
         )
 
     # ------------------------------------------------------------------ brands
-    async def ensure_vandefence_brand(self, *, company_id: uuid.UUID) -> ContentBrand:
-        """Idempotent first-brand bootstrap (safe on every startup)."""
-        brand = (
-            await self.session.execute(
-                select(ContentBrand).where(
-                    ContentBrand.company_id == company_id,
-                    ContentBrand.name == VANDEFENCE_BRAND["name"],
-                )
+    async def _find_brand_by_name(
+        self, *, company_id: uuid.UUID, name: str
+    ) -> ContentBrand | None:
+        """Case-insensitive lookup of a company brand by its stable name."""
+        result = await self.session.execute(
+            select(ContentBrand)
+            .where(
+                ContentBrand.company_id == company_id,
+                func.lower(ContentBrand.name) == name.lower(),
             )
-        ).scalar_one_or_none()
+            .order_by(ContentBrand.created_at)
+        )
+        return result.scalars().first()
+
+    async def _ensure_brand(
+        self, *, company_id: uuid.UUID, spec: dict[str, Any]
+    ) -> ContentBrand:
+        """Create one brand if absent; never mutates an existing profile."""
+        brand = await self._find_brand_by_name(company_id=company_id, name=spec["name"])
         if brand is not None:
             return brand
-        brand = ContentBrand(company_id=company_id, **VANDEFENCE_BRAND)
+        brand = ContentBrand(company_id=company_id, **spec)
         self.session.add(brand)
         await self.session.flush()
         self.audit.record(
@@ -267,6 +334,92 @@ class ContentService:
         await self.session.flush()
         return brand
 
+    async def ensure_vandefence_brand(self, *, company_id: uuid.UUID) -> ContentBrand:
+        """Idempotent first-brand bootstrap (kept for backward compatibility)."""
+        return await self._ensure_brand(
+            company_id=company_id, spec=VANDEFENCE_BRAND_SPEC
+        )
+
+    async def ensure_default_brands(self, *, company_id: uuid.UUID) -> list[ContentBrand]:
+        """Idempotently provision the five default brands for a company.
+
+        Safe to call on every request/startup: existing brands (including
+        archived ones) are never recreated or overwritten.
+        """
+        brands = [
+            await self._ensure_brand(company_id=company_id, spec=spec)
+            for spec in DEFAULT_BRANDS
+        ]
+        await self.session.flush()
+        return brands
+
+    async def create_brand(
+        self, *, company_id: uuid.UUID, data: dict[str, Any]
+    ) -> ContentBrand:
+        """Create a tenant-owned brand with company-scoped duplicate checks."""
+        name = data["name"]
+        if await self._find_brand_by_name(company_id=company_id, name=name) is not None:
+            raise ConflictError(
+                "A brand with this name already exists for the company.",
+                details=[{"field": "name", "value": name}],
+            )
+        brand = ContentBrand(company_id=company_id, **data)
+        try:
+            # Savepoint so a uniqueness race does not discard the outer unit of
+            # work; the constraint remains the final guard behind the check.
+            async with self.session.begin_nested():
+                self.session.add(brand)
+                await self.session.flush()
+        except IntegrityError as exc:
+            raise ConflictError(
+                "A brand with this name already exists for the company.",
+                details=[{"field": "name", "value": name}],
+            ) from exc
+        self.audit.record(
+            event_type="content.brand_created",
+            action="create",
+            company_id=company_id,
+            resource_type=BRAND_RESOURCE,
+            resource_id=brand.id,
+            metadata={"name": brand.name, "domain": brand.domain},
+        )
+        await self.session.flush()
+        return brand
+
+    async def update_brand(
+        self,
+        brand_id: uuid.UUID,
+        *,
+        company_id: uuid.UUID,
+        changes: dict[str, Any],
+    ) -> ContentBrand:
+        """Apply a partial update to a brand owned by *company_id*."""
+        brand = await self.get_brand(brand_id, company_id=company_id)
+        if not changes:
+            return brand
+        for field in ("language", "status"):
+            if field in changes and changes[field] is None:
+                raise UnprocessableEntityError(
+                    f"'{field}' cannot be null.",
+                    details=[{"field": field}],
+                )
+        if "cta_config" in changes and changes["cta_config"] is None:
+            changes["cta_config"] = {}
+        applied = sorted(changes)
+        for field, value in changes.items():
+            setattr(brand, field, value)
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.brand_updated",
+            action="update",
+            company_id=company_id,
+            resource_type=BRAND_RESOURCE,
+            resource_id=brand.id,
+            metadata={"fields": applied},
+        )
+        await self.session.flush()
+        return brand
+
     async def get_brand(self, brand_id: uuid.UUID, *, company_id: uuid.UUID) -> ContentBrand:
         brand = await self.session.get(ContentBrand, brand_id)
         if brand is None or brand.company_id != company_id:
@@ -275,19 +428,16 @@ class ContentService:
             )
         return brand
 
-    async def list_brands(self, *, company_id: uuid.UUID) -> list[ContentBrand]:
-        return list(
-            (
-                await self.session.execute(
-                    select(ContentBrand)
-                    .where(
-                        ContentBrand.company_id == company_id,
-                        ContentBrand.status == ContentBrandStatus.ACTIVE.value,
-                    )
-                    .order_by(ContentBrand.name)
-                )
-            ).scalars().all()
-        )
+    async def list_brands(
+        self, *, company_id: uuid.UUID, include_archived: bool = False
+    ) -> list[ContentBrand]:
+        statement = select(ContentBrand).where(ContentBrand.company_id == company_id)
+        if not include_archived:
+            statement = statement.where(
+                ContentBrand.status == ContentBrandStatus.ACTIVE.value
+            )
+        statement = statement.order_by(ContentBrand.name)
+        return list((await self.session.execute(statement)).scalars().all())
 
     # -------------------------------------------------------------- character
     async def get_character(self, brand_id: uuid.UUID, *, company_id: uuid.UUID) -> BrandCharacter:

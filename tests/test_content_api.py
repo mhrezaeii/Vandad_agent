@@ -78,24 +78,37 @@ async def _brand_id(client, headers) -> str:
     response = await client.get("/api/v1/content/brands", headers=headers)
     assert response.status_code == 200, response.text
     brands = response.json()
-    assert len(brands) == 1
-    return brands[0]["id"]
+    [brand] = [item for item in brands if item["name"] == "Vandefence"]
+    return brand["id"]
 
 
 async def test_brand_bootstrap_returns_vandefence_identity(client, headers):
     response = await client.get("/api/v1/content/brands", headers=headers)
     assert response.status_code == 200, response.text
-    [brand] = response.json()
-    assert brand["name"] == "Vandefence"
+    brands = response.json()
+    assert [brand["name"] for brand in brands] == [
+        "NobatMoshaver",
+        "NobatVakil",
+        "VakilBin",
+        "Vandefence",
+        "Vandiar",
+    ]
+    [brand] = [item for item in brands if item["name"] == "Vandefence"]
+    assert brand["display_name"] == "Vandefence"
+    assert brand["description"] is None
+    assert brand["cta_config"] == {}
     assert brand["domain"] == "vandefence.ir"
     assert brand["industry"] == "Cybersecurity"
     assert brand["language"] == "fa-IR"
     assert (brand["video_width"], brand["video_height"]) == (1080, 1920)
     assert brand["visual_config"]["background_color"] == "#0A1128"
 
-    # Idempotent bootstrap: a second call does not create a duplicate brand.
+    # Idempotent bootstrap: a second call does not create duplicate brands.
     again = await client.get("/api/v1/content/brands", headers=headers)
-    assert len(again.json()) == 1
+    assert len(again.json()) == 5
+    assert sorted(item["name"] for item in again.json()) == sorted(
+        item["name"] for item in brands
+    )
 
 
 async def test_character_lifecycle_via_api(client, app, db_session, headers, company_and_platform):

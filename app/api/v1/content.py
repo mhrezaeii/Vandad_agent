@@ -13,6 +13,8 @@ from app.api.deps import company_scope
 from app.core.exceptions import NotFoundError
 from app.schemas.content import (
     BrandCharacterRead,
+    BrandCreate,
+    BrandUpdate,
     CharacterCreateRequest,
     CharacterStatusRequest,
     ContentBrandRead,
@@ -57,10 +59,51 @@ router = APIRouter(prefix="/content", tags=["content"])
 async def list_brands(
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
+    include_archived: bool = False,
 ) -> list[ContentBrandRead]:
-    await service.ensure_vandefence_brand(company_id=scope.company_id)
-    brands = await service.list_brands(company_id=scope.company_id)
+    # Idempotently provision the canonical brand set before listing.
+    await service.ensure_default_brands(company_id=scope.company_id)
+    brands = await service.list_brands(
+        company_id=scope.company_id, include_archived=include_archived
+    )
     return [ContentBrandRead.model_validate(brand) for brand in brands]
+
+
+@router.post("/brands", response_model=ContentBrandRead, status_code=201)
+async def create_brand(
+    payload: BrandCreate,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentBrandRead:
+    brand = await service.create_brand(
+        company_id=scope.company_id, data=payload.model_dump()
+    )
+    return ContentBrandRead.model_validate(brand)
+
+
+@router.get("/brands/{brand_id}", response_model=ContentBrandRead)
+async def get_brand(
+    brand_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentBrandRead:
+    brand = await service.get_brand(brand_id, company_id=scope.company_id)
+    return ContentBrandRead.model_validate(brand)
+
+
+@router.patch("/brands/{brand_id}", response_model=ContentBrandRead)
+async def update_brand(
+    brand_id: uuid.UUID,
+    payload: BrandUpdate,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentBrandRead:
+    brand = await service.update_brand(
+        brand_id,
+        company_id=scope.company_id,
+        changes=payload.model_dump(exclude_unset=True),
+    )
+    return ContentBrandRead.model_validate(brand)
 
 
 @router.get("/brands/{brand_id}/character", response_model=BrandCharacterRead)

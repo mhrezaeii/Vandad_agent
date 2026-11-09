@@ -4,9 +4,65 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+
+
+class BrandCtaConfig(BaseModel):
+    """Call-to-action template attached to a brand."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str | None = Field(default=None, max_length=500)
+    label: str | None = Field(default=None, max_length=100)
+    url: str | None = Field(default=None, max_length=2048)
+    hashtags: list[str] = Field(default_factory=list)
+
+
+class BrandCreate(BaseModel):
+    """Create a tenant-owned brand."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100, description="Stable, company-unique brand key.")
+    display_name: str | None = Field(default=None, max_length=150)
+    tone: str | None = Field(default=None, max_length=500)
+    language: str = Field(default="fa-IR", min_length=2, max_length=20)
+    description: str | None = Field(default=None, max_length=5000)
+    cta_config: BrandCtaConfig = Field(default_factory=BrandCtaConfig)
+    domain: str | None = Field(default=None, max_length=255)
+    industry: str | None = Field(default=None, max_length=100)
+    video_width: int = Field(default=1080, ge=1, le=8192)
+    video_height: int = Field(default=1920, ge=1, le=8192)
+    visual_config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Brand name must not be blank.")
+        return stripped
+
+
+class BrandUpdate(BaseModel):
+    """Partial brand update.
+
+    ``name`` is intentionally not patchable: it is the stable unique key used
+    by idempotent seeding, so renaming would make the seeder recreate a brand.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, max_length=150)
+    tone: str | None = Field(default=None, max_length=500)
+    language: str | None = Field(default=None, min_length=2, max_length=20)
+    description: str | None = Field(default=None, max_length=5000)
+    cta_config: BrandCtaConfig | None = None
+    domain: str | None = Field(default=None, max_length=255)
+    industry: str | None = Field(default=None, max_length=100)
+    status: Literal["active", "archived"] | None = None
 
 
 class ContentBrandRead(BaseModel):
@@ -15,6 +71,9 @@ class ContentBrandRead(BaseModel):
     id: uuid.UUID
     company_id: uuid.UUID
     name: str
+    display_name: str | None
+    description: str | None
+    cta_config: dict[str, Any]
     domain: str | None
     industry: str | None
     language: str
