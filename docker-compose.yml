@@ -17,6 +17,7 @@ services:
       dockerfile: Dockerfile
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-local}
       DEBUG: ${DEBUG:-false}
@@ -47,6 +48,7 @@ services:
       dockerfile: Dockerfile
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     command: ["python", "-m", "app.workers.main"]
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

@@ -21,6 +21,14 @@ RUN python -m venv /opt/venv \
 # --- Runtime stage ----------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
+# FFmpeg (video rendering) + Vazirmatn (Persian-capable font, SIL OFL).
+# APT mirror is overridable for constrained networks (see .env.example).
+ARG APT_MIRROR=deb.debian.org
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-vazirmatn \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"

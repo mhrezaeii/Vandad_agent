@@ -65,6 +65,15 @@ class WorkflowWorker:
         self.executor = build_provider_executor(self.settings)
         self.queue: WorkflowQueue | None = None
 
+        # Artifact storage for media-producing workflow nodes (same volume as
+        # the API container so artifacts are shared across services).
+        from app.storage.local import LocalArtifactStorage  # noqa: PLC0415
+
+        self.artifact_storage = LocalArtifactStorage(
+            self.settings.artifact_storage_root,
+            max_size_bytes=self.settings.artifact_max_size_bytes,
+        )
+
         self._stopping = asyncio.Event()
         self._inflight: set[asyncio.Task] = set()
         # Bounds *executing* jobs, not merely consumer loops: a slot is held
@@ -151,7 +160,13 @@ class WorkflowWorker:
                 async with self.session_factory() as session:
                     from app.models import WorkflowExecution  # noqa: PLC0415
 
-                    engine = WorkflowEngine(session, self.registry, self.executor, self.master_key_box)
+                    engine = WorkflowEngine(
+                        session,
+                        self.registry,
+                        self.executor,
+                        self.master_key_box,
+                        artifact_storage=self.artifact_storage,
+                    )
 
                     execution = await session.get(WorkflowExecution, job.execution_id)
                     if execution is None:
