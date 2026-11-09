@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -141,7 +143,11 @@ class ProjectStatus(enum.StrEnum):
     SCRIPT_READY = "script_ready"
     SCRIPT_FAILED = "script_failed"
     APPROVED = "approved"
+    SCENES_PREPARED = "scenes_prepared"
+    VIDEO_GENERATION_PENDING = "video_generation_pending"
     VIDEO_GENERATING = "video_generating"
+    VIDEO_GENERATED = "video_generated"
+    ASSEMBLING = "assembling"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -154,7 +160,9 @@ class ContentProject(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'script_generating', 'script_ready', 'script_failed', "
-            "'approved', 'video_generating', 'completed', 'failed', 'cancelled')",
+            "'approved', 'scenes_prepared', 'video_generation_pending', "
+            "'video_generating', 'video_generated', 'assembling', 'completed', "
+            "'failed', 'cancelled')",
             name="status_valid",
         ),
     )
@@ -173,6 +181,19 @@ class ContentProject(Base, TimestampMixin):
     # Script (LLM output) — Persian.
     script_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     script_segments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # Non-avatar scene pipeline: "avatar" keeps the legacy HeyGen path;
+    # "scene" uses per-scene provider clips assembled with FFmpeg.
+    video_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="avatar", server_default="avatar"
+    )
+    # Structured scenario (title, scenes, narration, CTA, caption, hashtags).
+    scenario: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Scene pipeline options captured at creation: target duration, scene count,
+    # provider preference, narration artifact. Persisted so a retried workflow
+    # reproduces the same plan without trusting request state.
+    scene_options: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    scene_video_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assembly_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     video_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     call_to_action: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # LLM usage/cost metadata (tokens; cost only when provider reports it).
@@ -199,3 +220,113 @@ class ContentProject(Base, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<ContentProject id={self.id} status={self.status!r}>"
+
+
+class SceneVideoJobStatus(enum.StrEnum):
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    GENERATING = "generating"
+    COMPLETED = "completed"
+    DOWNLOADED = "downloaded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SceneVideoJob(Base, TimestampMixin):
+    """One provider submission for one scene of a project.
+
+    ``(project_id, scene_index)`` is unique and ``(provider, provider_job_id)``
+    is unique, so a worker restart can never submit (or bill) the same scene
+    twice.
+    """
+
+    __tablename__ = "scene_video_jobs"
+    __table_args__ = (
+        UniqueConstraint("project_id", "scene_index", name="uq_scene_video_jobs_project_scene"),
+        UniqueConstraint("provider", "provider_job_id", name="uq_scene_video_jobs_provider_job"),
+        CheckConstraint(
+            "status IN ('pending', 'submitted', 'generating', 'completed', "
+            "'downloaded', 'failed', 'cancelled')",
+            name="status_valid",
+        ),
+        CheckConstraint("scene_index >= 0", name="scene_index_non_negative"),
+        CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("content_projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scene_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    scene_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=SceneVideoJobStatus.PENDING.value,
+        server_default=SceneVideoJobStatus.PENDING.value,
+    )
+    # Provider id is NULL until the provider accepted the submission.
+    provider_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    narration: Mapped[str | None] = mapped_column(Text, nullable=True)
+    on_screen_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subtitle_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3, server_default="3")
+    progress: Mapped[float | None] = mapped_column(Float, nullable=True)
+    video_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submission_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    cost_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"<SceneVideoJob id={self.id} scene={self.scene_index} "
+            f"status={self.status!r} provider={self.provider!r}>"
+        )
+
+
+class ProviderQuotaUsage(Base, TimestampMixin):
+    """Per-company, per-provider, per-day usage counter.
+
+    The unique key makes quota accounting idempotent under concurrency: the
+    service increments the row inside a savepoint and treats an exhausted
+    counter as a permanent failure.
+    """
+
+    __tablename__ = "provider_quota_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "provider", "period_date", name="uq_provider_quota_usage_period"
+        ),
+        CheckConstraint("units_used >= 0", name="units_used_non_negative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    period_date: Mapped[date] = mapped_column(Date, nullable=False)
+    units_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    units_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    usage_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"<ProviderQuotaUsage provider={self.provider!r} "
+            f"period={self.period_date} used={self.units_used}>"
+        )

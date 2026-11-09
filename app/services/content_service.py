@@ -58,6 +58,8 @@ CHARACTER_RESOURCE = "brand_character"
 
 SCRIPT_WORKFLOW_NAME = "vandefence.script.v1"
 VIDEO_WORKFLOW_NAME = "vandefence.video.v1"
+SCENE_SCRIPT_WORKFLOW_NAME = "vandad.scene.script.v1"
+SCENE_VIDEO_WORKFLOW_NAME = "vandad.scene.video.v1"
 
 VANDEFENCE_BRAND: dict[str, Any] = {
     "name": "Vandefence",
@@ -265,6 +267,104 @@ VIDEO_WORKFLOW_GRAPH: dict[str, Any] = {
 }
 
 
+SCENE_SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
+    "nodes": [
+        {"node_key": "start", "node_type": "trigger.manual", "name": "trigger"},
+        {
+            "node_key": "generate_scenario",
+            "node_type": "content.generate_scenario",
+            "name": "generate persian scenario",
+            "configuration": {
+                "connection_id": "__LLM_CONNECTION__",
+                "target_duration_seconds": 30,
+            },
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 180, "max_retries": 1},
+        },
+        {
+            "node_key": "finish",
+            "node_type": "control.complete",
+            "name": "done",
+            "configuration": {"outcome": "completed"},
+        },
+    ],
+    "edges": [
+        {"from_key": "start", "to_key": "generate_scenario"},
+        {"from_key": "generate_scenario", "to_key": "finish"},
+    ],
+}
+
+SCENE_VIDEO_WORKFLOW_GRAPH: dict[str, Any] = {
+    "nodes": [
+        {"node_key": "start", "node_type": "trigger.manual", "name": "trigger"},
+        {
+            "node_key": "prepare",
+            "node_type": "content.prepare_scenes",
+            "name": "prepare scene jobs",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 60, "max_retries": 1},
+        },
+        {
+            "node_key": "submit",
+            "node_type": "content.submit_scene_videos",
+            "name": "submit scene videos (idempotent)",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 120, "max_retries": 2},
+        },
+        {
+            "node_key": "wait",
+            "node_type": "control.delay",
+            "name": "initial provider wait",
+            "configuration": {"seconds": 20},
+        },
+        {
+            "node_key": "poll",
+            "node_type": "content.poll_scene_videos",
+            "name": "poll scene statuses",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            # Still-generating is a transient error; the engine retries with
+            # backoff from the persisted provider job ids. Never resubmits a
+            # scene that already has a provider job id.
+            "execution_settings": {
+                "timeout_seconds": 120,
+                "max_retries": 60,
+                "backoff_seconds": 30,
+                "idempotent": True,
+            },
+        },
+        {
+            "node_key": "retrieve",
+            "node_type": "content.retrieve_scene_videos",
+            "name": "download scene videos",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 900, "max_retries": 2},
+        },
+        {
+            "node_key": "assemble",
+            "node_type": "content.assemble_scenes",
+            "name": "assemble final vertical video",
+            "input_mapping": {"project_id": "$trigger.project_id"},
+            "execution_settings": {"timeout_seconds": 1800, "max_retries": 1},
+        },
+        {
+            "node_key": "finish",
+            "node_type": "control.complete",
+            "name": "done",
+            "configuration": {"outcome": "completed"},
+        },
+    ],
+    "edges": [
+        {"from_key": "start", "to_key": "prepare"},
+        {"from_key": "prepare", "to_key": "submit"},
+        {"from_key": "submit", "to_key": "wait"},
+        {"from_key": "wait", "to_key": "poll"},
+        {"from_key": "poll", "to_key": "retrieve"},
+        {"from_key": "retrieve", "to_key": "assemble"},
+        {"from_key": "assemble", "to_key": "finish"},
+    ],
+}
+
+
 def _bind_connection(graph: dict[str, Any], placeholder: str, connection_id: uuid.UUID) -> dict[str, Any]:
     """Return a deep copy of *graph* with the placeholder connection bound."""
     import copy
@@ -286,12 +386,14 @@ class ContentService:
         executor: ProviderExecutor,
         master_key_box: MasterKeyBox,
         workflow_queue=None,  # noqa: ANN001 - WorkflowQueue | None
+        scene_video_registry=None,  # noqa: ANN001 - SceneVideoProviderRegistry | None
     ) -> None:
         self.session = session
         self.registry = registry
         self.executor = executor
         self._keys = master_key_box
         self.queue = workflow_queue
+        self.scene_video_registry = scene_video_registry
         self.audit = AuditService(session)
         self._workflow_service = WorkflowService(session, registry)
         self._execution_service = WorkflowExecutionService(
@@ -755,6 +857,278 @@ class ContentService:
         await self.session.refresh(project)
         return project
 
+    # ------------------------------------------------------------ scene pipeline
+    async def create_scene_project(
+        self,
+        *,
+        scope: CompanyScope,
+        brand_id: uuid.UUID,
+        topic: str,
+        target_duration_seconds: int = 30,
+        scene_count: int | None = None,
+        provider_id: str | None = None,
+        narration_artifact_id: uuid.UUID | None = None,
+    ) -> ContentProject:
+        """Create a non-avatar project that will be built from scene clips."""
+        from app.schemas.scenario import MAX_TARGET_DURATION_SECONDS, MIN_TARGET_DURATION_SECONDS
+
+        if not MIN_TARGET_DURATION_SECONDS <= target_duration_seconds <= MAX_TARGET_DURATION_SECONDS:
+            raise UnprocessableEntityError(
+                "target_duration_seconds is outside the supported range.",
+                details=[
+                    {
+                        "field": "target_duration_seconds",
+                        "min": MIN_TARGET_DURATION_SECONDS,
+                        "max": MAX_TARGET_DURATION_SECONDS,
+                    }
+                ],
+            )
+        brand = await self.get_brand(brand_id, company_id=scope.company_id)
+        project = ContentProject(
+            company_id=scope.company_id,
+            brand_id=brand.id,
+            topic=topic,
+            status=ProjectStatus.DRAFT.value,
+            video_mode="scene",
+            scene_options={
+                "target_duration_seconds": target_duration_seconds,
+                "scene_count": scene_count,
+                "provider_id": provider_id,
+                "narration_artifact_id": (
+                    str(narration_artifact_id) if narration_artifact_id else None
+                ),
+            },
+            scene_video_provider=provider_id,
+        )
+        self.session.add(project)
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.scene_project_created",
+            action="create",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={
+                "brand": brand.name,
+                "topic": topic[:200],
+                "target_duration_seconds": target_duration_seconds,
+                "provider_id": provider_id,
+            },
+        )
+        await self.session.flush()
+        return project
+
+    async def generate_scene_scenario(
+        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+    ) -> ContentProject:
+        """Start scenario generation through the existing text API connection."""
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.video_mode != "scene":
+            raise ConflictError("This project does not use the scene pipeline.")
+        if project.status not in (
+            ProjectStatus.DRAFT.value,
+            ProjectStatus.SCRIPT_FAILED.value,
+        ):
+            raise ConflictError(
+                f"Scenario generation is not allowed from status '{project.status}'.",
+                details=[{"status": project.status}],
+            )
+        await self.ensure_workflow(
+            SCENE_SCRIPT_WORKFLOW_NAME,
+            SCENE_SCRIPT_WORKFLOW_GRAPH,
+            company_id=scope.company_id,
+            connection_id=connection_id,
+        )
+        workflow = await self._require_published(SCENE_SCRIPT_WORKFLOW_NAME, scope.company_id)
+        options = project.scene_options or {}
+        execution, _created = await self._execution_service.execute_workflow(
+            workflow.id,
+            scope=scope,
+            input_metadata={
+                "project_id": str(project.id),
+                "topic": project.topic,
+                "target_duration_seconds": options.get("target_duration_seconds", 30),
+                "scene_count": options.get("scene_count"),
+            },
+            idempotency_key=f"scene-script:{project.id}",
+            trigger_type=WorkflowTriggerType.API,
+            trigger_reference=str(project.id),
+        )
+        project.status = ProjectStatus.SCRIPT_GENERATING.value
+        project.script_workflow_execution_id = execution.id
+        self.audit.record(
+            event_type="content.scene_scenario_generation_started",
+            action="generate_scenario",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={"execution_id": str(execution.id)},
+        )
+        await self.session.flush()
+        await self.session.refresh(project)
+        return project
+
+    async def approve_scene_scenario(
+        self, project_id: uuid.UUID, *, scope: CompanyScope
+    ) -> ContentProject:
+        """Operator gate: only a generated scenario can be approved."""
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.video_mode != "scene":
+            raise ConflictError("This project does not use the scene pipeline.")
+        if project.status != ProjectStatus.SCRIPT_READY.value:
+            raise ConflictError(
+                f"Only script_ready projects can be approved (status '{project.status}').",
+                details=[{"status": project.status}],
+            )
+        if not project.scenario:
+            raise ConflictError("The project has no generated scenario to approve.")
+        project.status = ProjectStatus.APPROVED.value
+        self.audit.record(
+            event_type="content.scene_scenario_approved",
+            action="approve_scenario",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={"scene_count": len((project.scenario or {}).get("scenes") or [])},
+        )
+        await self.session.flush()
+        await self.session.refresh(project)
+        return project
+
+    async def generate_scene_video(
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        provider_id: str | None = None,
+    ) -> ContentProject:
+        """Start per-scene generation, polling, download and assembly."""
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.video_mode != "scene":
+            raise ConflictError("This project does not use the scene pipeline.")
+        if project.status != ProjectStatus.APPROVED.value:
+            raise ConflictError(
+                f"Only approved projects can generate video (status '{project.status}').",
+                details=[{"status": project.status}],
+            )
+        if not project.scenario:
+            raise ConflictError("The project has no generated scenario to render.")
+
+        options = dict(project.scene_options or {})
+        selected_provider = provider_id or options.get("provider_id") or project.scene_video_provider
+        if selected_provider and self.scene_video_registry is not None:
+            if not self.scene_video_registry.has(selected_provider):
+                raise UnprocessableEntityError(
+                    f"Scene-video provider '{selected_provider}' is not available.",
+                    details=[{"field": "provider_id", "value": selected_provider}],
+                )
+        if selected_provider:
+            options["provider_id"] = selected_provider
+            project.scene_options = options
+            project.scene_video_provider = selected_provider
+
+        await self.ensure_workflow(
+            SCENE_VIDEO_WORKFLOW_NAME,
+            SCENE_VIDEO_WORKFLOW_GRAPH,
+            company_id=scope.company_id,
+            connection_id=None,
+        )
+        workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
+        execution, _created = await self._execution_service.execute_workflow(
+            workflow.id,
+            scope=scope,
+            input_metadata={
+                "project_id": str(project.id),
+                "provider_id": selected_provider,
+                "narration_artifact_id": options.get("narration_artifact_id"),
+            },
+            idempotency_key=f"scene-video:{project.id}",
+            trigger_type=WorkflowTriggerType.API,
+            trigger_reference=str(project.id),
+        )
+        project.status = ProjectStatus.VIDEO_GENERATION_PENDING.value
+        project.video_workflow_execution_id = execution.id
+        project.error_message = None
+        self.audit.record(
+            event_type="content.scene_video_generation_started",
+            action="generate_video",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={
+                "execution_id": str(execution.id),
+                "provider": selected_provider,
+            },
+        )
+        await self.session.flush()
+        await self.session.refresh(project)
+        return project
+
+    async def cancel_scene_video(
+        self, project_id: uuid.UUID, *, scope: CompanyScope
+    ) -> ContentProject:
+        """Cancel in-flight scene jobs and the workflow execution."""
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        if project.video_mode != "scene":
+            raise ConflictError("This project does not use the scene pipeline.")
+        if project.status in (
+            ProjectStatus.COMPLETED.value,
+            ProjectStatus.CANCELLED.value,
+        ):
+            raise ConflictError(
+                f"The project cannot be cancelled from status '{project.status}'.",
+                details=[{"status": project.status}],
+            )
+        if project.video_workflow_execution_id and self.scene_video_registry is not None:
+            from app.services.scene_video_service import SceneVideoService
+
+            service = SceneVideoService(
+                self.session,
+                self.scene_video_registry,
+                storage=None,
+            )
+            await service.cancel(project)
+        elif project.video_workflow_execution_id:
+            project.status = ProjectStatus.CANCELLED.value
+        if project.video_workflow_execution_id:
+            try:
+                await self._execution_service.cancel_execution(
+                    project.video_workflow_execution_id, scope=scope
+                )
+            except ConflictError:
+                # The execution may already be terminal; cancellation of the
+                # project record still stands.
+                pass
+        project.status = ProjectStatus.CANCELLED.value
+        project.error_message = None
+        self.audit.record(
+            event_type="content.scene_video_cancelled",
+            action="cancel",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=project.id,
+            metadata={},
+        )
+        await self.session.flush()
+        await self.session.refresh(project)
+        return project
+
+    async def list_scene_jobs(
+        self, project_id: uuid.UUID, *, scope: CompanyScope
+    ) -> list[Any]:
+        from app.models import SceneVideoJob
+
+        project = await self.get_project(project_id, company_id=scope.company_id)
+        return list(
+            (
+                await self.session.execute(
+                    select(SceneVideoJob)
+                    .where(SceneVideoJob.project_id == project.id)
+                    .order_by(SceneVideoJob.scene_index)
+                )
+            ).scalars()
+        )
+
     # ------------------------------------------------------------- introspection
     async def get_job_status(self, job_id: uuid.UUID, *, company_id: uuid.UUID) -> dict[str, Any]:
         project = (
@@ -769,11 +1143,39 @@ class ContentService:
         execution = None
         if project.video_workflow_execution_id:
             execution = await self.session.get(WorkflowExecution, project.video_workflow_execution_id)
+        scene_jobs: list[dict[str, Any]] = []
+        if project.video_mode == "scene":
+            from app.models import SceneVideoJob
+
+            jobs = (
+                await self.session.execute(
+                    select(SceneVideoJob)
+                    .where(SceneVideoJob.project_id == project.id)
+                    .order_by(SceneVideoJob.scene_index)
+                )
+            ).scalars()
+            scene_jobs = [
+                {
+                    "scene_index": job.scene_index,
+                    "status": job.status,
+                    "provider": job.provider,
+                    "provider_job_id": job.provider_job_id,
+                    "progress": job.progress,
+                    "attempts": job.attempts,
+                    "artifact_id": str(job.artifact_id) if job.artifact_id else None,
+                    "error_code": job.error_code,
+                }
+                for job in jobs
+            ]
         return {
             "project_id": str(project.id),
             "status": project.status,
+            "video_mode": project.video_mode,
             "provider_job_id": project.provider_job_id,
             "provider_status": project.provider_status,
+            "scene_video_provider": project.scene_video_provider,
+            "scene_jobs": scene_jobs,
+            "assembly_metadata": project.assembly_metadata,
             "raw_artifact_id": str(project.raw_artifact_id) if project.raw_artifact_id else None,
             "final_artifact_id": str(project.final_artifact_id) if project.final_artifact_id else None,
             "execution_status": execution.status if execution else None,
@@ -802,16 +1204,19 @@ class ContentService:
         graph: dict[str, Any],
         *,
         company_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None,
     ) -> Workflow:
         """Idempotently ensure a published workflow bound to the given connection.
 
         Re-binds (new draft + publish) only when the stored graph references a
-        different connection than the operator selected.
+        different connection than the operator selected. ``connection_id`` is
+        optional for graphs that resolve their provider from project settings.
         """
-        llm_placeholder = "__LLM_CONNECTION__" if "script" in name else "__HEYGEN_CONNECTION__"
-        bound_graph = _bind_connection(graph, llm_placeholder, connection_id)
-        bound_graph = _bind_connection(bound_graph, "__HEYGEN_CONNECTION__", connection_id)
+        bound_graph = graph
+        if connection_id is not None:
+            llm_placeholder = "__LLM_CONNECTION__" if "script" in name else "__HEYGEN_CONNECTION__"
+            bound_graph = _bind_connection(graph, llm_placeholder, connection_id)
+            bound_graph = _bind_connection(bound_graph, "__HEYGEN_CONNECTION__", connection_id)
 
         workflow = (
             await self.session.execute(
@@ -830,7 +1235,7 @@ class ContentService:
                     for node in nodes
                     if node.configuration.get("connection_id")
                 }
-                if str(connection_id) in used_connections:
+                if connection_id is None or str(connection_id) in used_connections:
                     return workflow
             scope = CompanyScope(company_id=company_id, principal=_system_principal())
             await self._workflow_service.update_workflow(

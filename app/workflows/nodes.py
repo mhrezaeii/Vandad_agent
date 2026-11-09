@@ -27,6 +27,12 @@ class NodeType:
     CONTENT_POLL_VIDEO = "content.poll_video"
     CONTENT_DOWNLOAD_VIDEO = "content.download_video"
     CONTENT_RENDER_VIDEO = "content.render_video"
+    CONTENT_GENERATE_SCENARIO = "content.generate_scenario"
+    CONTENT_PREPARE_SCENES = "content.prepare_scenes"
+    CONTENT_SUBMIT_SCENE_VIDEOS = "content.submit_scene_videos"
+    CONTENT_POLL_SCENE_VIDEOS = "content.poll_scene_videos"
+    CONTENT_RETRIEVE_SCENE_VIDEOS = "content.retrieve_scene_videos"
+    CONTENT_ASSEMBLE_SCENES = "content.assemble_scenes"
 
 
 VALID_NODE_TYPES = frozenset(
@@ -42,6 +48,12 @@ VALID_NODE_TYPES = frozenset(
         NodeType.CONTENT_POLL_VIDEO,
         NodeType.CONTENT_DOWNLOAD_VIDEO,
         NodeType.CONTENT_RENDER_VIDEO,
+        NodeType.CONTENT_GENERATE_SCENARIO,
+        NodeType.CONTENT_PREPARE_SCENES,
+        NodeType.CONTENT_SUBMIT_SCENE_VIDEOS,
+        NodeType.CONTENT_POLL_SCENE_VIDEOS,
+        NodeType.CONTENT_RETRIEVE_SCENE_VIDEOS,
+        NodeType.CONTENT_ASSEMBLE_SCENES,
     }
 )
 
@@ -171,6 +183,12 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], list[ConfigIssue]]] = {
     NodeType.CONTENT_POLL_VIDEO: _validate_content_node,
     NodeType.CONTENT_DOWNLOAD_VIDEO: _validate_content_node,
     NodeType.CONTENT_RENDER_VIDEO: _validate_content_node,
+    NodeType.CONTENT_GENERATE_SCENARIO: _validate_content_node,
+    NodeType.CONTENT_PREPARE_SCENES: _validate_content_node,
+    NodeType.CONTENT_SUBMIT_SCENE_VIDEOS: _validate_content_node,
+    NodeType.CONTENT_POLL_SCENE_VIDEOS: _validate_content_node,
+    NodeType.CONTENT_RETRIEVE_SCENE_VIDEOS: _validate_content_node,
+    NodeType.CONTENT_ASSEMBLE_SCENES: _validate_content_node,
 }
 
 # Default execution settings merged with per-node overrides by the engine.

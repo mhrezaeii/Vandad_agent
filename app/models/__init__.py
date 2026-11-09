@@ -11,6 +11,9 @@ from app.models.content import (
     ContentBrandStatus,
     ContentProject,
     ProjectStatus,
+    ProviderQuotaUsage,
+    SceneVideoJob,
+    SceneVideoJobStatus,
 )
 from app.models.credential_reference import CredentialReference, CredentialStatus, CredentialStorageType, CredentialType
 from app.models.credential_version import CredentialVersion, CredentialVersionStatus
@@ -69,6 +72,9 @@ __all__ = [
     "PlatformStatus",
     "ProjectStatus",
     "PlatformType",
+    "ProviderQuotaUsage",
+    "SceneVideoJob",
+    "SceneVideoJobStatus",
     "TimestampMixin",
     "Workflow",
     "WorkflowArtifact",
