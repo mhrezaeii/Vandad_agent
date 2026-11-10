@@ -99,6 +99,7 @@ def _http_provider(handler) -> GenericHttpSceneVideoProvider:
         generate_path="/v1/videos",
         status_path="/v1/videos/{job_id}",
         api_key="test-secret",
+        download_allowed_hosts=("cdn.example.test",),
     )
     return GenericHttpSceneVideoProvider(
         config,
@@ -205,3 +206,45 @@ def test_registry_includes_mock_and_only_configured_http():
     )
     assert configured.has("generic_http") is True
     assert len(configured) == 2
+
+
+async def test_generic_http_never_sends_api_key_to_media_cdn():
+    payload = b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 128
+    media_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/v1/videos/job-10"):
+            return httpx.Response(200, json={
+                "status": "completed",
+                "video_url": "https://cdn.example.test/job-10.mp4",
+            })
+        media_auth.append(request.headers.get("Authorization"))
+        return httpx.Response(200, content=payload, headers={"content-type": "video/mp4"})
+
+    provider = _http_provider(handler)
+    assert await _drain(provider, "job-10") == payload
+    assert media_auth == [None]
+
+
+async def test_generic_http_rejects_untrusted_media_host_before_request():
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200, json={
+            "status": "completed",
+            "video_url": "https://attacker.example.test/steal",
+        })
+
+    provider = _http_provider(handler)
+    with pytest.raises(SceneVideoPermanentError) as exc:
+        await _drain(provider, "job-11")
+    assert exc.value.code == "provider_media_host_denied"
+    assert requested == ["https://video.example.test/v1/videos/job-11"]
+
+
+async def test_generic_http_rejects_private_media_ip():
+    provider = _http_provider(lambda _request: httpx.Response(200))
+    with pytest.raises(SceneVideoPermanentError) as exc:
+        provider._validate_media_url("https://127.0.0.1/private")
+    assert exc.value.code == "provider_private_media_ip"
