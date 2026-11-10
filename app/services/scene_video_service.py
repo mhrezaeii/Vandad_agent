@@ -107,6 +107,19 @@ class SceneVideoService:
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
+        unsupported_presenters = [
+            scene.index
+            for scene in scenario.scenes
+            if scene.scene_type == "presenter"
+            and scene.speaker == "brand_character"
+            and not provider.supports_lipsync
+        ]
+        if unsupported_presenters:
+            raise ConflictError(
+                "Brand-character presenter scenes require a provider with real image/audio lip-sync support; "
+                f"provider {provider.provider_id!r} cannot generate them (scene indexes: "
+                f"{unsupported_presenters})."
+            )
         existing = {
             job.scene_index: job
             for job in (
