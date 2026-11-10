@@ -45,3 +45,18 @@ def test_ass_subtitles_use_actual_speech_duration():
     module = _load_script()
     result = module.build_ass("سلام به وندیار. این اولین ویدیوی ماست.", 7.5, 1080, 1920, 48)
     assert "0:00:07.50" in result
+
+
+def test_run_forwards_environment_to_subprocess(monkeypatch):
+    module = _load_script()
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    env = {"PATH": "runtime/ffmpeg"}
+    module.run(["python", "inference.py"], env=env)
+    assert captured["env"] is env
