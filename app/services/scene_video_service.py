@@ -71,7 +71,10 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
             "Do not invent readable labels, metrics, customer data or product features."
         )
     elif scene.scene_type == "motion_graphic":
-        lines.append("MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic composition; no generated text.")
+        lines.append(
+            "MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic " 
+            "composition; no generated text."
+        )
     if scene.camera_direction:
         lines.append(f"CAMERA: {scene.camera_direction}")
     lines.append(f"TRANSITION INTO NEXT SCENE: {scene.transition}")
