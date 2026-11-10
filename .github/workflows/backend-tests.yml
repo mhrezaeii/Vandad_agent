@@ -1,0 +1,62 @@
+name: backend-tests
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vandad
+          POSTGRES_PASSWORD: change-me-strong-password
+          POSTGRES_DB: vandad_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vandad -d vandad_agent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://vandad:change-me-strong-password@localhost:5432/vandad_agent_test
+      TEST_REDIS_URL: redis://localhost:6379/1
+      DATABASE_URL: postgresql+asyncpg://vandad:change-me-strong-password@localhost:5432/vandad_agent_test
+      REDIS_URL: redis://localhost:6379/1
+      ENVIRONMENT: local
+      PLATFORM_BOOTSTRAP_COMPANY_IDS: "*"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check app tests
+      - name: Test
+        run: pytest -q
