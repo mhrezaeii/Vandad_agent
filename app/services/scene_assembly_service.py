@@ -49,6 +49,32 @@ class SceneAssemblyError(Exception):
         self.code = code
 
 
+def build_scene_on_screen_text(
+    scenario: Scenario,
+    *,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    font_name: str = "Vazirmatn",
+    font_size: int | None = None,
+) -> str:
+    """Build a top-centred Persian ASS overlay for each scene's display text."""
+    segments: list[SubtitleSegment] = []
+    cursor = 0.0
+    for scene in scenario.scenes:
+        if scene.on_screen_text:
+            segments.append(SubtitleSegment(
+                text=scene.on_screen_text,
+                start_seconds=round(cursor, 3),
+                end_seconds=round(cursor + scene.duration_seconds, 3),
+            ))
+        cursor += scene.duration_seconds
+    return build_ass_subtitle(
+        segments, width=width, height=height, font_name=font_name,
+        font_size=font_size or max(36, height // 28), alignment=8,
+        margin_v=max(90, int(height * 0.09)),
+    )
+
+
 def build_scene_subtitles(
     scenario: Scenario,
     *,
@@ -172,6 +198,14 @@ class SceneAssemblyService:
                 ),
                 encoding="utf-8",
             )
+            overlay_path = temp_dir / "on-screen-text.ass"
+            overlay_path.write_text(
+                build_scene_on_screen_text(
+                    scenario, width=width, height=height, font_name=self.font_name,
+                    font_size=(brand.visual_config or {}).get("on_screen_font_size"),
+                ),
+                encoding="utf-8",
+            )
 
             silent_video = temp_dir / "video-silent.mp4"
             logo = self._optional_asset(brand, "logo_path")
@@ -179,6 +213,7 @@ class SceneAssemblyService:
                 concatenated,
                 silent_video,
                 subtitles_name=subtitles_path.name,
+                overlay_name=overlay_path.name,
                 logo=logo,
                 width=width,
                 height=height,
@@ -378,6 +413,7 @@ class SceneAssemblyService:
         target: Path,
         *,
         subtitles_name: str,
+        overlay_name: str,
         logo: Path | None,
         width: int,
         height: int,
@@ -386,7 +422,8 @@ class SceneAssemblyService:
         cwd: Path,
     ) -> None:
         ass_arg = subtitles_name.replace("\\", "/")
-        ass_filter = f"ass='{ass_arg}'"
+        overlay_arg = overlay_name.replace("\\", "/")
+        ass_filter = f"ass='{ass_arg}',ass='{overlay_arg}'"
         fonts_dir = Path(self.fonts_dir)
         if fonts_dir.is_dir():
             fonts_arg = str(fonts_dir.resolve()).replace("\\", "/").replace(":", "\\:")
@@ -564,5 +601,6 @@ __all__ = [
     "DEFAULT_WIDTH",
     "SceneAssemblyError",
     "SceneAssemblyService",
+    "build_scene_on_screen_text",
     "build_scene_subtitles",
 ]
