@@ -61,7 +61,11 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "از تکرار جمله‌ها، اغراق، وعده تضمینی و ادعای اثبات‌نشده درباره محصول، "
         "عملکرد، مشتری یا امنیت پرهیز کن. اگر عدد یا قابلیت مشخصی را نمی‌دانی، آن را ادعا نکن. "
         "توضیح تصویری هر صحنه را به انگلیسی و دقیق بنویس تا مدل تولید ویدیو آن را بفهمد، "
-        "اما روایت، متن روی تصویر و زیرنویس باید فارسی باشند."
+        "اما روایت، متن روی تصویر و زیرنویس باید فارسی باشند. "
+        "در تمام visual_promptها صریحاً از talking head، avatar، digital presenter، "
+        "human presenter، lip-sync، speaking character و recurring character design منع کن. "
+        "هیچ شخصیت ثابت یا چهره‌ای که مستقیم با دوربین صحبت کند نساز؛ روایت فقط voice-over است. "
+        "به جای آن از نماهای سینمایی محیط، اشیا، جزئیات، موشن‌گرافیک، فوتیج مکمل و صحنه‌های B-roll استفاده کن."
     )
     user = (
         f"برای برند «{brand}» یک سناریوی ویدیوی عمودی {request.target_duration_seconds} ثانیه‌ای بساز. "
@@ -90,7 +94,8 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         '  "hashtags": ["#هشتگ"]\n'
         "}\n\n"
         "همه روایت‌ها با هم باید تقریباً کل مدت درخواستی را پر کنند. "
-        "هیچ صحنه‌ای بدون narration و visual_prompt نباشد."
+        "هیچ صحنه‌ای بدون narration و visual_prompt نباشد. "
+        "از ساخت مجری، آواتار، چهره سخنگو یا همگام‌سازی لب خودداری کن؛ فقط تصویر مستقل و voice-over."
     )
     return system, user
 
