@@ -36,10 +36,10 @@ class VideoError(RuntimeError):
     pass
 
 
-def run(command: list[str], *, cwd: Path | None = None, timeout: int = 1800) -> None:
+def run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, timeout: int = 1800) -> None:
     print("+ " + subprocess.list2cmdline(command), flush=True)
     try:
-        result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise VideoError(f"Command timed out after {timeout}s: {command[0]}") from exc
     if result.returncode:
@@ -56,6 +56,7 @@ def runtime_check() -> list[str]:
         "FFprobe": FFPROBE,
         "Wav2Lip inference": WAV2LIP / "inference.py",
         "Wav2Lip checkpoint": CHECKPOINT,
+        "S3FD face detector checkpoint": WAV2LIP / "face_detection" / "detection" / "sfd" / "s3fd.pth",
         "Python 3.11 avatar environment": AVATAR_PYTHON,
     }
     missing = [f"{name}: {path}" for name, path in required.items() if not path.is_file() or path.stat().st_size == 0]
@@ -217,7 +218,7 @@ def main() -> int:
             "--checkpoint_path", str(CHECKPOINT), "--face", str(avatar),
             "--audio", str(wav), "--outfile", str(lipsync), "--fps", str(args.fps),
             "--pads", "0", "10", "0", "0",
-        ], cwd=WAV2LIP, timeout=max(900, args.duration * 120))
+        ], cwd=WAV2LIP, env=env, timeout=max(900, args.duration * 120))
         if not lipsync.is_file() or lipsync.stat().st_size < 4096:
             raise VideoError("Wav2Lip did not create a usable video.")
 
