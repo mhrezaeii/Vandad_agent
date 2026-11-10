@@ -223,13 +223,6 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
                 "The provider returned an unsafe media URL.", code="provider_unsafe_media_url"
             )
 
-        api_host = (urlsplit(self._base()).hostname or "").lower().rstrip(".")
-        allowed = {api_host, *(item.lower().rstrip(".") for item in self.config.download_allowed_hosts)}
-        if host not in allowed:
-            raise SceneVideoPermanentError(
-                "The provider media host is not allowlisted.", code="provider_media_host_denied"
-            )
-
         try:
             literal_ip = ipaddress.ip_address(host)
         except ValueError:
@@ -237,6 +230,13 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         if literal_ip is not None and not literal_ip.is_global:
             raise SceneVideoPermanentError(
                 "The provider returned a non-public media address.", code="provider_private_media_ip"
+            )
+
+        api_host = (urlsplit(self._base()).hostname or "").lower().rstrip(".")
+        allowed = {api_host, *(item.lower().rstrip(".") for item in self.config.download_allowed_hosts)}
+        if host not in allowed:
+            raise SceneVideoPermanentError(
+                "The provider media host is not allowlisted.", code="provider_media_host_denied"
             )
 
         # Resolve at download time and reject private, loopback, link-local,
