@@ -29,10 +29,17 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             api_key=getattr(settings, "scene_video_http_api_key", None),
             auth_header=getattr(settings, "scene_video_http_auth_header", "Authorization"),
             auth_scheme=getattr(settings, "scene_video_http_auth_scheme", "Bearer"),
+            download_allowed_hosts=tuple(
+                host.strip()
+                for host in getattr(settings, "scene_video_http_download_allowed_hosts", "").split(",")
+                if host.strip()
+            ),
         )
 
     registry = build_scene_video_registry(http_config=http_config)
     selected = getattr(settings, "scene_video_provider", "mock")
+    if getattr(settings, "is_production", False) and selected == "mock":
+        raise ValueError("The mock scene-video provider is forbidden in production.")
     if not registry.has(selected):
         raise ValueError(
             f"scene_video_provider={selected!r} is not available; "
