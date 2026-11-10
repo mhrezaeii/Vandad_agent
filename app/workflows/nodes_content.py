@@ -622,6 +622,17 @@ async def _generate_scenario(
         ),
         brand_name=brand.display_name or brand.name,
         brand_tone=brand.tone,
+        character_name=(brand.visual_config or {}).get("character_name") or brand.display_name or brand.name,
+        character_description=(brand.visual_config or {}).get("character_description")
+        or (brand.visual_config or {}).get("character_reference_prompt"),
+        product_context="\\n".join(
+            value for value in (
+                brand.description,
+                (brand.visual_config or {}).get("product_context"),
+                (brand.visual_config or {}).get("product_features"),
+            )
+            if isinstance(value, str) and value.strip()
+        ) or None,
         cta_text=params.get("cta_text") or cta_config.get("text"),
         hashtags=list(cta_config.get("hashtags") or []),
         language=brand.language,
