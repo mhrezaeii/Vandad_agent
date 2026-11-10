@@ -46,6 +46,39 @@ _SCENE_RESOURCE = "scene_video_job"
 _PREVIEW_BYTES = 64 * 1024
 
 
+def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
+    """Translate structured storyboard direction into a provider-ready prompt."""
+    lines = [
+        f"SCENE TYPE: {scene.scene_type}",
+        f"SPEAKER: {scene.speaker}",
+        f"VISUAL STYLE: {scenario.visual_style or 'consistent premium brand film'}",
+    ]
+    if scene.scene_type == "presenter":
+        lines.append(
+            "PRESENTER IDENTITY: Keep the recurring brand character visually identical "
+            "to every other presenter scene."
+        )
+        if scenario.character_name:
+            lines.append(f"CHARACTER NAME: {scenario.character_name}")
+        if scenario.character_description:
+            lines.append(f"CHARACTER REFERENCE DESCRIPTION: {scenario.character_description}")
+        if scene.dialogue:
+            lines.append(f"SPOKEN DIALOGUE (Persian; do not render as on-screen text): {scene.dialogue}")
+        lines.append("Frame as a polished medium close-up with natural expression and direct eye contact.")
+    elif scene.scene_type == "product_demo":
+        lines.append(
+            "PRODUCT DEMO: Show a believable close-up or over-the-shoulder interaction with the product UI. "
+            "Do not invent readable labels, metrics, customer data or product features."
+        )
+    elif scene.scene_type == "motion_graphic":
+        lines.append("MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic composition; no generated text.")
+    if scene.camera_direction:
+        lines.append(f"CAMERA: {scene.camera_direction}")
+    lines.append(f"TRANSITION INTO NEXT SCENE: {scene.transition}")
+    lines.append(f"VISUAL PROMPT: {scene.visual_prompt}")
+    return "\n".join(lines)
+
+
 class SceneVideoService:
     def __init__(
         self,
@@ -91,7 +124,7 @@ class SceneVideoService:
                     scene_key=f"scene-{scene.index:02d}",
                     provider=provider.provider_id,
                     status=SceneVideoJobStatus.PENDING.value,
-                    prompt=scene.visual_prompt,
+                    prompt=build_scene_provider_prompt(scene, scenario),
                     narration=scene.narration,
                     on_screen_text=scene.on_screen_text,
                     subtitle_text=scene.subtitle_text or scene.narration,
@@ -115,7 +148,7 @@ class SceneVideoService:
             else:
                 # Keep the persisted prompt/narration in sync with an approved
                 # scenario without resetting provider state.
-                job.prompt = scene.visual_prompt
+                job.prompt = build_scene_provider_prompt(scene, scenario)
                 job.narration = scene.narration
                 job.on_screen_text = scene.on_screen_text
                 job.subtitle_text = scene.subtitle_text or scene.narration
