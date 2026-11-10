@@ -56,7 +56,9 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "Use one consistent, recognizable brand character across every presenter scene. "
         "Do not change face, age, hair, glasses, clothing, proportions or art direction between shots."
     )
-    product_context = request.product_context or "Only show product capabilities explicitly provided in the topic or brand context."
+    product_context = request.product_context or (
+        "Only show product capabilities explicitly provided in the topic or brand context."
+    )
     cta_hint = request.cta_text or "یک دعوت به اقدام کوتاه و روشن"
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
 
