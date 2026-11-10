@@ -72,7 +72,7 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
         )
     elif scene.scene_type == "motion_graphic":
         lines.append(
-            "MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic " 
+            "MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic "
             "composition; no generated text."
         )
     if scene.camera_direction:
