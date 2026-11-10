@@ -3,13 +3,13 @@ download, retry, quota exhaustion and cancellation. No real provider calls."""
 
 from __future__ import annotations
 
-import uuid
 
 import pytest
 from sqlalchemy import select
 
 from app.integrations.video import (
     MockSceneVideoProvider,
+    SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     build_scene_video_registry,
 )
@@ -190,7 +190,7 @@ async def test_submission_failure_can_be_retried(
     service = _service(db_session, provider)
 
     await service.prepare_scenes(project, _scenario(), provider_id="mock")
-    with pytest.raises(Exception):
+    with pytest.raises(SceneVideoPermanentError, match="mock provider was configured to fail"):
         await service.submit_pending(project)
     await db_session.commit()
 
