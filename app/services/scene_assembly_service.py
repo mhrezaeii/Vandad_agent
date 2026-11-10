@@ -68,13 +68,16 @@ def build_scene_timeline(scenario: Scenario) -> tuple[list[float], float]:
     """Calculate scene start offsets and final duration after transition overlaps."""
     offsets: list[float] = []
     cursor = 0.0
+    total_duration = sum(scene.duration_seconds for scene in scenario.scenes)
     scenes = scenario.scenes
     for index, scene in enumerate(scenes):
         offsets.append(round(cursor, 3))
         cursor += scene.duration_seconds
         if index + 1 < len(scenes):
             cursor -= _transition_overlap(scene, scenes[index + 1])
-    return offsets, round(cursor, 3)
+    # Preserve the authored runtime (and full narration); the final frame is
+    # held for the accumulated overlap removed by xfade.
+    return offsets, round(total_duration, 3)
 
 
 def _scene_windows(scenario: Scenario) -> list[tuple[Any, float, float]]:
@@ -477,14 +480,24 @@ class SceneAssemblyService:
                 current_duration += next_scene.duration_seconds
             current_label = output_label
 
+        authored_duration = sum(scene.duration_seconds for scene in scenes)
+        hold_duration = max(0.0, authored_duration - current_duration)
+        output_label = current_label
+        if hold_duration > 0:
+            output_label = "vfinal"
+            filters.append(
+                f"[{current_label}]tpad=stop_mode=clone:"
+                f"stop_duration={hold_duration:.3f}[{output_label}]"
+            )
+
         command += [
             "-filter_complex",
             ";".join(filters),
             "-map",
-            f"[{current_label}]",
+            f"[{output_label}]",
             "-an",
             "-t",
-            f"{current_duration:.3f}",
+            f"{authored_duration:.3f}",
             "-c:v",
             "libx264",
             "-preset",
