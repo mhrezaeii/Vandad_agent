@@ -18,6 +18,7 @@ from app.core.queue import WorkflowQueue
 from app.core.redis import RedisConnectionManager
 from app.database.session import create_engine, create_session_factory
 from app.integrations.providers import build_default_registry
+from app.integrations.video.factory import build_video_registry_from_settings
 from app.security.authorization import build_principal_from_settings
 from app.security.crypto import MasterKeyBox
 from app.storage.local import LocalArtifactStorage
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     provider_registry = build_default_registry()
     provider_executor = build_provider_executor(settings)
+    scene_video_registry = build_video_registry_from_settings(settings)
     principal = build_principal_from_settings(settings)
 
     # Artifact storage (local volume for MVP; interface is backend-agnostic).
@@ -80,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.master_key_box = master_key_box
     app.state.provider_registry = provider_registry
     app.state.provider_executor = provider_executor
+    app.state.scene_video_registry = scene_video_registry
     app.state.principal = principal
     app.state.workflow_queue = workflow_queue
     app.state.artifact_storage = artifact_storage

@@ -83,6 +83,33 @@ class Settings(BaseSettings):
     video_ffmpeg_bin: str = "ffmpeg"
     video_ffprobe_bin: str = "ffprobe"
 
+    # --- Scene-based (non-avatar) video pipeline ------------------------------
+    # ``mock`` produces synthetic local clips and never calls a network or a
+    # paid provider. Set to ``generic_http`` only after an authorised provider
+    # contract is configured below.
+    scene_video_provider: str = "mock"
+    scene_video_daily_quota: int | None = Field(default=None, ge=0)
+    scene_video_max_scene_attempts: int = Field(default=3, ge=1, le=10)
+    scene_video_poll_interval_seconds: float = Field(default=30.0, gt=0, le=3600)
+    scene_video_max_poll_attempts: int = Field(default=60, ge=1, le=600)
+    scene_video_output_width: int = Field(default=1080, ge=1, le=8192)
+    scene_video_output_height: int = Field(default=1920, ge=1, le=8192)
+    scene_video_output_fps: int = Field(default=30, ge=1, le=120)
+    scene_assembly_timeout_seconds: float = Field(default=1800.0, gt=0, le=7200)
+
+    # Optional generic HTTP contract for a provider the operator is authorised
+    # to use. Disabled unless ``SCENE_VIDEO_HTTP_BASE_URL`` is set. The key is
+    # never logged; it is only sent as the configured auth header.
+    scene_video_http_base_url: str | None = None
+    scene_video_http_generate_path: str = "/v1/videos"
+    scene_video_http_status_path: str = "/v1/videos/{job_id}"
+    scene_video_http_retrieve_path: str | None = None
+    scene_video_http_api_key: str | None = None
+    scene_video_http_auth_header: str = "Authorization"
+    scene_video_http_auth_scheme: str = "Bearer"
+    # Comma-separated exact HTTPS hostnames allowed for provider media downloads.
+    scene_video_http_download_allowed_hosts: str = ""
+
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
     n8n_api_key: str | None = None

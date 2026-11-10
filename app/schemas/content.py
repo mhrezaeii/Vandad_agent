@@ -132,6 +132,32 @@ class ContentProjectCreate(BaseModel):
     topic: str = Field(min_length=3, max_length=2000)
 
 
+class SceneProjectCreate(BaseModel):
+    """Create a non-avatar project built from provider-generated scene clips."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    brand_id: uuid.UUID
+    topic: str = Field(min_length=3, max_length=2000)
+    target_duration_seconds: int = Field(default=30, ge=5, le=120)
+    scene_count: int | None = Field(default=None, ge=3, le=12)
+    provider_id: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Scene-video provider id; defaults to the platform setting.",
+    )
+    narration_artifact_id: uuid.UUID | None = Field(
+        default=None,
+        description="Optional pre-generated Persian narration audio artifact.",
+    )
+
+
+class SceneVideoStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str | None = Field(default=None, max_length=50)
+
+
 class ContentProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -140,8 +166,13 @@ class ContentProjectRead(BaseModel):
     brand_id: uuid.UUID
     topic: str
     status: str
+    video_mode: str = "scene"
     script_text: str | None
     script_segments: list[dict[str, Any]] | None
+    scenario: dict[str, Any] | None = None
+    scene_options: dict[str, Any] | None = None
+    scene_video_provider: str | None = None
+    assembly_metadata: dict[str, Any] | None = None
     video_title: str | None
     call_to_action: str | None
     llm_usage: dict[str, Any] | None
@@ -166,13 +197,39 @@ class ProjectScriptApproval(BaseModel):
 class ContentJobRead(BaseModel):
     project_id: str
     status: str
+    video_mode: str = "scene"
     provider_job_id: str | None
     provider_status: str | None
+    scene_video_provider: str | None = None
+    scene_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    assembly_metadata: dict[str, Any] | None = None
     raw_artifact_id: str | None
     final_artifact_id: str | None
     execution_status: str | None
     cost_metadata: dict[str, Any] | None
     llm_usage: dict[str, Any] | None
+
+
+class SceneVideoJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    scene_index: int
+    scene_key: str
+    provider: str
+    status: str
+    provider_job_id: str | None
+    provider_status: str | None
+    progress: float | None
+    duration_seconds: float
+    attempts: int
+    max_attempts: int
+    artifact_id: uuid.UUID | None
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ContentVideoRead(BaseModel):

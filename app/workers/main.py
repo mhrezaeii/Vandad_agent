@@ -29,6 +29,7 @@ from app.core.queue import WorkflowJob, WorkflowQueue
 from app.core.redis import RedisConnectionManager
 from app.database.session import create_engine, create_session_factory
 from app.integrations.providers import build_default_registry
+from app.integrations.video.factory import build_video_registry_from_settings
 from app.security.crypto import MasterKeyBox
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.workflows.engine import WorkflowEngine
@@ -63,6 +64,7 @@ class WorkflowWorker:
         self.master_key_box = MasterKeyBox.from_settings(self.settings)
         self.registry = build_default_registry()
         self.executor = build_provider_executor(self.settings)
+        self.scene_video_registry = build_video_registry_from_settings(self.settings)
         self.queue: WorkflowQueue | None = None
 
         # Artifact storage for media-producing workflow nodes (same volume as
@@ -166,6 +168,7 @@ class WorkflowWorker:
                         self.executor,
                         self.master_key_box,
                         artifact_storage=self.artifact_storage,
+                        scene_video_registry=self.scene_video_registry,
                     )
 
                     execution = await session.get(WorkflowExecution, job.execution_id)

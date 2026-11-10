@@ -73,6 +73,12 @@ async def dispatch_content_node(
         "content.poll_video": _poll_video,
         "content.download_video": _download_video,
         "content.render_video": _render_video,
+        "content.generate_scenario": _generate_scenario,
+        "content.prepare_scenes": _prepare_scenes,
+        "content.submit_scene_videos": _submit_scene_videos,
+        "content.poll_scene_videos": _poll_scene_videos,
+        "content.retrieve_scene_videos": _retrieve_scene_videos,
+        "content.assemble_scenes": _assemble_scenes,
     }
     handler = handlers.get(node.node_type)
     if handler is None:
@@ -531,5 +537,334 @@ async def _render_video(
         "artifact_id": str(artifact.id),
         "size_bytes": artifact.size_bytes,
         "sha256": artifact.sha256,
+    }
+
+
+# ============================================================================
+# Scene-based (non-avatar) pipeline
+# ============================================================================
+def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
+    """Build a SceneVideoService bound to the engine's session and storage."""
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.services.scene_video_service import SceneVideoService  # noqa: PLC0415
+
+    if engine.scene_video_registry is None:
+        raise ProviderPermanentError(
+            "The scene-video provider registry is not configured.",
+            code="scene_registry_unavailable",
+        )
+    if engine.artifact_storage is None:
+        raise ProviderPermanentError(
+            "Artifact storage is not configured.", code="storage_unavailable"
+        )
+    settings = get_settings()
+    return SceneVideoService(
+        engine.session,
+        engine.scene_video_registry,
+        storage=engine.artifact_storage,
+        daily_quota=settings.scene_video_daily_quota,
+        max_attempts=settings.scene_video_max_scene_attempts,
+        max_size_bytes=settings.artifact_max_size_bytes,
+    )
+
+
+async def _brand_for(
+    engine, execution: WorkflowExecution, project: ContentProject
+) -> ContentBrand:
+    brand = await engine.session.get(ContentBrand, project.brand_id)
+    if brand is None or brand.company_id != execution.company_id:
+        raise NotFoundError("Brand not found for this project.")
+    return brand
+
+
+def _as_uuid_or_none(value: Any) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except ValueError as exc:
+        raise ProviderPermanentError(
+            "The provided artifact id is not a UUID.", code="invalid_configuration"
+        ) from exc
+
+
+# --------------------------------------------------------- generate_scenario
+async def _generate_scenario(
+    engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
+    from app.schemas.scenario import ScenarioRequest  # noqa: PLC0415
+    from app.services.scenario_service import ScenarioService  # noqa: PLC0415
+
+    project_id = _project_id(params, node)
+    project = await _require_project(engine, execution, project_id)
+    brand = await _brand_for(engine, execution, project)
+
+    connection_id = node.configuration.get("connection_id") or params.get("connection_id")
+    if not connection_id:
+        raise ProviderPermanentError(
+            "An LLM connection_id is required to generate the scenario.",
+            code="invalid_configuration",
+        )
+
+    cta_config = brand.cta_config or {}
+    options = project.scene_options or {}
+    request = ScenarioRequest(
+        topic=project.topic,
+        target_duration_seconds=int(
+            params.get("target_duration_seconds")
+            or options.get("target_duration_seconds")
+            or node.configuration.get("target_duration_seconds", 30)
+        ),
+        scene_count=(
+            params.get("scene_count")
+            or options.get("scene_count")
+            or node.configuration.get("scene_count")
+        ),
+        brand_name=brand.display_name or brand.name,
+        brand_tone=brand.tone,
+        cta_text=params.get("cta_text") or cta_config.get("text"),
+        hashtags=list(cta_config.get("hashtags") or []),
+        language=brand.language,
+    )
+
+    service = ScenarioService(
+        engine.session, engine.registry, engine.executor, engine._keys  # noqa: SLF001
+    )
+    scenario, metadata = await service.generate(
+        company_id=execution.company_id,
+        connection_id=uuid.UUID(str(connection_id)),
+        request=request,
+        timeout_seconds=min(timeout_seconds, 180.0),
+    )
+
+    project.scenario = scenario.model_dump(mode="json")
+    project.script_text = scenario.narration
+    project.script_segments = [scene.model_dump(mode="json") for scene in scenario.scenes]
+    project.video_title = scenario.title[:500]
+    project.call_to_action = scenario.cta[:500] if scenario.cta else None
+    usage = metadata.get("usage")
+    if isinstance(usage, dict) and any(
+        usage.get(key) is not None
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost", "total_cost")
+    ):
+        usage_metadata = dict(usage)
+        if metadata.get("model"):
+            usage_metadata["model"] = metadata["model"]
+        usage_metadata.setdefault(
+            "pricing_metadata",
+            {"source": "llm_response_usage", "version": "openai_compatible_v1"},
+        )
+        project.llm_usage = usage_metadata
+    if project.status in (
+        ProjectStatus.DRAFT.value,
+        ProjectStatus.SCRIPT_GENERATING.value,
+        ProjectStatus.SCRIPT_FAILED.value,
+    ):
+        project.status = ProjectStatus.SCRIPT_READY.value
+    await engine.session.flush()
+    engine._log(  # noqa: SLF001
+        execution,
+        "info",
+        f"Scenario generated for project {project_id} ({len(scenario.scenes)} scenes).",
+        node_key=node.node_key,
+    )
+    return {
+        "project_status": project.status,
+        "scene_count": len(scenario.scenes),
+        "title": scenario.title,
+        "total_duration_seconds": scenario.total_duration_seconds,
+    }
+
+
+# ------------------------------------------------------------ prepare_scenes
+async def _prepare_scenes(
+    engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.schemas.scenario import Scenario  # noqa: PLC0415
+
+    project_id = _project_id(params, node)
+    project = await _require_project(engine, execution, project_id)
+    if not project.scenario:
+        raise ProviderPermanentError(
+            "The project has no generated scenario to prepare.", code="scenario_missing"
+        )
+    scenario = Scenario.model_validate(project.scenario)
+    settings = get_settings()
+    provider_id = (
+        params.get("provider_id")
+        or node.configuration.get("provider_id")
+        or project.scene_video_provider
+        or settings.scene_video_provider
+    )
+    service = _scene_service(engine)
+    jobs = await service.prepare_scenes(project, scenario, provider_id=str(provider_id))
+    engine._log(  # noqa: SLF001
+        execution,
+        "info",
+        f"Prepared {len(jobs)} scene jobs for project {project_id}.",
+        node_key=node.node_key,
+    )
+    return {
+        "project_status": project.status,
+        "provider": str(provider_id),
+        "job_count": len(jobs),
+        "job_ids": [str(job.id) for job in jobs],
+    }
+
+
+# ------------------------------------------------------- submit_scene_videos
+async def _submit_scene_videos(
+    engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
+    project_id = _project_id(params, node)
+    project = await _require_project(engine, execution, project_id)
+    service = _scene_service(engine)
+    summary = await service.submit_pending(project, execution_id=execution.id)
+    engine._log(  # noqa: SLF001
+        execution,
+        "info",
+        f"Submitted {summary['submitted']} scene video(s) for project {project_id}.",
+        node_key=node.node_key,
+    )
+    return summary
+
+
+# --------------------------------------------------------- poll_scene_videos
+async def _poll_scene_videos(
+    engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
+    project_id = _project_id(params, node)
+    project = await _require_project(engine, execution, project_id)
+    service = _scene_service(engine)
+
+    # A failed scene with retry budget left is reset to ``pending`` by the poll
+    # handler; submitting before polling is what actually retries it.
+    await service.submit_pending(project, execution_id=execution.id)
+    summary = await service.poll_jobs(project)
+    if not summary["all_terminal"]:
+        raise ProviderTransientError(
+            "Scene videos are still generating.", code="scene_generation_in_progress"
+        )
+    if summary["failed"]:
+        raise ProviderPermanentError(
+            "One or more scene videos failed to generate.", code="scene_generation_failed"
+        )
+    if summary["cancelled"]:
+        raise ProviderPermanentError(
+            "Scene video generation was cancelled.", code="scene_generation_cancelled"
+        )
+    engine._log(  # noqa: SLF001
+        execution,
+        "info",
+        f"All {summary['completed']} scene videos are ready for project {project_id}.",
+        node_key=node.node_key,
+    )
+    return summary
+
+
+# ------------------------------------------------------ retrieve_scene_videos
+async def _retrieve_scene_videos(
+    engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
+    project_id = _project_id(params, node)
+    project = await _require_project(engine, execution, project_id)
+    service = _scene_service(engine)
+    summary = await service.retrieve_completed(project, execution_id=execution.id)
+    if summary["failed"]:
+        raise ProviderPermanentError(
+            "One or more scene videos could not be downloaded.", code="scene_download_failed"
+        )
+    if summary["completed"] < summary["total"]:
+        raise ProviderTransientError(
+            "Scene videos are not all downloaded yet.", code="scene_download_incomplete"
+        )
+    engine._log(  # noqa: SLF001
+        execution,
+        "info",
+        f"Downloaded {summary['downloaded']} scene video(s) for project {project_id}.",
+        node_key=node.node_key,
+    )
+    return summary
+
+
+# ----------------------------------------------------------- assemble_scenes
+async def _assemble_scenes(
+    engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.services.scene_assembly_service import SceneAssemblyService  # noqa: PLC0415
+
+    project_id = _project_id(params, node)
+    project = await _require_project(engine, execution, project_id)
+    brand = await _brand_for(engine, execution, project)
+    if engine.artifact_storage is None:
+        raise ProviderPermanentError("Artifact storage is not configured.", code="storage_unavailable")
+
+    service = _scene_service(engine)
+    jobs = await service.list_jobs(project)
+    if not jobs:
+        raise ProviderPermanentError("No scene jobs to assemble.", code="scenes_missing")
+    if any(job.artifact_id is None for job in jobs):
+        raise ProviderPermanentError(
+            "Every scene must be downloaded before assembly.", code="scene_artifact_missing"
+        )
+
+    settings = get_settings()
+    assembly = SceneAssemblyService(
+        engine.session,
+        engine.artifact_storage,
+        ffmpeg_bin=settings.video_ffmpeg_bin,
+        ffprobe_bin=settings.video_ffprobe_bin,
+        fonts_dir=settings.video_fonts_dir,
+        font_name=settings.video_font_name,
+        max_size_bytes=settings.artifact_max_size_bytes,
+    )
+    narration_artifact_id = _as_uuid_or_none(
+        params.get("narration_artifact_id") or node.configuration.get("narration_artifact_id")
+    )
+    artifact, metadata = await assembly.assemble(
+        execution_id=execution.id,
+        company_id=execution.company_id,
+        project=project,
+        brand=brand,
+        scene_jobs=jobs,
+        narration_artifact_id=narration_artifact_id,
+        allow_silent=bool(params.get("allow_silent", False) or node.configuration.get("allow_silent", False)),
+        width=brand.video_width or settings.scene_video_output_width,
+        height=brand.video_height or settings.scene_video_output_height,
+        fps=settings.scene_video_output_fps,
+        timeout_seconds=min(timeout_seconds, settings.scene_assembly_timeout_seconds),
+    )
+    project.final_artifact_id = artifact.id
+    project.assembly_metadata = metadata
+    project.status = ProjectStatus.COMPLETED.value
+    project.error_message = None
+    AuditService(engine.session).record(
+        event_type="scene.assembled",
+        action="assemble",
+        company_id=execution.company_id,
+        resource_type="content_project",
+        resource_id=project.id,
+        metadata={
+            "artifact_id": str(artifact.id),
+            "size_bytes": artifact.size_bytes,
+            "scenes": metadata.get("scenes"),
+            "narration": metadata.get("narration"),
+        },
+    )
+    await engine.session.flush()
+    engine._log(  # noqa: SLF001
+        execution,
+        "info",
+        f"Final scene video assembled as artifact {artifact.id}.",
+        node_key=node.node_key,
+    )
+    return {
+        "artifact_id": str(artifact.id),
+        "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256,
+        "duration_seconds": metadata.get("duration_seconds"),
+        "narration": metadata.get("narration"),
     }
 

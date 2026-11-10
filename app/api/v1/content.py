@@ -24,6 +24,9 @@ from app.schemas.content import (
     ContentProjectRead,
     ContentVideoRead,
     ProjectScriptApproval,
+    SceneProjectCreate,
+    SceneVideoJobRead,
+    SceneVideoStartRequest,
 )
 from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
@@ -44,6 +47,7 @@ async def get_content_service(request: Request) -> AsyncIterator[ContentService]
                 request.app.state.provider_executor,
                 request.app.state.master_key_box,
                 workflow_queue=getattr(request.app.state, "workflow_queue", None),
+                scene_video_registry=getattr(request.app.state, "scene_video_registry", None),
             )
             await session.commit()
         except Exception:
@@ -220,6 +224,118 @@ async def generate_video(
         project_id, scope=scope, connection_id=payload.connection_id
     )
     return ContentProjectRead.model_validate(project)
+
+
+# -------------------------------------------------------------- scene pipeline
+@router.get("/scene-providers")
+async def list_scene_providers(
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+) -> list[dict[str, object]]:
+    """List registered scene-video providers (never exposes credentials)."""
+    registry = getattr(request.app.state, "scene_video_registry", None)
+    if registry is None:
+        return []
+    return [
+        {
+            "provider_id": provider.provider_id,
+            "display_name": provider.display_name,
+            "supports_cancellation": provider.supports_cancellation,
+            "requires_network": provider.requires_network,
+            "daily_quota": provider.quota_limit_per_day(),
+        }
+        for provider in registry.list_providers()
+    ]
+
+
+@router.post("/scene-projects", response_model=ContentProjectRead, status_code=201)
+async def create_scene_project(
+    payload: SceneProjectCreate,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    project = await service.create_scene_project(
+        scope=scope,
+        brand_id=payload.brand_id,
+        topic=payload.topic,
+        target_duration_seconds=payload.target_duration_seconds,
+        scene_count=payload.scene_count,
+        provider_id=payload.provider_id,
+        narration_artifact_id=payload.narration_artifact_id,
+    )
+    return ContentProjectRead.model_validate(project)
+
+
+@router.post(
+    "/scene-projects/{project_id}/generate-scenario",
+    response_model=ContentProjectRead,
+)
+async def generate_scene_scenario(
+    project_id: uuid.UUID,
+    payload: ContentConnectionRequest,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    project = await service.generate_scene_scenario(
+        project_id, scope=scope, connection_id=payload.connection_id
+    )
+    return ContentProjectRead.model_validate(project)
+
+
+@router.post(
+    "/scene-projects/{project_id}/approve-scenario",
+    response_model=ContentProjectRead,
+)
+async def approve_scene_scenario(
+    project_id: uuid.UUID,
+    payload: ProjectScriptApproval,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    project = await service.approve_scene_scenario(project_id, scope=scope)
+    return ContentProjectRead.model_validate(project)
+
+
+@router.post(
+    "/scene-projects/{project_id}/generate-video",
+    response_model=ContentProjectRead,
+)
+async def generate_scene_video(
+    project_id: uuid.UUID,
+    payload: SceneVideoStartRequest,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    project = await service.generate_scene_video(
+        project_id, scope=scope, provider_id=payload.provider_id
+    )
+    return ContentProjectRead.model_validate(project)
+
+
+@router.post(
+    "/scene-projects/{project_id}/cancel",
+    response_model=ContentProjectRead,
+)
+async def cancel_scene_video(
+    project_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    project = await service.cancel_scene_video(project_id, scope=scope)
+    return ContentProjectRead.model_validate(project)
+
+
+@router.get(
+    "/scene-projects/{project_id}/scenes",
+    response_model=list[SceneVideoJobRead],
+)
+async def list_scene_jobs(
+    project_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> list[SceneVideoJobRead]:
+    jobs = await service.list_scene_jobs(project_id, scope=scope)
+    return [SceneVideoJobRead.model_validate(job) for job in jobs]
 
 
 # ------------------------------------------------------------------------ jobs

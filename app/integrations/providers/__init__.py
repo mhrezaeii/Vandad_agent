@@ -16,6 +16,7 @@ from app.integrations.providers.base import (
     ProviderTransientError,
 )
 from app.integrations.providers.diagnostic import DiagnosticProvider
+from app.integrations.providers.browser_playwright import BrowserPlaywrightProvider
 from app.integrations.providers.execution import ExecutionOutcome, ProviderExecutor, RetryPolicy
 from app.integrations.providers.heygen import HeyGenProvider
 from app.integrations.providers.http_endpoint import HttpEndpointProvider
@@ -32,6 +33,7 @@ def build_default_registry() -> ProviderRegistry:
     """Registry with the built-in adapters."""
     registry = ProviderRegistry()
     registry.register(DiagnosticProvider())
+    registry.register(BrowserPlaywrightProvider())
     registry.register(HttpEndpointProvider())
     registry.register(LlmOpenAiProvider())
     registry.register(HeyGenProvider())
@@ -46,6 +48,7 @@ __all__ = [
     "LlmOpenAiProvider",
     "InvalidCredentialError",
     "DiagnosticProvider",
+    "BrowserPlaywrightProvider",
     "ProviderAdapter",
     "ProviderCapability",
     "ProviderCredentialRequirement",

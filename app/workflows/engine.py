@@ -124,12 +124,14 @@ class WorkflowEngine:
         master_key_box: MasterKeyBox,
         *,
         artifact_storage=None,  # ArtifactStorage | None (media-producing nodes)
+        scene_video_registry=None,  # SceneVideoProviderRegistry | None
     ) -> None:
         self.session = session
         self.registry = registry
         self.executor = executor
         self._keys = master_key_box
         self.artifact_storage = artifact_storage
+        self.scene_video_registry = scene_video_registry
 
     # ------------------------------------------------------------------ public
     async def run_execution(self, execution_id: uuid.UUID, *, company_id: uuid.UUID) -> EngineResult:

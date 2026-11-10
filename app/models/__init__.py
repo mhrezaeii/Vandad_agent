@@ -11,12 +11,16 @@ from app.models.content import (
     ContentBrandStatus,
     ContentProject,
     ProjectStatus,
+    ProviderQuotaUsage,
+    SceneVideoJob,
+    SceneVideoJobStatus,
 )
 from app.models.credential_reference import CredentialReference, CredentialStatus, CredentialStorageType, CredentialType
 from app.models.credential_version import CredentialVersion, CredentialVersionStatus
 from app.models.mixins import TimestampMixin
 from app.models.platform import IntegrationType, Platform, PlatformStatus, PlatformType
 from app.models.platform_connection import ConnectionStatus, PlatformConnection
+from app.models.platform_source_document import PlatformSourceDocument
 from app.models.workflow import Workflow
 from app.models.workflow import WorkflowStatus as WorkflowDefinitionStatus
 from app.models.workflow_artifact import ArtifactKind, WorkflowArtifact
@@ -66,9 +70,13 @@ __all__ = [
     "IntegrationType",
     "Platform",
     "PlatformConnection",
+    "PlatformSourceDocument",
     "PlatformStatus",
     "ProjectStatus",
     "PlatformType",
+    "ProviderQuotaUsage",
+    "SceneVideoJob",
+    "SceneVideoJobStatus",
     "TimestampMixin",
     "Workflow",
     "WorkflowArtifact",
