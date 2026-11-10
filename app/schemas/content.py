@@ -166,7 +166,7 @@ class ContentProjectRead(BaseModel):
     brand_id: uuid.UUID
     topic: str
     status: str
-    video_mode: str = "avatar"
+    video_mode: str = "scene"
     script_text: str | None
     script_segments: list[dict[str, Any]] | None
     scenario: dict[str, Any] | None = None
@@ -197,7 +197,7 @@ class ProjectScriptApproval(BaseModel):
 class ContentJobRead(BaseModel):
     project_id: str
     status: str
-    video_mode: str = "avatar"
+    video_mode: str = "scene"
     provider_job_id: str | None
     provider_status: str | None
     scene_video_provider: str | None = None
