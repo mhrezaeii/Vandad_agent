@@ -106,10 +106,14 @@ def build_ass_subtitle(
     font_size: int | None = None,
     primary_color: str = "&H00FFFFFF",
     outline_color: str = "&H00101010",
+    alignment: int = 2,
+    margin_v: int | None = None,
 ) -> str:
     """Emit an ASS subtitle document for Persian (RTL) rendering via libass."""
     size = font_size or max(28, height // 40)
-    margin_v = max(int(height * 0.06), 40)
+    margin_v = margin_v if margin_v is not None else max(int(height * 0.06), 40)
+    if alignment not in range(1, 10):
+        raise ValueError("ASS alignment must be between 1 and 9.")
     style_format = (
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
@@ -118,7 +122,7 @@ def build_ass_subtitle(
     )
     style_line = (
         f"Style: Persian,{font_name},{size},{primary_color},&H000000FF,"
-        f"{outline_color},&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,"
+        f"{outline_color},&H80000000,0,0,0,0,100,100,0,0,1,3,1,{alignment},"
         f"60,60,{margin_v},1"
     )
     header = f"""[Script Info]
