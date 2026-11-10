@@ -184,7 +184,7 @@ class ContentProject(Base, TimestampMixin):
     # Non-avatar scene pipeline: "avatar" keeps the legacy HeyGen path;
     # "scene" uses per-scene provider clips assembled with FFmpeg.
     video_mode: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="avatar", server_default="avatar"
+        String(32), nullable=False, default="scene", server_default="scene"
     )
     # Structured scenario (title, scenes, narration, CTA, caption, hashtags).
     scenario: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
