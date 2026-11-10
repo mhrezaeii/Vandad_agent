@@ -34,7 +34,7 @@ def upgrade() -> None:
     # --- content_projects: scene pipeline columns ---------------------------
     op.add_column(
         'content_projects',
-        sa.Column('video_mode', sa.String(length=32), server_default='avatar', nullable=False),
+        sa.Column('video_mode', sa.String(length=32), server_default='scene', nullable=False),
     )
     op.add_column(
         'content_projects',
