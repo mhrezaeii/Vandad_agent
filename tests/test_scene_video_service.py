@@ -4,6 +4,7 @@ download, retry, quota exhaustion and cancellation. No real provider calls."""
 from __future__ import annotations
 
 import pytest
+from app.core.exceptions import ConflictError
 from sqlalchemy import select
 
 from app.integrations.video import (
@@ -116,6 +117,21 @@ async def test_prepare_scenes_is_idempotent(
     assert project.status == "scenes_prepared"
     assert project.scene_video_provider == "mock"
     assert project.scenario is not None
+
+
+async def test_prepare_scenes_rejects_brand_presenter_without_lipsync_provider(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    scenario = _scenario()
+    scenario.scenes[1].scene_type = "presenter"
+    scenario.scenes[1].speaker = "brand_character"
+    scenario.scenes[1].dialogue = "سلام، من وندی هستم."
+    service = _service(db_session, MockSceneVideoProvider())
+
+    with pytest.raises(ConflictError, match="real image/audio lip-sync support"):
+        await service.prepare_scenes(project, scenario, provider_id="mock")
 
 
 async def test_submit_pending_never_submits_twice(
