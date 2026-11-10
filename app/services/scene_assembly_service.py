@@ -12,9 +12,8 @@ Pipeline per assembly (all work isolated in one temp directory):
    with brand music that the operator explicitly marked as licensed.
 7. Mux video + audio into H.264/AAC MP4 and stream it back into storage.
 
-No narration provider is bundled: when no narration artifact is supplied the
-track is silent and the assembly metadata records that fact instead of
-pretending narration was generated.
+Narration is required by default. Silent output is permitted only when the
+workflow explicitly opts in; no provider is allowed to pretend speech exists.
 """
 
 from __future__ import annotations
@@ -139,6 +138,7 @@ class SceneAssemblyService:
         brand: ContentBrand,
         scene_jobs: list[SceneVideoJob],
         narration_artifact_id: uuid.UUID | None = None,
+        allow_silent: bool = False,
         width: int = DEFAULT_WIDTH,
         height: int = DEFAULT_HEIGHT,
         fps: int = DEFAULT_FPS,
@@ -149,6 +149,10 @@ class SceneAssemblyService:
             raise ConflictError("No scene jobs to assemble.")
         if any(job.artifact_id is None for job in ordered):
             raise ConflictError("Every scene must be downloaded before assembly.")
+        if narration_artifact_id is None and not allow_silent:
+            raise ConflictError(
+                "Persian narration audio is required. Configure a TTS provider or explicitly request silent output."
+            )
         scenario = self._scenario(project)
         self._require_binaries()
 
@@ -280,7 +284,7 @@ class SceneAssemblyService:
                 "fps": fps,
                 "subtitles": "persian_ass",
                 "font": self.font_name,
-                "narration": "provided" if narration_used else "silent_fallback",
+                "narration": "provided" if narration_used else "explicit_silent_mode",
                 "music": "licensed" if music_path is not None else "none",
                 "logo": logo is not None,
                 "probe": probe,
