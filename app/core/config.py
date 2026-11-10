@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     scene_video_http_api_key: str | None = None
     scene_video_http_auth_header: str = "Authorization"
     scene_video_http_auth_scheme: str = "Bearer"
+    # Comma-separated exact HTTPS hostnames allowed for provider media downloads.
+    scene_video_http_download_allowed_hosts: str = ""
 
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
