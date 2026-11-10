@@ -830,6 +830,7 @@ async def _assemble_scenes(
         brand=brand,
         scene_jobs=jobs,
         narration_artifact_id=narration_artifact_id,
+        allow_silent=bool(params.get("allow_silent", False) or node.configuration.get("allow_silent", False)),
         width=brand.video_width or settings.scene_video_output_width,
         height=brand.video_height or settings.scene_video_output_height,
         fps=settings.scene_video_output_fps,
