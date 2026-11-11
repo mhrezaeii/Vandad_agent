@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.agents import build_default_agent_registry
-from app.agents.runtime import AgentDispatcher, AgentExecutionContext
+from app.agents.runtime import AgentDispatcher, AgentExecutionContext, MonitoringAgentHandler
 from app.core.exceptions import ConflictError
 from app.models import AgentTask, AgentTaskOutbox, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
@@ -41,6 +41,53 @@ async def test_dispatcher_routes_only_registered_agent_capabilities():
 
     with pytest.raises(ConflictError):
         await dispatcher.dispatch("monitoring", "platform.delete", context)
+
+
+async def test_monitoring_handler_runs_public_discovery_with_tenant_scope(
+    company_and_platform, session_factory, monkeypatch
+):
+    from app.services.platform_discovery_service import PlatformDiscoveryService
+
+    company, platform = company_and_platform
+    captured = {}
+
+    async def fake_discover(self, selected_platform, *, mode="public", max_pages=25,
+                            connection=None, credentials=None):
+        captured["company_id"] = selected_platform.company_id
+        captured["platform_id"] = selected_platform.id
+        captured["mode"] = mode
+        captured["max_pages"] = max_pages
+        return {
+            "platform_id": str(selected_platform.id),
+            "mode": mode,
+            "scanned": 2,
+            "created": 1,
+            "changed": 1,
+            "unchanged": 0,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(PlatformDiscoveryService, "discover", fake_discover)
+    context = AgentExecutionContext(
+        company_id=company.id,
+        task_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        worker_id="test-worker",
+        payload={"platform_id": str(platform.id), "max_pages": 99},
+        session_factory=session_factory,
+        provider_registry=None,
+        provider_executor=None,
+        master_key_box=None,
+    )
+    result = await MonitoringAgentHandler().execute("platform.discover", context)
+
+    assert result["scanned"] == 2
+    assert captured == {
+        "company_id": company.id,
+        "platform_id": platform.id,
+        "mode": "public",
+        "max_pages": 25,
+    }
 
 
 async def test_dispatcher_rejects_unready_agent_handler():
