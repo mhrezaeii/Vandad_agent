@@ -15,7 +15,7 @@ from app.services.agent_task_service import AgentTaskService
 def _task_payload(**overrides):
     payload = {
         "agent_key": "content",
-        "capability": "content.copy.generate",
+        "capability": "content.scenario.generate",
         "title": "Draft a short product announcement",
         "input_payload": {"language": "fa", "topic": "launch"},
         "idempotency_key": "task-request-001",
@@ -43,9 +43,9 @@ async def test_task_creation_requires_active_agent_and_is_idempotent(client):
     first = await client.post("/api/v1/agent-tasks", json=_task_payload())
     assert first.status_code == 202, first.text
     first_body = first.json()
-    assert first_body["status"] == "pending"
+    assert first_body["status"] == "queued"
     assert first_body["attempt_count"] == 0
-    assert first_body["agent_dispatch_ready"] is False
+    assert first_body["agent_dispatch_ready"] is True
 
     second = await client.post("/api/v1/agent-tasks", json=_task_payload())
     assert second.status_code == 202
