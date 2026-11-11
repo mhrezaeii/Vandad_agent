@@ -23,9 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError
 from app.integrations.video import (
     SceneJobState,
+    SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoProviderRegistry,
-    SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
