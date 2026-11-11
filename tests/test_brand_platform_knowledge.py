@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from app.core.exceptions import NotFoundError
-from app.models import Company, ContentBrand, Platform
+from app.models import Company, Platform
 from app.services.content_service import ContentService
 
 
