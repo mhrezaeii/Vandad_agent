@@ -12,8 +12,8 @@ from app.integrations.video.apimaster import APIMasterConfig, APIMasterSceneVide
 from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
-    SceneVideoError,
     SceneVideoCompositionRequest,
+    SceneVideoError,
     SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoQuotaExhaustedError,
