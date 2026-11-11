@@ -45,6 +45,7 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
     display_name = "Local mock scene-video provider"
     supports_cancellation = True
     supports_composition = True
+    model_id = "mock-fixture"
     requires_network = False
 
     def __init__(
