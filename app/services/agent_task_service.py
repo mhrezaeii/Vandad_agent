@@ -291,6 +291,15 @@ class AgentTaskService:
         definition = self.registry.get(task.agent_key)
         if not definition.dispatch_ready:
             raise ConflictError("The selected agent is not dispatch-ready yet.")
+        agent = await self.session.scalar(
+            select(CompanyAgent).where(
+                CompanyAgent.company_id == company_id,
+                CompanyAgent.agent_key == task.agent_key,
+                CompanyAgent.status == "active",
+            )
+        )
+        if agent is None:
+            raise ConflictError("The selected company agent is no longer active.")
         task.status = AgentTaskStatus.QUEUED.value
         task.cancel_requested = False
         task.completed_at = None
