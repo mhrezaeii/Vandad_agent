@@ -180,7 +180,9 @@ class MonitoringAgentHandler:
                 ).extract(
                     platform=platform,
                     connection_id=connection_id,
+                    task_id=context.task_id,
                     max_documents=max(1, min(int(payload.get("max_documents", 20)), 20)),
+                    task_id=context.task_id,
                 )
                 await context.report_progress("monitoring.knowledge.completed", snapshot_id=str(snapshot.id))
                 await session.commit()
@@ -315,7 +317,7 @@ class VideoProductionAgentHandler:
             )
             if capability == "video.scene.generate":
                 updated = await service.generate_scene_video(
-                    project_id, scope=scope, provider_id=provider_id
+                    project_id, scope=scope, provider_id=provider_id, task_id=context.task_id
                 )
             elif capability == "video.avatar.generate":
                 try:
