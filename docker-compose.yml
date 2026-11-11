@@ -36,7 +36,23 @@ services:
     networks:
       - backend
     depends_on:
-      postgres:
+      web:
+    profiles: ["ui"]
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    networks:
+      - backend
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -90,6 +106,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-3}
       AGENT_WORKER_POLL_INTERVAL: ${AGENT_WORKER_POLL_INTERVAL:-1}
       AGENT_WORKER_LEASE_SECONDS: ${AGENT_WORKER_LEASE_SECONDS:-120}
