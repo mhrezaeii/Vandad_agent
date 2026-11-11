@@ -1,6 +1,6 @@
 # Vandad Agent
 
-Vandad Agent is the backend foundation for a multi-company operations and content-production platform. It is an API-first Python service; a dedicated web UI has not been added yet.
+Vandad Agent is the backend foundation for a multi-company operations and content-production platform. It is an API-first Python service with a separate Persian-first Next.js operator console under `web/`.
 
 ## Current stack
 
@@ -10,7 +10,7 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 - Provider adapters for OpenAI-compatible LLM APIs, browser automation, HeyGen and scene-video APIs
 - APIMaster scene-video adapter (Wan video models), generic HTTP scene-video adapter and mock provider
 - FFmpeg-based video rendering and local artifact storage
-- Docker Compose, pytest and Ruff
+- Next.js 15 + React 19 + TypeScript frontend, Docker Compose, pytest and Ruff
 
 ## Start locally
 
@@ -23,9 +23,18 @@ docker compose up -d --build
 - API health: `http://localhost:8000/api/v1/health`
 - OpenAPI: `http://localhost:8000/docs`
 - PostgreSQL and Redis are required for normal API/worker operation.
-- The API and worker run Alembic migrations through the container startup configuration.
+- The API and worker run Alembic migrations through the container startup configuration. Start the optional UI profile with `docker compose --profile ui up -d --build web`; the UI is available at `http://localhost:3000`.
 
-For host development:
+For host frontend development:
+
+```powershell
+cd web
+Copy-Item .env.example .env.local
+npm install
+npm run dev
+```
+
+For host backend development:
 
 ```powershell
 docker compose up -d postgres redis
@@ -57,7 +66,7 @@ The backend is organized around these boundaries:
 6. **Provider fabric** — provider registry and adapters; credentials are resolved through the secret boundary.
 7. **Media pipeline** — brand character management, scene generation, assembly, Persian subtitles and artifact delivery.
 
-The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned dispatcher, and Monitoring / Content scenario handlers. Only agents with real registered handlers and verified end-to-end coverage may be marked dispatch-ready. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
+The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned capability router, durable task events, Monitoring / Content scenario handlers and an approval-gated Video Production Agent. The video handler routes to the existing avatar or scene workflow; paid dispatch requires a company budget. Aggregate end-to-end validation remains a release gate. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
 
 See [Architecture and implementation status](docs/ARCHITECTURE.md).
 
@@ -71,11 +80,11 @@ All routes are under `/api/v1`. The main route groups are:
 | Platforms | `/platforms` | Platform registry |
 | Platform discovery | `/platform-discovery` | Discover sources and extract platform knowledge |
 | Connections | `/connections` | Tenant-owned platform connections |
-| Providers | `/providers` | Provider metadata and execution capabilities |
+| Providers | `/providers` | Provider metadata, scene-video capabilities, company budgets and usage ledger |
 | Workflows | `/workflows` | Workflow definitions and versions |
 | Executions | `/executions` | Workflow execution and schedules |
 | Agents | `/agents` | Agent catalog and tenant agent activation |
-| Agent tasks | `/agent-tasks` | Task requests, cancellation, retry and run history |
+| Agent tasks | `/agent-tasks` | Task requests, approval, cancellation, retry, run history and SSE progress events |
 | Content | `/content` | Brand, character and video project workflows |
 | Artifacts | `/artifacts` | Tenant-scoped artifact metadata and delivery |
 
@@ -111,13 +120,14 @@ APIMaster scene generation does not provide lip-sync. For a speaking character, 
 
 ## Deployment notes
 
-Docker Compose currently includes API, worker, PostgreSQL, Redis and an n8n service. The in-repository workflow engine and worker are the execution path implemented by this codebase. n8n should be treated as an optional/legacy integration until its intended responsibility is confirmed; do not remove its service, volumes or configuration until local deployment usage has been checked.
+Docker Compose includes API, workflow worker, agent worker, PostgreSQL, Redis and an n8n service; the Next.js UI is an optional `ui` profile. The in-repository workflow engine and worker are the execution path implemented by this codebase. n8n should be treated as an optional/legacy integration until its intended responsibility is confirmed; do not remove its service, volumes or configuration until local deployment usage has been checked.
 
 Artifacts are stored through the configured artifact storage backend and shared between API and worker containers. Never expose internal filesystem paths through public API responses.
 
 ## Repository map
 
 ```
+web/                Next.js + TypeScript operator console
 app/
   agents/          code-owned agent catalog and registry
   api/             FastAPI routers and request dependencies
@@ -130,7 +140,7 @@ app/
   security/        authorization, encryption, secret handling, redaction
   services/        business services
   storage/         artifact storage backends
-  workers/         background workflow worker
+  workers/         background workflow and agent-task workers
   workflows/       workflow graph validation, mapping, engine and nodes
 alembic/            database migrations (append-only history)
 scripts/            local utilities, including talking-avatar renderer setup
@@ -144,4 +154,4 @@ docs/               architecture and implementation status
 - Do not commit `.env`, API keys, runtime model weights, generated media, local databases, virtual environments or caches.
 - Do not remove the existing talking-avatar renderer just because the scene-video pipeline exists; they have different responsibilities.
 - Do not mark an agent dispatch-ready until its handler, authorization boundary, retries, cancellation and tests are implemented.
-- Keep the UI as a separate frontend application consuming stable, versioned API contracts.
+- Keep the UI as a separate frontend application consuming stable, versioned API contracts. Do not expose the current bootstrap-principal UI publicly before authentication and RBAC are completed.
