@@ -275,6 +275,15 @@ async def test_provider_telemetry_is_company_scoped_and_aggregates_latency(db_se
             error_code="provider_timeout",
         ),
         ProviderUsageRecord(
+            company_id=owner.id,
+            provider_id="llm_openai",
+            operation="scenario",
+            status="reserved",
+            idempotency_key=f"telemetry-pending-{uuid.uuid4()}",
+            reserved_amount_usd=Decimal("1.00"),
+            usage_payload={},
+        ),
+        ProviderUsageRecord(
             company_id=stranger.id,
             provider_id="llm_openai",
             operation="scenario",
@@ -290,7 +299,8 @@ async def test_provider_telemetry_is_company_scoped_and_aggregates_latency(db_se
     metrics = await ProviderBudgetService(db_session).telemetry(owner.id)
     assert len(metrics) == 1
     assert metrics[0]["provider_id"] == "llm_openai"
-    assert metrics[0]["calls_30d"] == 2
+    assert metrics[0]["calls_30d"] == 3
     assert metrics[0]["errors_30d"] == 1
+    assert metrics[0]["pending_30d"] == 1
     assert metrics[0]["success_rate"] == 0.5
     assert metrics[0]["average_latency_ms"] == 210.0
