@@ -42,8 +42,10 @@ def test_parse_payload_rejects_unknown_source_url():
 
 
 def test_parse_payload_rejects_invalid_schema():
+    invalid = _payload()
+    invalid["products_and_services"][0]["confidence"] = 1.5
     with pytest.raises(PlatformKnowledgeExtractionError) as exc:
-        _parse_payload({"summary": "not enough"}, {"https://example.com/features"})
+        _parse_payload(invalid, {"https://example.com/features"})
     assert exc.value.code == "knowledge_invalid_schema"
 
 
