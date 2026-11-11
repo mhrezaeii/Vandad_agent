@@ -19,6 +19,7 @@ from app.agents.runtime import (
 )
 from app.api.deps import build_provider_executor
 from app.core.config import get_settings
+from app.core.exceptions import ConflictError
 from app.database.session import create_engine, create_session_factory
 from app.integrations.providers import build_default_registry
 from app.models import AgentTask, AgentTaskOutbox, AgentTaskRun
@@ -179,9 +180,21 @@ class AgentTaskWorker:
                 try:
                     run = await service.start_run(company_id, task_id, worker_id=self.worker_id)
                 except ConflictError:
-                    if task.status in {"completed", "cancelled", "running"}:
+                    if task.status in {"completed", "cancelled"}:
                         outbox.status = "delivered"
                         outbox.locked_at = None
+                        await session.commit()
+                        return
+                    if task.status == "running":
+                        # The previous owner may still be executing after a transient
+                        # lease loss. Do not consume the delivery: let it finish, or
+                        # let stale-run recovery fence it after the run heartbeat expires.
+                        outbox.status = "pending"
+                        outbox.worker_id = None
+                        outbox.locked_at = None
+                        outbox.available_at = datetime.now(UTC) + timedelta(
+                            seconds=max(self.poll_interval * 5, 5)
+                        )
                         await session.commit()
                         return
                     raise
