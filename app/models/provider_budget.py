@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Numeric,
     String,
@@ -52,6 +53,12 @@ class ProviderUsageRecord(Base):
     __tablename__ = "provider_usage_records"
     __table_args__ = (
         UniqueConstraint("company_id", "idempotency_key", name="uq_provider_usage_company_idempotency"),
+        ForeignKeyConstraint(
+            ["task_id", "company_id"],
+            ["agent_tasks.id", "agent_tasks.company_id"],
+            ondelete="CASCADE",
+            name="fk_provider_usage_task_company",
+        ),
         CheckConstraint(
             "status IN ('reserved', 'settled', 'unknown', 'failed')",
             name="ck_provider_usage_status_valid",
@@ -68,6 +75,7 @@ class ProviderUsageRecord(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     provider_id: Mapped[str] = mapped_column(String(80), nullable=False)
     operation: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
