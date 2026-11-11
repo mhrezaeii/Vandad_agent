@@ -67,3 +67,13 @@ class ProviderUsageRead(BaseModel):
     started_at: datetime
     completed_at: datetime | None
     created_at: datetime
+
+
+class SceneVideoProviderRead(BaseModel):
+    provider_id: str
+    display_name: str
+    requires_network: bool
+    supports_lipsync: bool
+    supports_reference_image: bool
+    supports_cancellation: bool
+    daily_quota: int | None = None
