@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import AgentRegistry, UnknownAgentError
+from app.agents.contracts import validate_capability_payload
 from app.core.exceptions import ConflictError, NotFoundError, UnprocessableEntityError
 from app.models import ActorType, AgentTask, AgentTaskEvent, AgentTaskOutbox, AgentTaskRun, CompanyAgent
 from app.models.agent_task import AgentTaskStatus
@@ -119,6 +120,12 @@ class AgentTaskService:
                 "The requested capability is not registered for this agent.",
                 details=[{"field": "capability", "value": capability}],
             )
+        try:
+            input_payload = validate_capability_payload(agent_key, capability, input_payload)
+        except ValueError as exc:
+            raise UnprocessableEntityError(
+                "Input payload does not match the registered capability contract."
+            ) from exc
 
         agent = await self.session.scalar(
             select(CompanyAgent).where(
