@@ -15,9 +15,18 @@ def test_monitoring_discovery_payload_is_normalized_and_bounded():
     payload = validate_capability_payload(
         "monitoring",
         "platform.discover",
-        {"platform_id": str(platform_id), "max_pages": 99},
+        {"platform_id": str(platform_id), "max_pages": 25},
     )
     assert payload == {"platform_id": str(platform_id), "max_pages": 99}
+
+
+def test_monitoring_discovery_rejects_out_of_range_limits():
+    with pytest.raises(ValueError, match="capability contract"):
+        validate_capability_payload(
+            "monitoring",
+            "platform.discover",
+            {"platform_id": str(uuid.uuid4()), "max_pages": 99},
+        )
 
 
 def test_monitoring_discovery_rejects_unknown_fields():
