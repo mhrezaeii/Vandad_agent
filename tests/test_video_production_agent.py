@@ -8,7 +8,7 @@ import pytest
 
 from app.agents.runtime import AgentExecutionContext, VideoProductionAgentHandler
 from app.core.exceptions import ConflictError, NotFoundError
-from app.models import Company, ContentBrand, ContentProject
+from app.models import Company, ContentBrand, ContentProject, WorkflowExecution
 
 
 def _context(company_id, project_id, session_factory):
@@ -75,6 +75,37 @@ async def test_video_agent_requires_project_approval(db_session, session_factory
             "video.scene.generate",
             _context(company.id, project.id, session_factory),
         )
+
+
+async def test_video_agent_replays_existing_workflow_after_worker_restart(
+    db_session, session_factory
+):
+    company = Company(name="Video Replay", slug=f"video-replay-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="scene-video-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.flush()
+    project = await _project_for_company(
+        db_session,
+        company.id,
+        status="assembling",
+        video_mode="scene",
+    )
+    project.video_workflow_execution_id = execution.id
+    await db_session.commit()
+
+    result = await VideoProductionAgentHandler().execute(
+        "video.scene.generate",
+        _context(company.id, project.id, session_factory),
+    )
+    assert result["replayed"] is True
+    assert result["workflow_execution_id"] == str(execution.id)
 
 
 async def test_video_agent_rejects_mismatched_pipeline_mode(db_session, session_factory):
