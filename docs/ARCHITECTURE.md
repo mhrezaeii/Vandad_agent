@@ -26,8 +26,9 @@ FastAPI API / authentication / company scope
         |                 |
         |                 +--> Monitoring Handler [IMPLEMENTED]
         |                 +--> Content Scenario Handler [IMPLEMENTED]
-        |                 +--> Tool/Capability Router [NEXT]
-        |                 +--> Approval Policies [PARTIAL]
+        |                 +--> Video Production Handler [IMPLEMENTED]
+        |                 +--> Tool/Capability Router [IMPLEMENTED]
+        |                 +--> Approval Policies [IMPLEMENTED]
         |
         +--> Workflow API / Workflow Engine
         |       +--> Workflow Versions and Validation
@@ -99,11 +100,13 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 | Agent catalog and company enablement | Implemented on feature stack | Definitions are code-owned; company rows only enable approved agents |
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
 | Agent dispatcher and dedicated worker | Implemented on feature stack | Monitoring and Content scenario handlers; reliability hardening under validation |
-| Provider budgets, cost ledger and deterministic routing | Not implemented | Required before enabling paid autonomous operations |
+| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, LLM usage settlement and paid video reservations; unknown costs remain reserved |
+| Provider health/latency/error telemetry | Partial | LLM latency, attempts and usage are recorded; provider health history and reconciliation remain |
+| Deterministic provider/model routing and fallback | Partial | Explicit connection/model selection exists; ordered fallback and cross-provider capability negotiation remain |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
 | Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
 | Talking-avatar local renderer | Utility script exists | Local runtime/model assets are not source-controlled |
-| Polished web UI | Not implemented | Build only after task, run, provider and artifact API contracts stabilize |
+| Web UI | Initial implementation | Persian RTL Next.js operator console under `web/`; visual/accessibility hardening and production identity/RBAC remain |
 
 ## Required security and reliability invariants
 
@@ -132,7 +135,7 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 - [x] Stale-run recovery with heartbeat recheck and bounded retry.
 - [x] Bounded graceful shutdown and persisted error redaction.
 - [ ] Failure-injection and full CI validation before merge/deployment.
-- [x] Durable task lifecycle/progress events, JSON event history and authenticated SSE stream.
+- [x] Durable task lifecycle/progress events, JSON event history and company-scoped SSE stream.
 - [x] Explicit code-owned Tool/Capability Router for every registered handler/capability pair.
 - [ ] Tenant-isolated end-to-end tests for every dispatch-ready agent.
 - [ ] Aggregate failure-injection and full CI acceptance before merge/deployment.
@@ -158,7 +161,7 @@ Paid autonomous execution remains gated until these controls are implemented and
 - [ ] Provider settlement callback from completed media jobs into the usage ledger; current paid-video reservation remains conservative until reconciliation.
 - [ ] Mock-provider integration coverage and opt-in live smoke tests with spend ceilings.
 
-### P3 — Web UI (not started)
+### P3 — Web UI (initial implementation)
 
 A separate Next.js + TypeScript frontend has been added under `web/` and consumes the public API. It is Persian-first, RTL and responsive. It is an initial operator console; visual polish, accessibility review, user authentication/RBAC and full production deployment remain before P3 acceptance.
 
