@@ -196,3 +196,102 @@ async def test_agent_worker_recovers_stale_run_and_fences_previous_owner(
             )
     finally:
         await worker.engine.dispose()
+
+
+
+async def test_worker_acknowledges_duplicate_delivery_after_task_completion(
+    company_and_platform, db_session
+):
+    company, _ = company_and_platform
+    outbox = await _create_dispatchable_task(db_session, company)
+    service = AgentTaskService(db_session, build_default_agent_registry())
+    run = await service.start_run(company.id, outbox.task_id, worker_id="original-worker")
+    await service.complete_run(
+        company.id, outbox.task_id, run.id,
+        result_payload={"accepted": True}, worker_id="original-worker",
+    )
+    await db_session.commit()
+
+    worker = AgentTaskWorker()
+
+    class MustNotDispatch:
+        async def dispatch(self, agent_key, capability, context):
+            raise AssertionError("A completed task must not execute again.")
+
+    worker.dispatcher = MustNotDispatch()
+    try:
+        claimed_id = await worker._claim_one()
+        assert claimed_id == outbox.id
+
+        await worker._process(claimed_id)
+
+        task = await db_session.get(AgentTask, outbox.task_id)
+        await db_session.refresh(task)
+        await db_session.refresh(outbox)
+        assert task.status == "completed"
+        assert task.result_payload == {"accepted": True}
+        assert outbox.status == "delivered"
+    finally:
+        await worker.engine.dispose()
+
+
+async def test_monitoring_worker_cannot_access_another_company_platform(
+    company_and_platform, db_session
+):
+    from app.models import Company, Platform
+
+    company, _ = company_and_platform
+    foreign_company = Company(
+        name="Foreign Tenant",
+        slug=f"foreign-tenant-{uuid.uuid4().hex[:8]}",
+    )
+    db_session.add(foreign_company)
+    await db_session.flush()
+    foreign_platform = Platform(
+        company_id=foreign_company.id,
+        name="Foreign Admin",
+        slug=f"foreign-admin-{uuid.uuid4().hex[:8]}",
+        platform_type="admin_panel",
+    )
+    db_session.add(foreign_platform)
+    db_session.add(
+        CompanyAgent(company_id=company.id, agent_key="monitoring", status="active")
+    )
+    await db_session.flush()
+
+    service = AgentTaskService(db_session, build_default_agent_registry())
+    task = await service.create_task(
+        company.id,
+        requested_by="tenant-isolation-test",
+        agent_key="monitoring",
+        capability="platform.discover",
+        title="Attempt cross-tenant platform access",
+        input_payload={"platform_id": str(foreign_platform.id)},
+        idempotency_key=f"cross-tenant-{uuid.uuid4()}",
+        priority=50,
+        max_attempts=1,
+    )
+    await db_session.commit()
+    outbox = await db_session.scalar(
+        select(AgentTaskOutbox).where(AgentTaskOutbox.task_id == task.id)
+    )
+    assert outbox is not None
+
+    worker = AgentTaskWorker()
+    try:
+        claimed_id = await worker._claim_one()
+        assert claimed_id == outbox.id
+        await worker._process(claimed_id)
+
+        await db_session.refresh(task)
+        await db_session.refresh(outbox)
+        runs = list((await db_session.scalars(
+            select(AgentTaskRun).where(AgentTaskRun.task_id == task.id)
+        )).all())
+        assert task.status == "failed"
+        assert task.error_code == "not_found"
+        assert len(runs) == 1
+        assert runs[0].status == "failed"
+        assert outbox.status == "delivered"
+    finally:
+        await worker.engine.dispose()
