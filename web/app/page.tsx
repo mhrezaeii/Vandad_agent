@@ -205,6 +205,7 @@ export default function HomePage() {
             headers: streamHeaders,
             signal: controller.signal,
             cache: "no-store",
+            credentials: "include",
           });
           if (!response.ok || !response.body) throw new Error(`SSE request failed (${response.status})`);
           const reader = response.body.getReader();
