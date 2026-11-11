@@ -17,6 +17,7 @@ from app.models import Platform, PlatformConnection, PlatformKnowledgeSnapshot, 
 from app.schemas.platform_knowledge import PlatformKnowledgePayload
 from app.security.crypto import MasterKeyBox
 from app.services.credential_service import CredentialService
+from app.services.provider_budget_service import ProviderBudgetService
 
 
 class PlatformKnowledgeExtractionError(Exception):
@@ -172,11 +173,33 @@ class PlatformKnowledgeService:
             timeout_seconds=180.0,
             operation="execute",
         )
+        budget_key = hashlib.sha256(
+            f"{platform.company_id}:{platform.id}:{connection_id}:{system}:{user}".encode("utf-8")
+        ).hexdigest()
+        budget_service = ProviderBudgetService(self.session)
+        reservation = await budget_service.reserve(
+            platform.company_id,
+            adapter.provider_id,
+            "platform.knowledge.extract",
+            idempotency_key=f"knowledge:{budget_key}",
+            model=str(context.configuration.get("model") or "") or None,
+        )
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
+            await budget_service.settle(reservation, error_code=error.code or "llm_failure")
             raise PlatformKnowledgeExtractionError(error.message, code=error.code or "llm_failure")
         metadata = outcome.result.metadata or {}
+        usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else metadata
+        await budget_service.settle(
+            reservation,
+            usage={
+                **usage,
+                "model": metadata.get("model") or context.configuration.get("model"),
+                "latency_ms": outcome.result.latency_ms,
+                "attempts": outcome.attempts,
+            },
+        )
         raw = metadata.get("content")
         allowed_urls = {document.url for document in documents}
         knowledge = _parse_payload(raw, allowed_urls)
