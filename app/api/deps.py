@@ -222,11 +222,10 @@ async def get_workflow_execution_service(request: Request) -> AsyncIterator[Work
 async def company_scope(request: Request) -> CompanyScope:
     """Resolve and authorize the acting company for the request.
 
-    The company context arrives via the ``X-Company-ID`` header. Requests
-    without it resolve to the default company. Authorization is enforced by
-    ``authorize_company_access`` — the single decision point. The acting
-    principal always comes from ``app.state`` (never from request parameters,
-    so it can never be spoofed or accidentally treated as a request body).
+    The company context arrives via ``X-Company-ID``. In staging/production,
+    a verified identity-proxy principal supplies memberships and roles; a
+    single-company user may omit the header. Local development resolves the
+    default company and uses the configured bootstrap principal.
     """
     acting_principal: Principal = get_principal(request)
     raw_company_id = request.headers.get("X-Company-ID")
