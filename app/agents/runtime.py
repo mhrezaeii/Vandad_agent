@@ -335,11 +335,12 @@ class VideoProductionAgentHandler:
                 raise ConflictError("Unsupported video production capability.")
 
             cost_metadata = updated.cost_metadata or {}
+            effective_provider_id = updated.scene_video_provider or provider_id
             await context.report_progress(
                 "video.workflow.dispatched",
                 project_id=str(updated.id),
                 workflow_execution_id=str(updated.video_workflow_execution_id),
-                provider_id=provider_id,
+                provider_id=effective_provider_id,
                 cost_status=cost_metadata.get("status", "budget_check_pending"),
             )
             await session.commit()
@@ -348,7 +349,7 @@ class VideoProductionAgentHandler:
                 "project_id": str(updated.id),
                 "project_status": updated.status,
                 "workflow_execution_id": str(updated.video_workflow_execution_id),
-                "provider_id": provider_id,
+                "provider_id": effective_provider_id,
                 "budget_reservation_id": cost_metadata.get("budget_reservation_id"),
                 "cost_status": cost_metadata.get("status", "budget_check_pending"),
             }
