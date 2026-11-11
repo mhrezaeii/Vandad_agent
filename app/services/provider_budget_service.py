@@ -137,7 +137,10 @@ class ProviderBudgetService:
             # request. Keep the ceiling reserved until an operator reconciles it.
             record.status = "unknown"
             record.error_code = error_code[:100]
-            record.usage_payload = {"provider_error_code": record.error_code}
+            record.usage_payload = {
+                **_safe_usage(usage or {}),
+                "provider_error_code": record.error_code,
+            }
             record.completed_at = now
         else:
             safe = _safe_usage(usage or {})
