@@ -190,13 +190,17 @@ async def test_video_task_requires_approval_before_outbox_dispatch(client, db_se
         agent_key="video",
         capability="video.scene.generate",
         title="Generate approved scene video",
-        input_payload={"project_id": str(uuid.uuid4())},
+        input_payload={
+            "project_id": str(uuid.uuid4()),
+            "provider_fallbacks": ["apimaster", "generic_http"],
+        },
         idempotency_key=f"video-{uuid.uuid4()}",
     )
     created = await client.post("/api/v1/agent-tasks", json=payload)
     assert created.status_code == 202, created.text
     body = created.json()
     assert body["status"] == "awaiting_approval"
+    assert body["input_payload"]["provider_fallbacks"] == ["apimaster", "generic_http"]
 
     outbox_before = await db_session.scalar(
         select(AgentTaskOutbox).where(AgentTaskOutbox.task_id == uuid.UUID(body["id"]))
