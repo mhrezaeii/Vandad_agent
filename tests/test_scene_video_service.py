@@ -233,8 +233,10 @@ async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
             height=1920,
             brand_context={"name": "Vandad"},
         )
-    persisted_job_id = project.provider_job_id
+    persisted_job_id = project.assembly_metadata["composition_job_id"]
     assert persisted_job_id
+    assert project.provider_job_id is None
+    assert project.submission_metadata is None
     await db_session.commit()
 
     artifact, metadata = await service.finalize_project_video(
@@ -251,6 +253,8 @@ async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
     assert metadata["service"] == "ai_provider"
     assert metadata["mode"] == "ai_composition"
     assert metadata["provider_job_id"] == persisted_job_id
+    assert metadata["production_path"] == "ai_provider_composition"
+    assert project.provider_job_id is None
     assert artifact.content_type == "video/mp4"
     assert artifact.size_bytes > 0
     assert len(provider.jobs) == len(jobs) + 1
