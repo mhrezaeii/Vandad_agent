@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.agents import build_default_agent_registry
 from app.core.exceptions import ConflictError
+from app.integrations.providers.base import ProviderTransientError
 from app.models import AgentTask, AgentTaskOutbox, AgentTaskRun, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
 from app.workers.agent_worker import AgentTaskWorker
@@ -95,7 +96,7 @@ async def test_agent_worker_failure_is_persisted_and_requeued(
 
     class FailingDispatcher:
         async def dispatch(self, agent_key, capability, context):
-            raise RuntimeError("simulated provider failure")
+            raise ProviderTransientError("simulated provider failure", code="provider_timeout")
 
     worker.dispatcher = FailingDispatcher()
     try:
