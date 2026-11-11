@@ -8,8 +8,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps import company_scope, get_platform_service, pagination_params
-from app.security.authorization import CompanyScope
 from app.schemas.platform import PlatformCreate, PlatformListResponse, PlatformRead, PlatformUpdate
+from app.security.authorization import CompanyScope
 from app.services.platform_service import PlatformService
 
 router = APIRouter(prefix="/platforms", tags=["platforms"])
