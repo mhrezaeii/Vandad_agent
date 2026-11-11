@@ -177,3 +177,39 @@ async def test_budget_api_rejects_unregistered_provider(client, company_and_plat
         },
     )
     assert response.status_code == 404
+
+
+
+async def test_unknown_usage_can_be_audited_and_reconciled(db_session):
+    company = Company(name="Reconciliation", slug=f"reconcile-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        company.id,
+        "apimaster",
+        monthly_limit_usd=Decimal("20.00"),
+        per_operation_limit_usd=Decimal("5.00"),
+    )
+    reservation = await service.reserve(
+        company.id,
+        "apimaster",
+        "content.scene.generate_video",
+        idempotency_key=f"reconcile-{uuid.uuid4()}",
+        require_budget=True,
+    )
+    assert reservation is not None
+    await service.settle(reservation, usage={})
+    assert reservation.status == "unknown"
+
+    reconciled = await service.reconcile_usage(
+        company.id,
+        reservation.id,
+        actual_cost_usd=Decimal("3.75"),
+        note="Verified against the provider invoice.",
+        reconciled_by="operator-1",
+    )
+    assert reconciled.status == "settled"
+    assert reconciled.actual_cost_usd == Decimal("3.75")
+    assert reconciled.reserved_amount_usd == Decimal("0")
+    assert reconciled.usage_payload["operator_reconciled"] is True
