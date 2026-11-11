@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from app.agents.definitions import AgentDefinition, BUILTIN_AGENT_DEFINITIONS
+from app.agents.definitions import BUILTIN_AGENT_DEFINITIONS, AgentDefinition
 
 
 class UnknownAgentError(LookupError):
