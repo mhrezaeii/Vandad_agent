@@ -22,6 +22,7 @@ from app.schemas.provider import (
     ProviderUsageRead,
     ProviderUsageReconcile,
     SceneVideoProviderRead,
+    SceneVideoModelRead,
 )
 from app.services.provider_budget_service import ProviderBudgetService
 
@@ -159,12 +160,35 @@ async def list_scene_video_providers(
         SceneVideoProviderRead(
             provider_id=provider.provider_id,
             display_name=provider.display_name,
+            model_id=provider.model_id,
             requires_network=provider.requires_network,
             supports_lipsync=provider.supports_lipsync,
             supports_reference_image=provider.supports_reference_image,
             supports_cancellation=provider.supports_cancellation,
             supports_composition=provider.supports_composition,
             daily_quota=provider.quota_limit_per_day(),
+        )
+        for provider in registry.list_providers()
+    ]
+
+
+@router.get("/scene-video/models", response_model=list[SceneVideoModelRead])
+async def list_scene_video_models(
+    request: Request,
+    _principal: Annotated[object, Depends(get_principal)],
+) -> list[SceneVideoModelRead]:
+    """Return configured model capabilities without inventing unknown constraints."""
+    registry = getattr(request.app.state, "scene_video_registry", None)
+    if registry is None:
+        return []
+    return [
+        SceneVideoModelRead(
+            provider_id=provider.provider_id,
+            model_id=provider.model_id,
+            supports_lipsync=provider.supports_lipsync,
+            supports_reference_image=provider.supports_reference_image,
+            supports_cancellation=provider.supports_cancellation,
+            supports_composition=provider.supports_composition,
         )
         for provider in registry.list_providers()
     ]
