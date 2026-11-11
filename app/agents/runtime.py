@@ -317,7 +317,11 @@ class VideoProductionAgentHandler:
             )
             if capability == "video.scene.generate":
                 updated = await service.generate_scene_video(
-                    project_id, scope=scope, provider_id=provider_id, task_id=context.task_id
+                    project_id,
+                    scope=scope,
+                    provider_id=provider_id,
+                    task_id=context.task_id,
+                    provider_fallbacks=context.payload.get("provider_fallbacks"),
                 )
             elif capability == "video.avatar.generate":
                 try:
