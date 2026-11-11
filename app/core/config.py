@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     scene_video_apimaster_api_key: str | None = None
     scene_video_apimaster_base_url: str = "https://apimaster.ai"
     scene_video_apimaster_model: str = "wan3.0-video-prime"
+    scene_video_apimaster_route: Literal["gmi", "native"] = "gmi"
     scene_video_apimaster_resolution: Literal["480P", "720P", "1080P"] = "720P"
     scene_video_apimaster_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     scene_video_apimaster_download_allowed_hosts: str = ""
