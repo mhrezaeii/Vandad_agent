@@ -207,6 +207,21 @@ class AgentTaskWorker:
             heartbeat_task = asyncio.create_task(
                 self._heartbeat(task_id, run_id, outbox_id, cancel_event)
             )
+            async def persist_progress(stage: str, details: dict) -> None:
+                async with self.session_factory() as progress_session:
+                    active_task = await progress_session.get(AgentTask, task_id)
+                    active_run = await progress_session.get(AgentTaskRun, run_id)
+                    if (
+                        active_task is None or active_task.status != "running"
+                        or active_run is None or active_run.status != "running"
+                        or active_run.worker_id != self.worker_id
+                    ):
+                        raise ConflictError("Agent run ownership changed before progress could be recorded.")
+                    await AgentTaskService(progress_session, self.agent_registry)._record_event(
+                        active_task, "progress", {"stage": stage, **details}
+                    )
+                    await progress_session.commit()
+
             context = AgentExecutionContext(
                 company_id=company_id, task_id=task_id, run_id=run_id,
                 worker_id=self.worker_id, payload=payload,
@@ -215,6 +230,7 @@ class AgentTaskWorker:
                 provider_executor=self.provider_executor,
                 master_key_box=self.master_key_box,
                 cancel_event=cancel_event,
+                progress_callback=persist_progress,
             )
             result = await self.dispatcher.dispatch(agent_key, capability, context)
             context.raise_if_cancelled()
