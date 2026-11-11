@@ -6,7 +6,7 @@ start_run refuses to execute until the selected agent definition is dispatch-rea
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import AgentRegistry, UnknownAgentError
 from app.core.exceptions import ConflictError, NotFoundError, UnprocessableEntityError
-from app.models import ActorType, AgentTask, AgentTaskRun, CompanyAgent
+from app.models import ActorType, AgentTask, AgentTaskOutbox, AgentTaskRun, CompanyAgent
 from app.models.agent_task import AgentTaskStatus
 from app.services.audit_service import AuditService
 
@@ -87,7 +87,7 @@ class AgentTaskService:
             requested_by=requested_by,
             priority=priority,
             max_attempts=max_attempts,
-            status=AgentTaskStatus.PENDING.value,
+            status=(AgentTaskStatus.QUEUED.value if definition.dispatch_ready else AgentTaskStatus.PENDING.value),
         )
         self.session.add(task)
         try:
@@ -107,6 +107,15 @@ class AgentTaskService:
                 ):
                     return existing
             raise ConflictError("Task creation conflicted with another request.") from exc
+
+        if definition.dispatch_ready:
+            self.session.add(AgentTaskOutbox(
+                task_id=task.id,
+                company_id=company_id,
+                attempt_number=1,
+                payload={"agent_key": agent_key, "capability": capability},
+            ))
+            await self.session.flush()
 
         self.audit.record(
             event_type="agent.task.created",
@@ -184,7 +193,10 @@ class AgentTaskService:
         )
         return task
 
-    async def retry_task(self, company_id: uuid.UUID, task_id: uuid.UUID, *, requested_by: str) -> AgentTask:
+    async def retry_task(
+        self, company_id: uuid.UUID, task_id: uuid.UUID, *, requested_by: str,
+        delay_seconds: float = 0,
+    ) -> AgentTask:
         task = await self.session.scalar(
             select(AgentTask).where(
                 AgentTask.id == task_id, AgentTask.company_id == company_id
@@ -196,11 +208,21 @@ class AgentTaskService:
             raise ConflictError("Only failed tasks can be retried.")
         if task.attempt_count >= task.max_attempts:
             raise ConflictError("The task has reached its maximum number of attempts.")
+        definition = self.registry.get(task.agent_key)
+        if not definition.dispatch_ready:
+            raise ConflictError("The selected agent is not dispatch-ready yet.")
         task.status = AgentTaskStatus.QUEUED.value
         task.cancel_requested = False
         task.completed_at = None
         task.error_code = None
         task.error_message = None
+        self.session.add(AgentTaskOutbox(
+            task_id=task.id,
+            company_id=company_id,
+            attempt_number=task.attempt_count + 1,
+            available_at=datetime.now(UTC) + timedelta(seconds=max(0, delay_seconds)),
+            payload={"agent_key": task.agent_key, "capability": task.capability},
+        ))
         await self.session.flush()
         self.audit.record(
             event_type="agent.task.requeued",

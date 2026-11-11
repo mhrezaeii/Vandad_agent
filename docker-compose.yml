@@ -78,6 +78,32 @@ services:
       retries: 3
       start_period: 15s
 
+  agent-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
+    command: ["python", "-m", "app.workers.agent_main"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-3}
+      AGENT_WORKER_POLL_INTERVAL: ${AGENT_WORKER_POLL_INTERVAL:-1}
+      AGENT_WORKER_LEASE_SECONDS: ${AGENT_WORKER_LEASE_SECONDS:-120}
+    env_file:
+      - .env
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:

@@ -25,6 +25,7 @@ BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
         description="کشف پلتفرم‌ها، رصد تغییرات و آماده‌سازی دانش مستند به منبع.",
         capabilities=("platform.discover", "platform.change.detect", "platform.knowledge.extract"),
         maturity="partial",
+        dispatch_ready=True,
     ),
     AgentDefinition(
         key="browser_identity",
