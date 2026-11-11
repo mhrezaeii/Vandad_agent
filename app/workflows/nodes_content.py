@@ -174,10 +174,49 @@ async def _run_provider_operation(
         operation=operation,
         timeout_seconds=timeout_seconds,
     )
+    budget_reservation = None
+    budget_service = None
+    if operation in {"submit_video", "create_photo_avatar", "train_photo_avatar"}:
+        from app.services.provider_budget_service import ProviderBudgetService  # noqa: PLC0415
+
+        raw_task_id = (execution.input_metadata or {}).get("agent_task_id")
+        task_id = uuid.UUID(str(raw_task_id)) if raw_task_id else None
+        budget_service = ProviderBudgetService(engine.session)
+        budget_reservation = await budget_service.reserve(
+            execution.company_id,
+            adapter.provider_id,
+            f"heygen.{operation}",
+            idempotency_key=f"workflow:{execution.id}:{node.node_key}",
+            model=str(context.configuration.get("model") or "") or None,
+            require_budget=True,
+            task_id=task_id,
+        )
+        # Commit the reservation before the provider boundary. A crash or
+        # ambiguous response must remain visible as reserved/unknown spend.
+        await engine.session.commit()
+
     outcome = await engine.executor.run(adapter, context, adapter.execute, idempotent=spec_idempotent(node))
     if not outcome.success:
+        if budget_service is not None and budget_reservation is not None:
+            await budget_service.settle(
+                budget_reservation,
+                error_code=(outcome.error.code if outcome.error else "provider_operation_failed"),
+                usage={"attempts": outcome.attempts},
+            )
         raise outcome.error or ProviderError("The provider operation failed.")
-    return outcome.result.metadata or {}
+    metadata = outcome.result.metadata or {}
+    if budget_service is not None and budget_reservation is not None:
+        usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
+        await budget_service.settle(
+            budget_reservation,
+            usage={
+                **usage,
+                "model": metadata.get("model") or context.configuration.get("model"),
+                "latency_ms": outcome.result.latency_ms,
+                "attempts": outcome.attempts,
+            },
+        )
+    return metadata
 
 
 def spec_idempotent(node: WorkflowNode) -> bool:
