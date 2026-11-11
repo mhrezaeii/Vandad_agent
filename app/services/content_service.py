@@ -1109,7 +1109,11 @@ class ContentService:
                 and bool(scene.get("dialogue") or scene.get("narration"))
                 for scene in scenario_scenes
             )
-            fallback_ids = provider_fallbacks if provider_fallbacks is not None else options.get("provider_fallbacks", [])
+            fallback_ids = (
+                provider_fallbacks
+                if provider_fallbacks is not None
+                else options.get("provider_fallbacks", [])
+            )
             ordered_ids = [selected_provider]
             if isinstance(fallback_ids, list):
                 ordered_ids.extend(
