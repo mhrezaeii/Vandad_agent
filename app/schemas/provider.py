@@ -86,6 +86,7 @@ class SceneVideoProviderRead(BaseModel):
     supports_lipsync: bool
     supports_reference_image: bool
     supports_cancellation: bool
+    supports_composition: bool
     daily_quota: int | None = None
 
 
