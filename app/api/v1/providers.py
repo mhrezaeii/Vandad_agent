@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.deps import company_scope, get_provider_registry, require_company_admin
+from app.api.deps import company_scope, get_principal, get_provider_registry, require_company_admin
 from app.integrations.providers import ProviderRegistry, UnknownProviderError
 from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderHealthRead, ProviderRead, ProviderUsageRead, ProviderUsageReconcile, SceneVideoProviderRead
 from app.services.provider_budget_service import ProviderBudgetService
@@ -135,7 +135,10 @@ async def reconcile_provider_usage(
 
 
 @router.get("/scene-video", response_model=list[SceneVideoProviderRead])
-async def list_scene_video_providers(request: Request) -> list[SceneVideoProviderRead]:
+async def list_scene_video_providers(
+    request: Request,
+    _principal: Annotated[object, Depends(get_principal)],
+) -> list[SceneVideoProviderRead]:
     registry = getattr(request.app.state, "scene_video_registry", None)
     if registry is None:
         return []
