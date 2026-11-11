@@ -11,7 +11,12 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import or_, select
 
 from app.agents import build_default_agent_registry
-from app.agents.runtime import (\n    AgentDispatcher,\n    AgentExecutionContext,\n    ContentAgentHandler,\n    MonitoringAgentHandler,\n)
+from app.agents.runtime import (
+    AgentDispatcher,
+    AgentExecutionContext,
+    ContentAgentHandler,
+    MonitoringAgentHandler,
+)
 from app.api.deps import build_provider_executor
 from app.core.config import get_settings
 from app.database.session import create_engine, create_session_factory
@@ -36,7 +41,9 @@ class AgentTaskWorker:
         self.provider_registry = build_default_registry()
         self.provider_executor = build_provider_executor(self.settings)
         self.master_key_box = MasterKeyBox.from_settings(self.settings)
-        self.dispatcher = AgentDispatcher(\n            self.agent_registry, [MonitoringAgentHandler(), ContentAgentHandler()]\n        )
+        self.dispatcher = AgentDispatcher(
+            self.agent_registry, [MonitoringAgentHandler(), ContentAgentHandler()]
+        )
         self.stopping = asyncio.Event()
         self.inflight: set[asyncio.Task] = set()
         self.slots = asyncio.Semaphore(self.concurrency)
