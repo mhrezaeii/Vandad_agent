@@ -3,7 +3,9 @@ export type ApiError = { detail?: string | { message?: string }[] };
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1").replace(/\/$/, "");
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const companyId = typeof window !== "undefined" ? window.localStorage.getItem("vandad.companyId") : null;
+  const companyId = typeof window !== "undefined"
+    ? window.localStorage.getItem("vandad.companyId") || process.env.NEXT_PUBLIC_COMPANY_ID || null
+    : process.env.NEXT_PUBLIC_COMPANY_ID || null;
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
