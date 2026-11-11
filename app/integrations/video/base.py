@@ -1,13 +1,12 @@
 """Provider-neutral scene-video generation contract.
 
-The scene pipeline never talks to a vendor directly. It submits one request per scene,
-polls persisted provider jobs, retrieves generated clips, and requests provider-side
-composition for the final video.
+The scene pipeline never talks to a vendor directly. It submits scene-generation
+and final-composition requests, polls persisted provider jobs, retrieves media,
+and validates the final provider-produced video.
 
-Nothing in this module is vendor-specific: concrete adapters (``mock`` and the
-generic HTTP adapter) implement the same four operations required by the
-pipeline — ``generate_video``, ``get_generation_status``, ``retrieve_video``
-and ``validate_output``.
+Nothing in this module is vendor-specific: concrete adapters implement the
+provider contract, including ``generate_video``, ``compose_video``,
+``get_generation_status``, ``retrieve_video`` and ``validate_output``.
 """
 
 from __future__ import annotations
@@ -98,7 +97,7 @@ class SceneGenerationStatus:
 
 @dataclass(frozen=True)
 class SceneVideoValidation:
-    """Result of validating a downloaded clip before assembly."""
+    """Result of validating provider-generated media before artifact finalization."""
 
     ok: bool
     size_bytes: int
