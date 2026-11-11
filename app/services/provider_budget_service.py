@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError
 from app.models import CompanyProviderBudget, ProviderUsageRecord
 
 
@@ -67,7 +67,7 @@ class ProviderBudgetService:
         if existing is not None:
             if existing.provider_id != provider_id or existing.operation != operation:
                 raise ConflictError("Provider usage idempotency key was reused for a different operation.")
-            return existing
+            raise ConflictError("This provider operation already has a usage reservation; duplicate paid execution is blocked.")
 
         budget = await self.session.scalar(
             select(CompanyProviderBudget).where(
