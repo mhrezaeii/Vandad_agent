@@ -102,6 +102,9 @@ class AgentService:
             previous_status = agent.status
             agent.status = status
             await self.session.flush()
+            # TimestampMixin uses a SQL expression for onupdate; refresh before
+            # response serialization so async ORM access never triggers implicit IO.
+            await self.session.refresh(agent)
             self.audit.record(
                 event_type="agent.status_changed",
                 action="change_status",
