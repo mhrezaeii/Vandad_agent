@@ -133,3 +133,47 @@ def test_cost_parser_only_accepts_usd_denominated_values():
     assert parse_reported_cost({"cost": "0.42", "currency": "USD"}) == Decimal("0.42")
     assert parse_reported_cost({"cost": "0.42", "currency": "EUR"}) is None
     assert parse_reported_cost({"cost": "0.42"}) is None
+
+
+
+async def test_budget_api_is_company_scoped(client, db_session):
+    owner = Company(name="Budget API Owner", slug=f"budget-api-owner-{uuid.uuid4().hex[:8]}")
+    stranger = Company(name="Budget API Stranger", slug=f"budget-api-stranger-{uuid.uuid4().hex[:8]}")
+    db_session.add_all([owner, stranger])
+    await db_session.commit()
+
+    owner_headers = {"X-Company-ID": str(owner.id)}
+    stranger_headers = {"X-Company-ID": str(stranger.id)}
+    created = await client.put(
+        "/api/v1/providers/budgets/llm_openai",
+        headers=owner_headers,
+        json={
+            "monthly_limit_usd": "10.00",
+            "per_operation_limit_usd": "2.00",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["provider_id"] == "llm_openai"
+
+    own_list = await client.get("/api/v1/providers/budgets", headers=owner_headers)
+    assert own_list.status_code == 200
+    assert len(own_list.json()) == 1
+
+    foreign_list = await client.get("/api/v1/providers/budgets", headers=stranger_headers)
+    assert foreign_list.status_code == 200
+    assert foreign_list.json() == []
+
+
+async def test_budget_api_rejects_unregistered_provider(client, company_and_platform):
+    company, _ = company_and_platform
+    response = await client.put(
+        "/api/v1/providers/budgets/not-a-provider",
+        headers={"X-Company-ID": str(company.id)},
+        json={
+            "monthly_limit_usd": "10.00",
+            "per_operation_limit_usd": "2.00",
+            "enabled": True,
+        },
+    )
+    assert response.status_code == 404
