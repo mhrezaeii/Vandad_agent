@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.agents import build_default_agent_registry
-from app.models import AgentTaskOutbox, CompanyAgent
+from app.models import AgentTask, AgentTaskOutbox, AgentTaskRun, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
 from app.workers.agent_worker import AgentTaskWorker
 
@@ -80,5 +80,55 @@ async def test_agent_worker_reclaims_an_expired_outbox_lease(
         assert outbox.worker_id == worker.worker_id
         assert outbox.locked_at is not None
         assert outbox.locked_at > datetime.now(UTC) - timedelta(seconds=10)
+    finally:
+        await worker.engine.dispose()
+
+
+async def test_agent_worker_failure_is_persisted_and_requeued(
+    company_and_platform, db_session
+):
+    company, _ = company_and_platform
+    outbox = await _create_dispatchable_task(db_session, company)
+    worker = AgentTaskWorker()
+
+    class FailingDispatcher:
+        async def dispatch(self, agent_key, capability, context):
+            raise RuntimeError("simulated provider failure")
+
+    worker.dispatcher = FailingDispatcher()
+    try:
+        claimed_id = await worker._claim_one()
+        assert claimed_id == outbox.id
+
+        await worker._process(claimed_id)
+
+        task = await db_session.get(AgentTask, outbox.task_id)
+        await db_session.refresh(task)
+        await db_session.refresh(outbox)
+        runs = list(
+            (
+                await db_session.scalars(
+                    select(AgentTaskRun).where(AgentTaskRun.task_id == task.id)
+                )
+            ).all()
+        )
+        deliveries = list(
+            (
+                await db_session.scalars(
+                    select(AgentTaskOutbox)
+                    .where(AgentTaskOutbox.task_id == task.id)
+                    .order_by(AgentTaskOutbox.attempt_number)
+                )
+            ).all()
+        )
+
+        assert task.status == "queued"
+        assert task.attempt_count == 1
+        assert len(runs) == 1
+        assert runs[0].status == "failed"
+        assert deliveries[0].status == "delivered"
+        assert len(deliveries) == 2
+        assert deliveries[1].attempt_number == 2
+        assert deliveries[1].status == "pending"
     finally:
         await worker.engine.dispose()
