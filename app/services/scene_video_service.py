@@ -13,6 +13,7 @@ beyond what the provider or operator configured.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal, InvalidOperation
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -36,12 +37,14 @@ from app.models import (
     ContentProject,
     ProjectStatus,
     ProviderQuotaUsage,
+    ProviderUsageRecord,
     SceneVideoJob,
     SceneVideoJobStatus,
 )
 from app.schemas.scenario import Scenario
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
+from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 from app.storage.base import ArtifactStorage
 
 _SCENE_RESOURCE = "scene_video_job"
@@ -346,6 +349,13 @@ class SceneVideoService:
             status = await provider.get_generation_status(job.provider_job_id)
             job.provider_status = status.state
             job.progress = status.progress
+            reported_cost = parse_reported_cost(status.raw or {})
+            if reported_cost is not None:
+                job.cost_metadata = {
+                    **(job.cost_metadata or {}),
+                    "reported_cost_usd": str(reported_cost),
+                    "provider": provider.provider_id,
+                }
             if status.video_url:
                 job.video_url = status.video_url
             if status.is_completed:
@@ -370,10 +380,57 @@ class SceneVideoService:
                 project.status = ProjectStatus.CANCELLED.value
             else:
                 project.status = ProjectStatus.VIDEO_GENERATED.value
+                await self._settle_project_video_budget(project, jobs)
         else:
             project.status = ProjectStatus.VIDEO_GENERATING.value
         await self.session.flush()
         return summary
+
+    async def _settle_project_video_budget(
+        self, project: ContentProject, jobs: list[SceneVideoJob]
+    ) -> None:
+        """Settle a paid scene reservation only when every clip reports USD cost."""
+        metadata = project.cost_metadata or {}
+        reservation_id = metadata.get("budget_reservation_id")
+        if not reservation_id or not jobs:
+            return
+        try:
+            parsed_id = uuid.UUID(str(reservation_id))
+        except (TypeError, ValueError):
+            return
+        reservation = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.id == parsed_id,
+                ProviderUsageRecord.company_id == project.company_id,
+            ).with_for_update()
+        )
+        if reservation is None or reservation.status == "settled":
+            return
+        costs: list[Decimal] = []
+        for job in jobs:
+            value = (job.cost_metadata or {}).get("reported_cost_usd")
+            if value is None:
+                return
+            try:
+                amount = Decimal(str(value))
+            except (InvalidOperation, ValueError):
+                return
+            if not amount.is_finite() or amount < 0:
+                return
+            costs.append(amount)
+        await ProviderBudgetService(self.session).settle(
+            reservation,
+            usage={
+                "cost_usd": str(sum(costs, Decimal("0"))),
+                "currency": "USD",
+                "model": str(metadata.get("provider_id") or reservation.provider_id),
+            },
+        )
+        project.cost_metadata = {
+            **metadata,
+            "status": "settled",
+            "actual_cost_usd": str(sum(costs, Decimal("0"))),
+        }
 
     # ---------------------------------------------------------------- retrieval
     async def retrieve_completed(
