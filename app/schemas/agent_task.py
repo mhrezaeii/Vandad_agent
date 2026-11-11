@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.security.redaction import redact_text
+
 TaskStatus = Literal[
     "pending", "queued", "awaiting_approval", "running", "completed", "failed", "cancelled"
 ]
@@ -47,6 +49,8 @@ class AgentTaskCreate(BaseModel):
             elif isinstance(item, list):
                 for nested in item:
                     inspect(nested)
+            elif isinstance(item, str) and redact_text(item) != item:
+                raise ValueError("input_payload must not embed credential-like values in text.")
 
         inspect(value)
         return value
