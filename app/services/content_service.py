@@ -811,7 +811,8 @@ class ContentService:
 
     # --------------------------------------------------------- script + video
     async def generate_script(
-        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         project = await self.get_project(project_id, company_id=scope.company_id)
         if project.status not in (ProjectStatus.DRAFT.value, ProjectStatus.SCRIPT_FAILED.value):
@@ -902,7 +903,10 @@ class ContentService:
         execution, _created = await self._execution_service.execute_workflow(
             workflow.id,
             scope=scope,
-            input_metadata={"project_id": str(project.id)},
+            input_metadata={
+                "project_id": str(project.id),
+                "agent_task_id": str(task_id) if task_id else None,
+            },
             idempotency_key=f"video:{project.id}",
             trigger_type=WorkflowTriggerType.API,
             trigger_reference=str(project.id),
