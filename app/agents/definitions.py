@@ -16,6 +16,7 @@ class AgentDefinition:
     capabilities: tuple[str, ...]
     maturity: str
     dispatch_ready: bool = False
+    requires_approval: bool = False
 
 
 BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
@@ -49,5 +50,6 @@ BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
         capabilities=("video.avatar.manage", "video.scene.generate", "video.assemble"),
         maturity="partial",
         dispatch_ready=True,
+        requires_approval=True,
     ),
 )
