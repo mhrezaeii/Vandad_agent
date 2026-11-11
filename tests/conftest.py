@@ -198,7 +198,11 @@ def app(clean_database, engine, session_factory, redis_manager, tmp_path):
     from app.integrations.video import build_scene_video_registry  # noqa: PLC0415
 
     application.state.scene_video_registry = build_scene_video_registry()
-    application.state.principal = Principal(subject="test-runner", company_ids=frozenset({"*"}))
+    application.state.principal = Principal(
+        subject="test-runner",
+        company_ids=frozenset({"*"}),
+        roles=frozenset({"owner", "admin", "operator", "viewer"}),
+    )
     from app.core.queue import WorkflowQueue  # noqa: PLC0415
     from app.storage.local import LocalArtifactStorage  # noqa: PLC0415
 
