@@ -141,7 +141,7 @@ def get_master_key_box(request: Request) -> MasterKeyBox:
 def get_principal(request: Request) -> Principal:
     """Resolve the dev bootstrap identity or a verified production proxy identity."""
     settings = request.app.state.settings
-    if not settings.is_production:
+    if not settings.requires_proxy_auth:
         return request.app.state.principal
 
     configured_secret = settings.auth_proxy_shared_secret
@@ -242,7 +242,7 @@ async def company_scope(request: Request) -> CompanyScope:
                 details=[{"field": "X-Company-ID", "value": raw_company_id}],
             ) from exc
     else:
-        if request.app.state.settings.is_production:
+        if request.app.state.settings.requires_proxy_auth:
             if len(acting_principal.company_ids) != 1:
                 from app.core.exceptions import UnprocessableEntityError
 
