@@ -58,6 +58,7 @@ class AgentTask(Base, TimestampMixin):
         ),
         CheckConstraint("priority BETWEEN 0 AND 100", name="priority_valid"),
         CheckConstraint("attempt_count >= 0 AND max_attempts >= 1", name="attempt_limits_valid"),
+        CheckConstraint("spend_ceiling_usd IS NULL OR spend_ceiling_usd > 0", name="spend_ceiling_positive"),
         CheckConstraint(
             "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
             name="completed_at_after_started_at",
