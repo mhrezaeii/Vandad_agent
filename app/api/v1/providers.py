@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import company_scope, get_provider_registry
 from app.integrations.providers import ProviderRegistry, UnknownProviderError
-from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderRead, ProviderUsageRead, SceneVideoProviderRead
+from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderRead, ProviderUsageRead, ProviderUsageReconcile, SceneVideoProviderRead
 from app.services.provider_budget_service import ProviderBudgetService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
@@ -95,6 +96,30 @@ async def list_provider_usage(
             scope.company_id, provider_id=provider_id, limit=bounded_limit
         )
         return [ProviderUsageRead.model_validate(row) for row in rows]
+
+
+@router.post("/usage/{record_id}/reconcile", response_model=ProviderUsageRead)
+async def reconcile_provider_usage(
+    record_id: uuid.UUID,
+    payload: ProviderUsageReconcile,
+    request: Request,
+    scope: Annotated[object, Depends(company_scope)],
+) -> ProviderUsageRead:
+    async with request.app.state.session_factory() as session:
+        try:
+            row = await ProviderBudgetService(session).reconcile_usage(
+                scope.company_id,
+                record_id,
+                actual_cost_usd=payload.actual_cost_usd,
+                note=payload.note,
+                reconciled_by=scope.principal.subject,
+            )
+            await session.commit()
+            await session.refresh(row)
+            return ProviderUsageRead.model_validate(row)
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.get("/scene-video", response_model=list[SceneVideoProviderRead])
