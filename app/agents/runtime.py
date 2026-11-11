@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from app.agents import AgentRegistry
+from app.agents.contracts import has_capability_contract, validate_capability_payload
 from app.core.exceptions import ConflictError, NotFoundError
 from app.models import Platform
 from app.services.platform_discovery_service import PlatformDiscoveryService
@@ -73,6 +74,10 @@ class AgentCapabilityRouter:
                     raise ValueError(
                         f"Handler '{agent_key}' exposes an unregistered capability."
                     )
+                if not has_capability_contract(agent_key, capability):
+                    raise ValueError(
+                        f"Handler '{agent_key}' capability '{capability}' has no input contract."
+                    )
                 route = (agent_key, capability)
                 if route in self._routes:
                     raise ValueError(f"Duplicate agent capability route: {route!r}.")
@@ -101,6 +106,16 @@ class AgentDispatcher:
 
     async def dispatch(self, agent_key: str, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
         handler = self.router.resolve(agent_key, capability)
+        try:
+            validated_payload = validate_capability_payload(
+                agent_key, capability, context.payload
+            )
+        except ValueError as exc:
+            raise ConflictError(
+                "Agent task payload does not match the registered capability contract."
+            ) from exc
+        if validated_payload != context.payload:
+            context = replace(context, payload=validated_payload)
         result = await handler.execute(capability, context)
         if not isinstance(result, dict):
             raise TypeError("Agent handlers must return a JSON object.")
