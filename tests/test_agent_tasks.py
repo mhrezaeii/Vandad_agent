@@ -94,6 +94,37 @@ async def test_task_progress_events_are_persisted_and_company_scoped(client):
     assert "event: task.cancel_requested" in resumed.text
 
 
+async def test_completed_task_result_is_redacted_before_database_persistence(
+    client, db_session
+):
+    await _activate_agent(client)
+    created = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(idempotency_key=f"result-redaction-{uuid.uuid4()}"),
+    )
+    assert created.status_code == 202, created.text
+    task = await db_session.get(AgentTask, uuid.UUID(created.json()["id"]))
+    service = AgentTaskService(db_session, build_default_agent_registry())
+    run = await service.start_run(task.company_id, task.id, worker_id="redaction-test")
+    await service.complete_run(
+        task.company_id,
+        task.id,
+        run.id,
+        worker_id="redaction-test",
+        result_payload={
+            "message": "api_key=do-not-persist",
+            "nested": [{"access_token": "do-not-persist-either"}],
+            "status": "completed",
+        },
+    )
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    assert task.result_payload["message"] != "api_key=do-not-persist"
+    assert task.result_payload["nested"][0]["access_token"] == "***REDACTED***"
+    assert task.result_payload["status"] == "completed"
+
+
 async def test_progress_events_are_redacted_and_allowlisted(client, db_session):
     await _activate_agent(client)
     created = await client.post("/api/v1/agent-tasks", json=_task_payload(
