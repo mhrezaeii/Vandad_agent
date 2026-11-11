@@ -1,8 +1,8 @@
 """Provider-neutral scene-video generation contract.
 
-The scene pipeline never talks to a vendor directly. It submits one request per
-scene through this interface, polls a persisted provider job id, retrieves the
-clip bytes, and validates them before assembly.
+The scene pipeline never talks to a vendor directly. It submits one request per scene,
+polls persisted provider jobs, retrieves generated clips, and requests provider-side
+composition for the final video.
 
 Nothing in this module is vendor-specific: concrete adapters (``mock`` and the
 generic HTTP adapter) implement the same four operations required by the
