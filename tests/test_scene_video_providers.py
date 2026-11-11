@@ -352,7 +352,7 @@ async def test_apimaster_never_sends_api_key_to_redirected_media_host():
 
 async def test_apimaster_rejects_invalid_duration_and_untrusted_reference():
     provider = _apimaster_provider(lambda _request: httpx.Response(201, json={"id": "unused"}))
-    with pytest.raises(SceneVideoPermanentError, match="integer duration"):
+    with pytest.raises(SceneVideoPermanentError, match="duration from 2 to 30 seconds"):
         await provider.generate_video(
             SceneVideoRequest(scene_id="p:1", prompt="test", duration_seconds=1.5)
         )
