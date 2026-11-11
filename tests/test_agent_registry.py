@@ -5,6 +5,7 @@ import pytest
 
 from app.agents import AgentRegistry, UnknownAgentError, build_default_agent_registry
 from app.agents.definitions import AgentDefinition
+from app.models import Company
 
 
 def test_default_catalog_has_unique_keys_and_capabilities():
@@ -76,3 +77,20 @@ async def test_company_agent_catalog_and_unknown_key(client):
 
     unknown = await client.put("/api/v1/agents/not-approved")
     assert unknown.status_code == 404
+
+
+async def test_company_agent_instances_are_isolated_by_company(client, db_session):
+    first_company = Company(name="First", slug=f"first-{__import__('uuid').uuid4().hex[:8]}")
+    second_company = Company(name="Second", slug=f"second-{__import__('uuid').uuid4().hex[:8]}")
+    db_session.add_all([first_company, second_company])
+    await db_session.commit()
+
+    first_headers = {"X-Company-ID": str(first_company.id)}
+    second_headers = {"X-Company-ID": str(second_company.id)}
+    provisioned = await client.put("/api/v1/agents/monitoring", headers=first_headers)
+    assert provisioned.status_code == 200, provisioned.text
+
+    first_list = await client.get("/api/v1/agents", headers=first_headers)
+    second_list = await client.get("/api/v1/agents", headers=second_headers)
+    assert [item["agent_key"] for item in first_list.json()] == ["monitoring"]
+    assert second_list.json() == []
