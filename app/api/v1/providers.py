@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import company_scope, get_provider_registry
 from app.integrations.providers import ProviderRegistry, UnknownProviderError
-from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderRead, ProviderUsageRead, ProviderUsageReconcile, SceneVideoProviderRead
+from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderHealthRead, ProviderRead, ProviderUsageRead, ProviderUsageReconcile, SceneVideoProviderRead
 from app.services.provider_budget_service import ProviderBudgetService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
@@ -81,6 +81,16 @@ async def upsert_provider_budget(
         except Exception:
             await session.rollback()
             raise
+
+
+@router.get("/telemetry", response_model=list[ProviderHealthRead])
+async def provider_telemetry(
+    request: Request,
+    scope: Annotated[object, Depends(company_scope)],
+) -> list[ProviderHealthRead]:
+    async with request.app.state.session_factory() as session:
+        rows = await ProviderBudgetService(session).telemetry(scope.company_id)
+        return [ProviderHealthRead.model_validate(row) for row in rows]
 
 
 @router.get("/usage", response_model=list[ProviderUsageRead])
