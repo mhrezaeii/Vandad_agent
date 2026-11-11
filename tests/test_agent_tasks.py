@@ -117,6 +117,37 @@ async def test_task_is_not_visible_to_another_company(client, db_session):
     assert hidden.status_code == 404
 
 
+async def test_run_completion_is_fenced_to_the_owning_worker(db_session):
+    company = Company(name="Run Fence", slug=f"run-fence-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    db_session.add(CompanyAgent(company_id=company.id, agent_key="content", status="active"))
+    await db_session.flush()
+    registry = AgentRegistry((
+        AgentDefinition(
+            key="content", name="Content Agent", description="Test worker fencing",
+            capabilities=("content.copy.generate",), maturity="partial", dispatch_ready=True,
+        ),
+    ))
+    service = AgentTaskService(db_session, registry)
+    task = await service.create_task(
+        company.id, requested_by="test-user", agent_key="content",
+        capability="content.copy.generate", title="Worker-fenced task",
+        input_payload={"topic": "fencing"}, idempotency_key=None, priority=50, max_attempts=2,
+    )
+    run = await service.start_run(company.id, task.id, worker_id="worker-current")
+    with pytest.raises(ConflictError, match="ownership"):
+        await service.complete_run(
+            company.id, task.id, run.id,
+            result_payload={"text": "must not be accepted"}, worker_id="worker-stale",
+        )
+    await db_session.refresh(task)
+    await db_session.refresh(run)
+    assert task.status == "running"
+    assert run.status == "running"
+    assert run.worker_id == "worker-current"
+
+
 async def test_run_failure_retry_and_completion_lifecycle(db_session):
     company = Company(name="Run Owner", slug=f"run-owner-{uuid.uuid4().hex[:8]}")
     db_session.add(company)
