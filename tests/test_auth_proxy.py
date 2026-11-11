@@ -13,7 +13,14 @@ from app.core.config import Settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError, UnprocessableEntityError
 
 
-def _request(*, method="GET", headers=None, companies=None, roles="viewer", secret="proxy-secret-0123456789-abcdef-0123456789"):
+def _request(
+    *,
+    method="GET",
+    headers=None,
+    companies=None,
+    roles="viewer",
+    secret="proxy-secret-0123456789-abcdef-0123456789",
+):
     company_ids = companies or [str(uuid.uuid4())]
     values = {
         "X-Auth-Proxy-Secret": secret,
