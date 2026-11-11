@@ -16,10 +16,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents import AgentRegistry, UnknownAgentError
 from app.agents.contracts import validate_capability_payload
 from app.core.exceptions import ConflictError, NotFoundError, UnprocessableEntityError
-from app.models import ActorType, AgentTask, AgentTaskEvent, AgentTaskOutbox, AgentTaskRun, CompanyAgent
+from app.models import (
+    ActorType,
+    AgentTask,
+    AgentTaskEvent,
+    AgentTaskOutbox,
+    AgentTaskRun,
+    CompanyAgent,
+)
 from app.models.agent_task import AgentTaskStatus
-from app.services.audit_service import AuditService
 from app.security.redaction import redact_mapping
+from app.services.audit_service import AuditService
 
 
 class AgentTaskService:
@@ -161,7 +168,15 @@ class AgentTaskService:
             requested_by=requested_by,
             priority=priority,
             max_attempts=max_attempts,
-            status=(AgentTaskStatus.AWAITING_APPROVAL.value if definition.dispatch_ready and definition.requires_approval else AgentTaskStatus.QUEUED.value if definition.dispatch_ready else AgentTaskStatus.PENDING.value),
+            status=(
+                AgentTaskStatus.AWAITING_APPROVAL.value
+                if definition.dispatch_ready and definition.requires_approval
+                else (
+                    AgentTaskStatus.QUEUED.value
+                    if definition.dispatch_ready
+                    else AgentTaskStatus.PENDING.value
+                )
+            ),
         )
         self.session.add(task)
         try:
@@ -191,7 +206,11 @@ class AgentTaskService:
             ))
             await self.session.flush()
 
-        await self._record_event(task, "task.created", {"status": task.status, "agent_key": agent_key, "capability": capability})
+        await self._record_event(
+            task,
+            "task.created",
+            {"status": task.status, "agent_key": agent_key, "capability": capability},
+        )
         self.audit.record(
             event_type="agent.task.created",
             action="create_task",
@@ -256,7 +275,11 @@ class AgentTaskService:
             task.status = AgentTaskStatus.CANCELLED.value
             task.completed_at = datetime.now(UTC)
         await self.session.flush()
-        await self._record_event(task, "task.cancel_requested", {"status": task.status, "cancel_requested": task.cancel_requested})
+        await self._record_event(
+            task,
+            "task.cancel_requested",
+            {"status": task.status, "cancel_requested": task.cancel_requested},
+        )
         self.audit.record(
             event_type="agent.task.cancel_requested",
             action="cancel_task",
@@ -354,7 +377,14 @@ class AgentTaskService:
             payload={"agent_key": task.agent_key, "capability": task.capability},
         ))
         await self.session.flush()
-        await self._record_event(task, "task.requeued", {"attempt": task.attempt_count + 1, "available_after_seconds": max(0, delay_seconds)})
+        await self._record_event(
+            task,
+            "task.requeued",
+            {
+                "attempt": task.attempt_count + 1,
+                "available_after_seconds": max(0, delay_seconds),
+            },
+        )
         self.audit.record(
             event_type="agent.task.requeued",
             action="retry_task",
@@ -412,7 +442,9 @@ class AgentTaskService:
         task.completed_at = None
         self.session.add(run)
         await self.session.flush()
-        await self._record_event(task, "run.started", {"run_id": str(run.id), "attempt": attempt, "worker_id": worker_id})
+        await self._record_event(
+            task, "run.started", {"run_id": str(run.id), "attempt": attempt}
+        )
         self.audit.record(
             event_type="agent.task.run_started",
             action="start_run",
@@ -444,7 +476,11 @@ class AgentTaskService:
         run.completed_at = now
         task.completed_at = now
         await self.session.flush()
-        await self._record_event(task, "run.completed" if run.status == "completed" else "task.cancelled", {"run_id": str(run.id), "status": task.status})
+        await self._record_event(
+            task,
+            "run.completed" if run.status == "completed" else "task.cancelled",
+            {"run_id": str(run.id), "status": task.status},
+        )
         self.audit.record(
             event_type="agent.task.run_completed" if run.status == "completed" else "agent.task.cancelled",
             action="complete_run",
@@ -478,7 +514,11 @@ class AgentTaskService:
         run.completed_at = now
         task.completed_at = now
         await self.session.flush()
-        await self._record_event(task, "run.failed" if run.status == "failed" else "task.cancelled", {"run_id": str(run.id), "status": task.status, "error_code": error_code})
+        await self._record_event(
+            task,
+            "run.failed" if run.status == "failed" else "task.cancelled",
+            {"run_id": str(run.id), "status": task.status, "error_code": error_code},
+        )
         self.audit.record(
             event_type="agent.task.run_failed" if run.status == "failed" else "agent.task.cancelled",
             action="fail_run",
