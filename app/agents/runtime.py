@@ -65,6 +65,7 @@ class MonitoringAgentHandler:
 
     agent_key = "monitoring"
     capabilities = frozenset({
+        "platform.monitor",
         "platform.discover",
         "platform.change.detect",
         "platform.knowledge.extract",
@@ -82,21 +83,28 @@ class MonitoringAgentHandler:
             if platform is None or platform.company_id != context.company_id:
                 raise NotFoundError("Platform not found for this company.")
 
-            if capability in {"platform.discover", "platform.change.detect"}:
+            discovery_result = None
+            if capability in {"platform.monitor", "platform.discover", "platform.change.detect"}:
                 # Browser-authenticated actions are intentionally not exposed by this first handler.
-                result = await PlatformDiscoveryService(session).discover(
+                discovery_result = await PlatformDiscoveryService(session).discover(
                     platform,
                     mode="public",
                     max_pages=max(1, min(int(payload.get("max_pages", 10)), 25)),
                 )
-                await session.commit()
-                return {"capability": capability, **result}
+                if capability != "platform.monitor":
+                    await session.commit()
+                    return {"capability": capability, **discovery_result}
+                # Make discovered source documents visible to the knowledge query
+                # in this same unit of work before extracting the product model.
+                await session.flush()
 
-            if capability == "platform.knowledge.extract":
+            if capability in {"platform.knowledge.extract", "platform.monitor"}:
                 try:
                     connection_id = uuid.UUID(str(payload["connection_id"]))
                 except (KeyError, ValueError, TypeError) as exc:
-                    raise ValueError("Knowledge extraction requires a valid connection_id.") from exc
+                    raise ValueError(
+                        "Knowledge extraction requires a valid connection_id."
+                    ) from exc
                 snapshot = await PlatformKnowledgeService(
                     session,
                     context.provider_registry,
@@ -108,12 +116,18 @@ class MonitoringAgentHandler:
                     max_documents=max(1, min(int(payload.get("max_documents", 20)), 20)),
                 )
                 await session.commit()
-                return {
-                    "capability": capability,
+                knowledge_result = {
                     "snapshot_id": str(snapshot.id),
                     "platform_id": str(platform.id),
                     "source_fingerprint": snapshot.source_fingerprint,
                     "model": snapshot.model,
                 }
+                if capability == "platform.monitor":
+                    return {
+                        "capability": capability,
+                        "discovery": discovery_result,
+                        "knowledge": knowledge_result,
+                    }
+                return {"capability": capability, **knowledge_result}
 
         raise ConflictError("Unsupported monitoring capability.")
