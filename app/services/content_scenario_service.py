@@ -146,6 +146,7 @@ class ContentScenarioService:
             connection_id=connection_id,
             request=request,
             timeout_seconds=min(timeout_seconds, 180.0),
+            idempotency_key=f"content-scenario:{project_id}",
         )
 
         project.scenario = scenario.model_dump(mode="json")
