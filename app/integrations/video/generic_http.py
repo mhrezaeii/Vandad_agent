@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -103,6 +104,11 @@ class GenericHttpConfig:
                 raise ValueError("download_allowed_hosts must contain plain hostnames only.")
 
 
+def _aspect_ratio(width: int, height: int) -> str:
+    divisor = math.gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
 class GenericHttpSceneVideoProvider(SceneVideoProvider):
     """Configurable HTTP adapter for a provider with a documented API."""
 
@@ -115,6 +121,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
     def __init__(self, config: GenericHttpConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
         self._client_factory = client_factory
+        self.supports_composition = bool(config.compose_path)
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
         body: dict[str, Any] = {
@@ -153,7 +160,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
             "output": {
                 "width": request.width,
                 "height": request.height,
-                "aspect_ratio": f"{request.width}:{request.height}",
+                "aspect_ratio": _aspect_ratio(request.width, request.height),
             },
             "brand_context": request.brand_context,
         }
