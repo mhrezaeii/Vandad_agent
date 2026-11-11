@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.deps import company_scope, get_provider_registry
+from app.api.deps import company_scope, get_provider_registry, require_company_admin
 from app.integrations.providers import ProviderRegistry, UnknownProviderError
 from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderHealthRead, ProviderRead, ProviderUsageRead, ProviderUsageReconcile, SceneVideoProviderRead
 from app.services.provider_budget_service import ProviderBudgetService
@@ -59,6 +59,7 @@ async def upsert_provider_budget(
     request: Request,
     scope: Annotated[object, Depends(company_scope)],
     registry: Annotated[ProviderRegistry, Depends(get_provider_registry)],
+    _admin: Annotated[object, Depends(require_company_admin)],
 ) -> ProviderBudgetRead:
     scene_registry = getattr(request.app.state, "scene_video_registry", None)
     if not registry.has(provider_id) and not (
@@ -114,6 +115,7 @@ async def reconcile_provider_usage(
     payload: ProviderUsageReconcile,
     request: Request,
     scope: Annotated[object, Depends(company_scope)],
+    _admin: Annotated[object, Depends(require_company_admin)],
 ) -> ProviderUsageRead:
     async with request.app.state.session_factory() as session:
         try:
