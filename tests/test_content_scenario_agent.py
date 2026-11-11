@@ -111,7 +111,9 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
         def __init__(self, session, registry, executor, master_key_box):
             self.session = session
 
-        async def generate(self, *, company_id, connection_id, request, timeout_seconds):
+        async def generate(
+            self, *, company_id, connection_id, request, timeout_seconds, idempotency_key=None
+        ):
             captured["calls"] += 1
             captured["request"] = request
             assert company_id == company.id
