@@ -72,6 +72,7 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
 
     def __init__(self, config: APIMasterConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
+        self.model_id = config.model
         self._client_factory = client_factory
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
