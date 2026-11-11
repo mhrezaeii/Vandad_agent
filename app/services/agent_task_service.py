@@ -59,10 +59,8 @@ class AgentTaskService:
                 CompanyAgent.agent_key == agent_key,
             )
         )
-        if agent is None:
-            raise NotFoundError("Agent has not been provisioned for this company.")
-        if agent.status != "active":
-            raise ConflictError("The selected agent is disabled for this company.")
+        if agent is None or agent.status != "active":
+            raise ConflictError("The selected agent is not active for this company.")
 
         if idempotency_key:
             existing = await self.session.scalar(
