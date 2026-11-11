@@ -39,6 +39,7 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             api_key=apimaster_key.strip(),
             base_url=getattr(settings, "scene_video_apimaster_base_url", "https://apimaster.ai"),
             model=getattr(settings, "scene_video_apimaster_model", "wan3.0-video-prime"),
+            route=getattr(settings, "scene_video_apimaster_route", "gmi"),
             resolution=getattr(settings, "scene_video_apimaster_resolution", "720P"),
             timeout_seconds=getattr(settings, "scene_video_apimaster_timeout_seconds", 60.0),
             download_allowed_hosts=tuple(
