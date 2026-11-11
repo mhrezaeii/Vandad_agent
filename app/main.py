@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents import build_default_agent_registry
 from app.api import api_router
@@ -113,6 +114,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.configured_settings = resolved
     app.state.settings = resolved
     app.add_middleware(CorrelationIdMiddleware)
+    cors_origins = [
+        origin.strip()
+        for origin in resolved.cors_allowed_origins.split(",")
+        if origin.strip()
+    ]
+    if "*" in cors_origins:
+        raise ValueError("cors_allowed_origins must use explicit origins when credentials are enabled.")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Accept", "Content-Type", "X-Company-ID", "Last-Event-ID"],
+        expose_headers=["X-Request-ID"],
+    )
     register_exception_handlers(app)
     app.include_router(api_router, prefix=resolved.api_prefix)
     return app
