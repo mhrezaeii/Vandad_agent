@@ -5,10 +5,11 @@ on:
     branches:
       - main
       - feature/**
+      - fix/**
   pull_request:
     branches:
       - main
-      - fix/agent-runtime-production-hardening
+      - fix/**
   workflow_dispatch:
 
 permissions:
