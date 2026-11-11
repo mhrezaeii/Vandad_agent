@@ -1100,11 +1100,37 @@ class ContentService:
             if get_settings().is_production:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
         if selected_provider and self.scene_video_registry is not None:
-            if not self.scene_video_registry.has(selected_provider):
-                raise UnprocessableEntityError(
-                    f"Scene-video provider '{selected_provider}' is not available.",
-                    details=[{"field": "provider_id", "value": selected_provider}],
+            scenario_scenes = (project.scenario or {}).get("scenes", [])
+            requires_lipsync = any(
+                isinstance(scene, dict)
+                and scene.get("scene_type") == "presenter"
+                and scene.get("speaker") == "brand_character"
+                and bool(scene.get("dialogue") or scene.get("narration"))
+                for scene in scenario_scenes
+            )
+            fallback_ids = options.get("provider_fallbacks", [])
+            ordered_ids = [selected_provider]
+            if isinstance(fallback_ids, list):
+                ordered_ids.extend(
+                    str(item) for item in fallback_ids
+                    if isinstance(item, str) and item and item not in ordered_ids
                 )
+            try:
+                selected = self.scene_video_registry.resolve_ordered(
+                    ordered_ids,
+                    require_composition=True,
+                    require_lipsync=requires_lipsync,
+                    require_reference_image=bool(options.get("requires_reference_image", False)),
+                )
+            except Exception as exc:
+                raise UnprocessableEntityError(
+                    "No configured scene-video provider satisfies the required production capabilities.",
+                    details=[{"field": "provider_id", "value": selected_provider}],
+                ) from exc
+            selected_provider = selected.provider_id
+            project.scene_video_provider = selected_provider
+            options["provider_id"] = selected_provider
+            project.scene_options = options
         if selected_provider:
             options["provider_id"] = selected_provider
             project.scene_options = options
