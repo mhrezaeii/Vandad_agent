@@ -120,7 +120,7 @@ class AgentTaskService:
             requested_by=requested_by,
             priority=priority,
             max_attempts=max_attempts,
-            status=(AgentTaskStatus.QUEUED.value if definition.dispatch_ready else AgentTaskStatus.PENDING.value),
+            status=(AgentTaskStatus.AWAITING_APPROVAL.value if definition.dispatch_ready and definition.requires_approval else AgentTaskStatus.QUEUED.value if definition.dispatch_ready else AgentTaskStatus.PENDING.value),
         )
         self.session.add(task)
         try:
@@ -141,7 +141,7 @@ class AgentTaskService:
                     return existing
             raise ConflictError("Task creation conflicted with another request.") from exc
 
-        if definition.dispatch_ready:
+        if definition.dispatch_ready and not definition.requires_approval:
             self.session.add(AgentTaskOutbox(
                 task_id=task.id,
                 company_id=company_id,
@@ -225,6 +225,51 @@ class AgentTaskService:
             resource_type="agent_task",
             resource_id=task.id,
             metadata={"status": task.status, "cancel_requested": task.cancel_requested},
+        )
+        return task
+
+    async def approve_task(
+        self, company_id: uuid.UUID, task_id: uuid.UUID, *, approved_by: str
+    ) -> AgentTask:
+        task = await self.session.scalar(
+            select(AgentTask).where(
+                AgentTask.id == task_id, AgentTask.company_id == company_id
+            ).with_for_update()
+        )
+        if task is None:
+            raise NotFoundError("Agent task not found.")
+        if task.status != AgentTaskStatus.AWAITING_APPROVAL.value:
+            raise ConflictError("Only tasks awaiting approval can be approved.")
+        definition = self.registry.get(task.agent_key)
+        if not definition.requires_approval or not definition.dispatch_ready:
+            raise ConflictError("This task does not have an approvable dispatch policy.")
+        agent = await self.session.scalar(
+            select(CompanyAgent).where(
+                CompanyAgent.company_id == company_id,
+                CompanyAgent.agent_key == task.agent_key,
+                CompanyAgent.status == "active",
+            )
+        )
+        if agent is None:
+            raise ConflictError("The selected company agent is no longer active.")
+        task.status = AgentTaskStatus.QUEUED.value
+        self.session.add(AgentTaskOutbox(
+            task_id=task.id,
+            company_id=company_id,
+            attempt_number=1,
+            payload={"agent_key": task.agent_key, "capability": task.capability},
+        ))
+        await self.session.flush()
+        await self._record_event(task, "task.approved", {"approved_by": approved_by})
+        self.audit.record(
+            event_type="agent.task.approved",
+            action="approve_task",
+            actor_type=ActorType.USER,
+            actor_id=approved_by,
+            company_id=company_id,
+            resource_type="agent_task",
+            resource_id=task.id,
+            metadata={"agent_key": task.agent_key, "capability": task.capability},
         )
         return task
 
