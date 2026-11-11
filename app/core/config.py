@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # "*" grants all companies and is ONLY valid outside production; production
     # requires an explicit list (fail-secure default deny).
     bootstrap_principal_company_ids: str = "*"
+    # Production identity is supplied by a trusted OIDC/auth proxy. The proxy
+    # must strip client-supplied X-Auth-* headers and inject these claims itself.
+    auth_proxy_shared_secret: SecretStr | None = None
+    auth_proxy_user_header: str = "X-Auth-Request-User"
+    auth_proxy_company_ids_header: str = "X-Auth-Request-Company-IDs"
+    auth_proxy_roles_header: str = "X-Auth-Request-Roles"
 
     # --- Artifact storage (see app.storage) --------------------------------------
     # Root directory for generated workflow artifacts (mounted volume in Docker).
