@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 
 from app.core.exceptions import NotFoundError
 from app.integrations.providers.base import (
@@ -36,9 +37,11 @@ from app.integrations.providers.base import (
 from app.models import (
     ArtifactKind,
     BrandCharacter,
+    BrandPlatformLink,
     CharacterStatus,
     ContentBrand,
     ContentProject,
+    PlatformKnowledgeSnapshot,
     ProjectStatus,
     WorkflowExecution,
     WorkflowNode,
@@ -608,6 +611,27 @@ async def _generate_scenario(
 
     cta_config = brand.cta_config or {}
     options = project.scene_options or {}
+    linked_platform_ids = list((await engine.session.scalars(
+        select(BrandPlatformLink.platform_id).where(
+            BrandPlatformLink.company_id == execution.company_id,
+            BrandPlatformLink.brand_id == brand.id,
+        )
+    )).all())
+    platform_knowledge_context = None
+    if linked_platform_ids:
+        latest_snapshot = await engine.session.scalar(
+            select(PlatformKnowledgeSnapshot)
+            .where(
+                PlatformKnowledgeSnapshot.company_id == execution.company_id,
+                PlatformKnowledgeSnapshot.platform_id.in_(linked_platform_ids),
+            )
+            .order_by(PlatformKnowledgeSnapshot.extracted_at.desc())
+            .limit(1)
+        )
+        if latest_snapshot is not None:
+            platform_knowledge_context = json.dumps(
+                latest_snapshot.knowledge_json, ensure_ascii=False, separators=(",", ":")
+            )[:11000]
     request = ScenarioRequest(
         topic=project.topic,
         target_duration_seconds=int(
@@ -636,6 +660,7 @@ async def _generate_scenario(
         cta_text=params.get("cta_text") or cta_config.get("text"),
         hashtags=list(cta_config.get("hashtags") or []),
         language=brand.language,
+        platform_knowledge_context=platform_knowledge_context,
     )
 
     service = ScenarioService(
