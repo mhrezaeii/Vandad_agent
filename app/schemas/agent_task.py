@@ -5,6 +5,7 @@ import json
 import uuid
 from collections.abc import Mapping
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -26,6 +27,7 @@ class AgentTaskCreate(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
     priority: int = Field(default=50, ge=0, le=100)
     max_attempts: int = Field(default=3, ge=1, le=10)
+    spend_ceiling_usd: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=6)
 
     @field_validator("input_payload")
     @classmethod
@@ -73,6 +75,7 @@ class AgentTaskRead(BaseModel):
     cancel_requested: bool
     attempt_count: int
     max_attempts: int
+    spend_ceiling_usd: Decimal | None
     error_code: str | None
     error_message: str | None
     started_at: datetime | None
