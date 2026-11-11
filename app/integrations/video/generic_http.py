@@ -16,6 +16,7 @@ from app.integrations.video.base import (
     SceneJobState,
     SceneVideoPermanentError,
     SceneVideoProvider,
+    SceneVideoCompositionRequest,
     SceneVideoRequest,
     SceneVideoTransientError,
 )
@@ -62,6 +63,7 @@ class GenericHttpConfig:
     generate_path: str = "/v1/videos"
     status_path: str = "/v1/videos/{job_id}"
     retrieve_path: str | None = None
+    compose_path: str | None = None
     api_key: str | None = None
     auth_header: str = "Authorization"
     auth_scheme: str = "Bearer"
@@ -86,6 +88,16 @@ class GenericHttpConfig:
             raise ValueError("GenericHttpConfig.status_path must contain '{job_id}'.")
         if self.retrieve_path is not None and "{job_id}" not in self.retrieve_path:
             raise ValueError("GenericHttpConfig.retrieve_path must contain '{job_id}'.")
+        if self.compose_path is not None:
+            parsed_compose = urlsplit(self.compose_path)
+            if (
+                not self.compose_path.startswith("/")
+                or parsed_compose.scheme
+                or parsed_compose.netloc
+                or parsed_compose.query
+                or parsed_compose.fragment
+            ):
+                raise ValueError("GenericHttpConfig.compose_path must be a local API path.")
         for host in self.download_allowed_hosts:
             if not host or host != host.strip() or "/" in host or ":" in host:
                 raise ValueError("download_allowed_hosts must contain plain hostnames only.")
@@ -124,6 +136,37 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         if job_id is None or str(job_id).strip() == "":
             raise SceneVideoPermanentError(
                 "The provider response did not contain a job id.", code="provider_bad_response"
+            )
+        return str(job_id)
+
+    async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
+        """Ask the configured AI provider to edit scene clips into one final video."""
+        if not self.config.compose_path:
+            raise SceneVideoPermanentError(
+                "The configured AI provider has no composition endpoint.",
+                code="provider_composition_unsupported",
+            )
+        body = {
+            "project_id": request.project_id,
+            "storyboard": request.storyboard,
+            "scene_video_urls": list(request.scene_video_urls),
+            "output": {
+                "width": request.width,
+                "height": request.height,
+                "aspect_ratio": f"{request.width}:{request.height}",
+            },
+            "brand_context": request.brand_context,
+        }
+        if request.idempotency_key:
+            body["idempotency_key"] = request.idempotency_key
+        payload = await self._request_json(
+            "POST", f"{self._base()}{self.config.compose_path}", json=body
+        )
+        job_id = _dig(payload, self.config.job_id_field)
+        if job_id is None or str(job_id).strip() == "":
+            raise SceneVideoPermanentError(
+                "The composition response did not contain a job id.",
+                code="provider_bad_response",
             )
         return str(job_id)
 
