@@ -257,7 +257,7 @@ async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
     assert project.provider_job_id is None
     assert artifact.content_type == "video/mp4"
     assert artifact.size_bytes > 0
-    assert len(provider.jobs) == len(jobs) + 1
+    assert len(provider.jobs) == 1
 
     same_artifact, _ = await service.finalize_project_video(
         project,
