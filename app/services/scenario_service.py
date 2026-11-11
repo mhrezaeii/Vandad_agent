@@ -275,7 +275,14 @@ class ScenarioService:
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
-            await budget_service.settle(reservation, error_code=error.code or "llm_failure")
+            failed_result = getattr(outcome, "result", None)
+            failure_usage = {"attempts": outcome.attempts}
+            failed_latency = getattr(failed_result, "latency_ms", None)
+            if failed_latency is not None:
+                failure_usage["latency_ms"] = failed_latency
+            await budget_service.settle(
+                reservation, error_code=error.code or "llm_failure", usage=failure_usage
+            )
             raise ScenarioGenerationError(
                 error.message, code=error.code or "llm_failure", retryable=error.is_transient
             )
