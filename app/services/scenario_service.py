@@ -191,6 +191,7 @@ class ScenarioService:
         timeout_seconds: float = 120.0,
         operation: str = "execute",
         idempotency_key: str | None = None,
+        task_id: uuid.UUID | None = None,
     ) -> tuple[Scenario, dict[str, Any]]:
         """Return the validated scenario plus sanitized LLM metadata."""
         system, user = build_scenario_prompt(request)
@@ -202,6 +203,7 @@ class ScenarioService:
             timeout_seconds=timeout_seconds,
             operation=operation,
             idempotency_key=idempotency_key,
+            task_id=task_id,
         )
         scenario = parse_scenario_content(metadata.get("content"), request)
         return scenario, metadata
