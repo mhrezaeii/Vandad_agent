@@ -183,6 +183,7 @@ class PlatformKnowledgeService:
             "platform.knowledge.extract",
             idempotency_key=f"knowledge:{budget_key}",
             model=str(context.configuration.get("model") or "") or None,
+            require_budget=True,
         )
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
