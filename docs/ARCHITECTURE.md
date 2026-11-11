@@ -1,6 +1,6 @@
 # Architecture and implementation status
 
-Last reviewed: 2026-11-11
+Last reviewed: 2026-11-11 (backend completion pass)
 
 ## Intended runtime shape
 
@@ -132,15 +132,19 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 - [x] Stale-run recovery with heartbeat recheck and bounded retry.
 - [x] Bounded graceful shutdown and persisted error redaction.
 - [ ] Failure-injection and full CI validation before merge/deployment.
-- [ ] Progress/event streaming and explicit Tool/Capability Router contract.
+- [x] Durable task lifecycle/progress events, JSON event history and authenticated SSE stream.
+- [x] Explicit code-owned Tool/Capability Router for every registered handler/capability pair.
 - [ ] Tenant-isolated end-to-end tests for every dispatch-ready agent.
+- [ ] Aggregate failure-injection and full CI acceptance before merge/deployment.
 
 ### P1 — Provider and cost control (not complete)
 
 - Normalize provider/model capabilities and constraints.
-- Add provider health/latency/error telemetry and actual usage/cost recording.
-- Add deterministic routing rules and fallback; no hidden model switching for paid calls.
-- Add company budgets, per-task spend ceilings and approval gates for costly operations.
+- [x] Add company/provider monthly budgets and per-operation reservations; unknown cost remains reserved rather than being reported as free.
+- [x] Record LLM provider-reported usage, latency, attempts and actual cost when explicitly supplied.
+- [x] Require a configured company budget before dispatching paid video-agent operations.
+- [ ] Complete provider health/error history, operator reconciliation and explicit ordered fallback/capability routing.
+- [ ] Add provider/model capability constraints for language, modality, duration, aspect ratio and lip-sync.
 - Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
 
 Paid autonomous execution remains gated until these controls are implemented and verified.
@@ -149,13 +153,14 @@ Paid autonomous execution remains gated until these controls are implemented and
 
 - [x] Monitoring task dispatch and public discovery / knowledge extraction handler.
 - [x] Content scenario generation handler.
-- [ ] Human approval lifecycle before external publishing or paid media generation.
-- [ ] Video Production Agent routing between talking-avatar and scene-video.
+- [x] Human approval lifecycle for paid video tasks and project script/scenario approval before generation.
+- [x] Video Production Agent routes approved avatar and scene projects to their separate workflow pipelines.
+- [ ] Provider settlement callback from completed media jobs into the usage ledger; current paid-video reservation remains conservative until reconciliation.
 - [ ] Mock-provider integration coverage and opt-in live smoke tests with spend ceilings.
 
 ### P3 — Web UI (not started)
 
-Create a separate frontend application (recommended: React/Next.js + TypeScript) consuming the stable API. The UI should be Persian-first with RTL support, responsive layouts and an accessible component system. Start after the P0/P1 API contracts and approval/video lifecycle stabilize.
+A separate Next.js + TypeScript frontend has been added under `web/` and consumes the public API. It is Persian-first, RTL and responsive. It is an initial operator console; visual polish, accessibility review, user authentication/RBAC and full production deployment remain before P3 acceptance.
 
 Initial screens:
 - Overview: task activity, recent runs, provider health and spend.
