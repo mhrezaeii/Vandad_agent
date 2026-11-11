@@ -14,6 +14,8 @@ Orchestrates the video pipeline on top of the existing engine:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -51,6 +53,7 @@ from app.security.authorization import CompanyScope
 from app.security.crypto import MasterKeyBox
 from app.services.audit_service import AuditService
 from app.services.credential_service import CredentialService
+from app.services.provider_budget_service import ProviderBudgetService
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.services.workflow_service import WorkflowService
 
@@ -1384,12 +1387,35 @@ class ContentService:
             timeout_seconds=60.0,
             operation=operation,
         )
+        budget_key = hashlib.sha256(
+            f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode("utf-8")
+        ).hexdigest()
+        budget_service = ProviderBudgetService(self.session)
+        reservation = await budget_service.reserve(
+            company_id,
+            adapter.provider_id,
+            f"heygen.{operation}",
+            idempotency_key=f"heygen:{budget_key}",
+            require_budget=True,
+        )
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
-            raise outcome.error or ProviderError(
+            error = outcome.error or ProviderError(
                 "The HeyGen operation failed.", code="heygen_failure"
             )
-        return outcome.result.metadata or {}
+            await budget_service.settle(reservation, error_code=error.code)
+            raise error
+        metadata = outcome.result.metadata or {}
+        usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
+        await budget_service.settle(
+            reservation,
+            usage={
+                **usage,
+                "latency_ms": outcome.result.latency_ms,
+                "attempts": outcome.attempts,
+            },
+        )
+        return metadata
 
     @staticmethod
     def _now_iso() -> str:
