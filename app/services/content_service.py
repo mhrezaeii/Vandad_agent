@@ -1076,6 +1076,10 @@ class ContentService:
 
         options = dict(project.scene_options or {})
         selected_provider = provider_id or options.get("provider_id") or project.scene_video_provider
+        if not selected_provider:
+            from app.core.config import get_settings
+
+            selected_provider = get_settings().scene_video_provider
         if selected_provider and self.scene_video_registry is not None:
             if not self.scene_video_registry.has(selected_provider):
                 raise UnprocessableEntityError(
@@ -1087,25 +1091,49 @@ class ContentService:
             project.scene_options = options
             project.scene_video_provider = selected_provider
 
-        await self.ensure_workflow(
-            SCENE_VIDEO_WORKFLOW_NAME,
-            SCENE_VIDEO_WORKFLOW_GRAPH,
-            company_id=scope.company_id,
-            connection_id=None,
-        )
-        workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
-        execution, _created = await self._execution_service.execute_workflow(
-            workflow.id,
-            scope=scope,
-            input_metadata={
-                "project_id": str(project.id),
+        reservation = None
+        if selected_provider != "mock":
+            reservation = await ProviderBudgetService(self.session).reserve(
+                scope.company_id,
+                selected_provider,
+                "content.scene.generate_video",
+                idempotency_key=f"scene-video:{project.id}",
+                require_budget=True,
+            )
+            project.cost_metadata = {
                 "provider_id": selected_provider,
-                "narration_artifact_id": options.get("narration_artifact_id"),
-            },
-            idempotency_key=f"scene-video:{project.id}",
-            trigger_type=WorkflowTriggerType.API,
-            trigger_reference=str(project.id),
-        )
+                "budget_reservation_id": str(reservation.id) if reservation else None,
+                "status": "reserved",
+            }
+        else:
+            project.cost_metadata = {"provider_id": "mock", "status": "not_billable"}
+
+        try:
+            await self.ensure_workflow(
+                SCENE_VIDEO_WORKFLOW_NAME,
+                SCENE_VIDEO_WORKFLOW_GRAPH,
+                company_id=scope.company_id,
+                connection_id=None,
+            )
+            workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
+            execution, _created = await self._execution_service.execute_workflow(
+                workflow.id,
+                scope=scope,
+                input_metadata={
+                    "project_id": str(project.id),
+                    "provider_id": selected_provider,
+                    "narration_artifact_id": options.get("narration_artifact_id"),
+                },
+                idempotency_key=f"scene-video:{project.id}",
+                trigger_type=WorkflowTriggerType.API,
+                trigger_reference=str(project.id),
+            )
+        except Exception:
+            if reservation is not None:
+                await ProviderBudgetService(self.session).settle(
+                    reservation, error_code="scene_video_dispatch_failed"
+                )
+            raise
         project.status = ProjectStatus.VIDEO_GENERATION_PENDING.value
         project.video_workflow_execution_id = execution.id
         project.error_message = None
