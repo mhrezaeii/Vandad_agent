@@ -12,8 +12,8 @@ from app.integrations.video import (
     SceneGenerationStatus,
     SceneJobState,
     SceneVideoPermanentError,
-    SceneVideoTransientError,
     SceneVideoQuotaExhaustedError,
+    SceneVideoTransientError,
     build_scene_video_registry,
 )
 from app.models import (
