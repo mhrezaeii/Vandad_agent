@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-
-import pytest
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
-from app.core.exceptions import ConflictError
-
 from app.agents import build_default_agent_registry
+from app.core.exceptions import ConflictError
 from app.models import AgentTask, AgentTaskOutbox, AgentTaskRun, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
 from app.workers.agent_worker import AgentTaskWorker
@@ -168,7 +166,9 @@ async def test_agent_worker_recovers_stale_run_and_fences_previous_owner(
 
         assert task.status == "queued"
         assert task.attempt_count == 1
-        assert task.error_code == "worker_lease_expired"
+        # retry_task clears task-level error fields when queuing the next attempt;
+        # the failed run remains the durable record of the previous error.
+        assert task.error_code is None
         assert run.status == "failed"
         assert run.error_code == "worker_lease_expired"
 
