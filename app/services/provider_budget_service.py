@@ -131,9 +131,12 @@ class ProviderBudgetService:
             return None
         now = datetime.now(UTC)
         if error_code:
-            record.status = "failed"
-            record.reserved_amount_usd = Decimal("0")
+            # A provider error may occur after the vendor accepted/billed the
+            # request. Keep the ceiling reserved until an operator reconciles it.
+            record.status = "unknown"
             record.error_code = error_code[:100]
+            record.usage_payload = {"provider_error_code": record.error_code}
+            record.completed_at = now
         else:
             safe = _safe_usage(usage or {})
             actual = parse_reported_cost(safe)
@@ -148,8 +151,6 @@ class ProviderBudgetService:
                 record.status = "settled"
                 record.actual_cost_usd = actual
                 record.reserved_amount_usd = Decimal("0")
-        if error_code:
-            record.completed_at = now
         await self.session.flush()
         return record
 
