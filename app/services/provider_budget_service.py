@@ -16,12 +16,9 @@ from app.models import CompanyProviderBudget, ProviderUsageRecord
 
 def parse_reported_cost(payload: dict[str, Any]) -> Decimal | None:
     """Return a cost only when the provider explicitly reports a USD amount."""
-    candidates = (
-        payload.get("cost_usd"),
-        payload.get("total_cost_usd"),
-        payload.get("cost"),
-        payload.get("total_cost"),
-    )
+    candidates = [payload.get("cost_usd"), payload.get("total_cost_usd")]
+    if str(payload.get("currency") or "").upper() == "USD":
+        candidates.extend((payload.get("cost"), payload.get("total_cost")))
     for value in candidates:
         if value is None or isinstance(value, bool):
             continue
@@ -39,7 +36,7 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "prompt_tokens", "completion_tokens", "total_tokens",
         "input_tokens", "output_tokens", "total_cost", "cost",
         "total_cost_usd", "cost_usd", "model", "latency_ms",
-        "attempts", "provider_request_id",
+        "attempts", "provider_request_id", "currency",
     }
     return {key: value for key, value in payload.items() if key in allowed}
 
