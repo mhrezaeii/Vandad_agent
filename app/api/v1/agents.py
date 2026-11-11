@@ -5,8 +5,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, status
 
-from app.api.deps import company_scope, get_agent_service
 from app.agents import AgentRegistry
+from app.api.deps import company_scope, get_agent_service
 from app.schemas.agent import (
     AgentCatalogRead,
     AgentDefinitionRead,
