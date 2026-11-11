@@ -1084,6 +1084,11 @@ class ContentService:
             from app.core.config import get_settings
 
             selected_provider = get_settings().scene_video_provider
+        if selected_provider == "mock":
+            from app.core.config import get_settings
+
+            if get_settings().is_production:
+                raise ConflictError("The mock scene-video provider is forbidden in production.")
         if selected_provider and self.scene_video_registry is not None:
             if not self.scene_video_registry.has(selected_provider):
                 raise UnprocessableEntityError(
