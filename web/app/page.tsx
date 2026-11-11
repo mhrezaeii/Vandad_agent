@@ -591,7 +591,7 @@ export default function HomePage() {
             <h2 style={{ fontSize: 16, marginTop: 0 }}>تنظیمات اتصال</h2>
             <div className="field"><label>Company ID (خالی = عضویت تک‌شرکتی در Production یا شرکت پیش‌فرض در توسعه)</label><input dir="ltr" value={companyId} onChange={(event) => setCompanyId(event.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
             <div className="actions" style={{ marginTop: 14 }}><button className="button" onClick={saveCompany}>ذخیره و بارگذاری مجدد</button><button className="button ghost" onClick={() => { setCompanyId(""); window.localStorage.removeItem("vandad.companyId"); void load(); }}>استفاده از شرکت پیش‌فرض</button></div>
-            <div className="notice section">آدرس API از متغیر NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. در حالت توسعه مقدار پیش‌فرض http://localhost:8000/api/v1 است. احراز هویت کامل کاربران و نقش‌ها هنوز باید در Backend تکمیل شود؛ این UI جایگزین آن نیست.</div>
+            <div className="notice section">آدرس API از متغیر NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. در حالت توسعه مقدار پیش‌فرض http://localhost:8000/api/v1 است. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود؛ Backend نقش و عضویت شرکت را مجدداً بررسی می‌کند.</div>
           </div>
         )}
 
