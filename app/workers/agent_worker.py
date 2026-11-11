@@ -287,7 +287,16 @@ class AgentTaskWorker:
                             error_code=safe_code, error_message=safe_message,
                             worker_id=self.worker_id,
                         )
-                        if task.status == "failed" and task.attempt_count < task.max_attempts:
+                        retryable = bool(
+                            getattr(exc, "is_transient", False)
+                            or getattr(exc, "retryable", False)
+                            or getattr(exc, "kind", None) == "transient"
+                        )
+                        if (
+                            task.status == "failed"
+                            and retryable
+                            and task.attempt_count < task.max_attempts
+                        ):
                             await service.retry_task(
                                 company_id, task_id, requested_by=self.worker_id,
                                 delay_seconds=min(2 ** max(task.attempt_count - 1, 0), 60),
