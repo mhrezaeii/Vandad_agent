@@ -111,12 +111,14 @@ class AgentTaskService:
             and task.input_payload == input_payload
             and task.priority == priority
             and task.max_attempts == max_attempts
+            and task.spend_ceiling_usd == spend_ceiling_usd
         )
 
     async def create_task(
         self, company_id: uuid.UUID, *, requested_by: str, agent_key: str,
         capability: str, title: str, input_payload: dict[str, Any],
         idempotency_key: str | None, priority: int, max_attempts: int,
+        spend_ceiling_usd=None,
     ) -> AgentTask:
         try:
             definition = self.registry.get(agent_key)
@@ -154,6 +156,7 @@ class AgentTaskService:
                 if not self._same_request(
                     existing, agent_key=agent_key, capability=capability, title=title,
                     input_payload=input_payload, priority=priority, max_attempts=max_attempts,
+                    spend_ceiling_usd=spend_ceiling_usd,
                 ):
                     raise ConflictError("Idempotency key was already used for a different task.")
                 return existing
@@ -168,6 +171,7 @@ class AgentTaskService:
             requested_by=requested_by,
             priority=priority,
             max_attempts=max_attempts,
+            spend_ceiling_usd=spend_ceiling_usd,
             status=(
                 AgentTaskStatus.AWAITING_APPROVAL.value
                 if definition.dispatch_ready and definition.requires_approval
