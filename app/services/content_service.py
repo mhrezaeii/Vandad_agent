@@ -1065,6 +1065,7 @@ class ContentService:
         *,
         scope: CompanyScope,
         provider_id: str | None = None,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         """Start per-scene generation, polling, download and assembly."""
         project = await self.get_project(project_id, company_id=scope.company_id)
@@ -1108,6 +1109,7 @@ class ContentService:
                 "content.scene.generate_video",
                 idempotency_key=f"scene-video:{project.id}",
                 require_budget=True,
+                task_id=task_id,
             )
             project.cost_metadata = {
                 "provider_id": selected_provider,
@@ -1132,6 +1134,7 @@ class ContentService:
                 input_metadata={
                     "project_id": str(project.id),
                     "provider_id": selected_provider,
+                    "agent_task_id": str(task_id) if task_id else None,
                     "narration_artifact_id": options.get("narration_artifact_id"),
                 },
                 idempotency_key=f"scene-video:{project.id}",
