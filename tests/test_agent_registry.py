@@ -19,7 +19,7 @@ def test_default_catalog_has_unique_keys_and_capabilities():
     }
     assert registry.find_by_capability("content.scenario.generate")[0].key == "content"
     assert registry.find_by_capability("missing.capability") == ()
-    assert {item.key for item in definitions if item.dispatch_ready} == {"monitoring"}
+    assert {item.key for item in definitions if item.dispatch_ready} == {"monitoring", "content"}
 
 
 def test_registry_rejects_duplicate_keys():
