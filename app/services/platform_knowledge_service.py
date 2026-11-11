@@ -177,7 +177,7 @@ class PlatformKnowledgeService:
             operation="execute",
         )
         budget_key = hashlib.sha256(
-            f"{platform.company_id}:{platform.id}:{connection_id}:{system}:{user}".encode("utf-8")
+            f"{platform.company_id}:{platform.id}:{connection_id}:{system}:{user}".encode()
         ).hexdigest()
         budget_service = ProviderBudgetService(self.session)
         reservation = await budget_service.reserve(
