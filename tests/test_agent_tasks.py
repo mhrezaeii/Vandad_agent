@@ -75,6 +75,12 @@ async def test_task_progress_events_are_persisted_and_company_scoped(client):
         "task.cancel_requested",
     ]
 
+    stream = await client.get(f"/api/v1/agent-tasks/{task_id}/events/stream?after=0")
+    assert stream.status_code == 200
+    assert "text/event-stream" in stream.headers["content-type"]
+    assert "event: task.created" in stream.text
+    assert "event: task.cancel_requested" in stream.text
+
 
 async def test_video_task_requires_approval_before_outbox_dispatch(client, db_session):
     await _activate_agent(client, "video")
