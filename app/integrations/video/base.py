@@ -149,12 +149,12 @@ class SceneVideoProvider(ABC):
     supports_lipsync: bool = False
     requires_network: bool = False
     supports_reference_image: bool = False
+    supports_composition: bool = False
 
     @abstractmethod
     async def generate_video(self, request: SceneVideoRequest) -> str:
         """Submit one scene and return the provider job id."""
 
-    @abstractmethod
     async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
         """Submit AI-provider editing/composition and return its persisted job id.
 
