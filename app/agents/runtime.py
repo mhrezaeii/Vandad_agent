@@ -245,7 +245,6 @@ class VideoProductionAgentHandler:
         from app.models import ContentProject
         from app.security.authorization import CompanyScope, Principal
         from app.services.content_service import ContentService
-        from app.services.provider_budget_service import ProviderBudgetService
 
         async with context.session_factory() as session:
             project = await session.get(ContentProject, project_id)
@@ -269,15 +268,6 @@ class VideoProductionAgentHandler:
             else:
                 provider_id = "heygen"
 
-            reservation = None
-            if provider_id != "mock":
-                reservation = await ProviderBudgetService(session).reserve(
-                    context.company_id,
-                    provider_id,
-                    capability,
-                    idempotency_key=f"agent-video:{context.task_id}",
-                    require_budget=True,
-                )
             scope = CompanyScope(
                 company_id=context.company_id,
                 principal=Principal(
@@ -293,41 +283,36 @@ class VideoProductionAgentHandler:
                 workflow_queue=context.workflow_queue,
                 scene_video_registry=context.scene_video_registry,
             )
-            try:
-                if capability == "video.scene.generate":
-                    updated = await service.generate_scene_video(
-                        project_id, scope=scope, provider_id=provider_id
-                    )
-                elif capability == "video.avatar.generate":
-                    try:
-                        connection_id = uuid.UUID(str(context.payload["connection_id"]))
-                    except (KeyError, ValueError, TypeError) as exc:
-                        raise ValueError("Avatar video tasks require a valid connection_id.") from exc
-                    updated = await service.generate_video(
-                        project_id, scope=scope, connection_id=connection_id
-                    )
-                else:
-                    raise ConflictError("Unsupported video production capability.")
-                await context.report_progress(
-                    "video.workflow.dispatched",
-                    project_id=str(updated.id),
-                    workflow_execution_id=str(updated.video_workflow_execution_id),
-                    provider_id=provider_id,
-                    budget_reservation_id=str(reservation.id) if reservation else None,
+            if capability == "video.scene.generate":
+                updated = await service.generate_scene_video(
+                    project_id, scope=scope, provider_id=provider_id
                 )
-                await session.commit()
-                return {
-                    "capability": capability,
-                    "project_id": str(updated.id),
-                    "project_status": updated.status,
-                    "workflow_execution_id": str(updated.video_workflow_execution_id),
-                    "provider_id": provider_id,
-                    "budget_reservation_id": str(reservation.id) if reservation else None,
-                    "cost_status": "reserved_unknown_until_provider_settlement",
-                }
-            except Exception:
-                if reservation is not None:
-                    await ProviderBudgetService(session).settle(
-                        reservation, error_code="video_dispatch_failed"
-                    )
-                raise
+            elif capability == "video.avatar.generate":
+                try:
+                    connection_id = uuid.UUID(str(context.payload["connection_id"]))
+                except (KeyError, ValueError, TypeError) as exc:
+                    raise ValueError("Avatar video tasks require a valid connection_id.") from exc
+                updated = await service.generate_video(
+                    project_id, scope=scope, connection_id=connection_id
+                )
+            else:
+                raise ConflictError("Unsupported video production capability.")
+
+            cost_metadata = updated.cost_metadata or {}
+            await context.report_progress(
+                "video.workflow.dispatched",
+                project_id=str(updated.id),
+                workflow_execution_id=str(updated.video_workflow_execution_id),
+                provider_id=provider_id,
+                cost_status=cost_metadata.get("status", "budget_check_pending"),
+            )
+            await session.commit()
+            return {
+                "capability": capability,
+                "project_id": str(updated.id),
+                "project_status": updated.status,
+                "workflow_execution_id": str(updated.video_workflow_execution_id),
+                "provider_id": provider_id,
+                "budget_reservation_id": cost_metadata.get("budget_reservation_id"),
+                "cost_status": cost_metadata.get("status", "budget_check_pending"),
+            }
