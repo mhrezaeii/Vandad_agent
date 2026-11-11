@@ -58,6 +58,34 @@ class SceneVideoProviderRegistry:
     def list_providers(self) -> list[SceneVideoProvider]:
         return sorted(self._providers.values(), key=lambda provider: provider.provider_id)
 
+    def resolve_ordered(
+        self,
+        provider_ids: list[str],
+        *,
+        require_composition: bool = False,
+        require_lipsync: bool = False,
+        require_reference_image: bool = False,
+    ) -> SceneVideoProvider:
+        """Choose the first configured provider satisfying required capabilities.
+
+        The caller owns the explicit priority order. Missing providers and
+        capability mismatches are skipped; no implicit vendor is selected.
+        """
+        for provider_id in provider_ids:
+            provider = self._providers.get(provider_id)
+            if provider is None:
+                continue
+            if require_composition and not provider.supports_composition:
+                continue
+            if require_lipsync and not provider.supports_lipsync:
+                continue
+            if require_reference_image and not provider.supports_reference_image:
+                continue
+            return provider
+        raise SceneVideoProviderRegistryError(
+            "No configured scene-video provider satisfies the requested capabilities."
+        )
+
     def __len__(self) -> int:
         return len(self._providers)
 
