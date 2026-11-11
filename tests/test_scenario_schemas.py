@@ -15,7 +15,7 @@ from app.schemas.scenario import (
     expected_scene_count,
     normalize_scenario,
 )
-from app.services.scenario_service import ScenarioGenerationError, parse_scenario_content
+from app.services.scenario_service import ScenarioGenerationError, build_scenario_prompt, parse_scenario_content
 
 
 def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
@@ -31,6 +31,11 @@ def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
                 "duration_seconds": duration,
                 "on_screen_text": f"متن {index + 1}",
                 "subtitle_text": f"زیرنویس {index + 1}",
+                "scene_type": "presenter" if index == 1 else ("product_demo" if index == 2 else "b_roll"),
+                "speaker": "brand_character" if index == 1 else "narrator",
+                "dialogue": "سلام، من وندی هستم." if index == 1 else None,
+                "camera_direction": "medium close-up, slow push-in" if index == 1 else "cinematic tracking shot",
+                "transition": "match_cut" if index == 2 else "cut",
             }
             for index in range(count)
         ],
@@ -120,3 +125,38 @@ def test_parse_scenario_content_accepts_dict_payload():
     scenario = parse_scenario_content(_raw_scenario(), request)
     assert len(scenario.scenes) == 5
     assert scenario.language == "fa-IR"
+
+
+
+def test_normalize_preserves_storyboard_roles_dialogue_and_editing_direction():
+    request = ScenarioRequest(topic="معرفی محصول", target_duration_seconds=30)
+    scenario = normalize_scenario(_raw_scenario(), request)
+    presenter = scenario.scenes[1]
+    product = scenario.scenes[2]
+
+    assert presenter.scene_type == "presenter"
+    assert presenter.speaker == "brand_character"
+    assert presenter.dialogue == "سلام، من وندی هستم."
+    assert presenter.camera_direction == "medium close-up, slow push-in"
+    assert product.scene_type == "product_demo"
+    assert product.transition == "match_cut"
+
+
+def test_storyboard_prompt_requires_brand_character_product_demo_and_cta():
+    request = ScenarioRequest(
+        topic="معرفی فضای کاری یکپارچه",
+        target_duration_seconds=30,
+        brand_name="وندیار",
+        character_name="وندی",
+        character_description="Same glasses, dark navy outfit, short hair and beard in every presenter shot.",
+        product_context="Team chat, CRM, Kanban, calendar and AI assistant.",
+    )
+    system, user = build_scenario_prompt(request)
+
+    assert "داستان‌محور" in system
+    assert "presenter" in system
+    assert "product_demo" in system
+    assert "وندی" in user
+    assert "Same glasses" in user
+    assert "Team chat, CRM" in user
+    assert "problem → presenter" in user

@@ -8,6 +8,7 @@ authorised HTTP contract.
 
 from __future__ import annotations
 
+from app.integrations.video.apimaster import APIMasterConfig, APIMasterSceneVideoProvider
 from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
@@ -67,6 +68,7 @@ def build_scene_video_registry(
     *,
     include_mock: bool = True,
     http_config: GenericHttpConfig | None = None,
+    apimaster_config: APIMasterConfig | None = None,
     mock_provider: MockSceneVideoProvider | None = None,
 ) -> SceneVideoProviderRegistry:
     """Build the scene-video registry.
@@ -80,10 +82,14 @@ def build_scene_video_registry(
         registry.register(mock_provider or MockSceneVideoProvider())
     if http_config is not None:
         registry.register(GenericHttpSceneVideoProvider(http_config))
+    if apimaster_config is not None:
+        registry.register(APIMasterSceneVideoProvider(apimaster_config))
     return registry
 
 
 __all__ = [
+    "APIMasterConfig",
+    "APIMasterSceneVideoProvider",
     "DEFAULT_SCENE_VIDEO_PROVIDER",
     "GenericHttpConfig",
     "GenericHttpSceneVideoProvider",

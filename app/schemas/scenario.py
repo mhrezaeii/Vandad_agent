@@ -13,7 +13,7 @@ the requested target duration.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -48,6 +48,9 @@ class ScenarioRequest(BaseModel):
     cta_text: str | None = Field(default=None, max_length=500)
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     scene_count: int | None = Field(default=None, ge=MIN_SCENES, le=MAX_SCENES)
+    character_name: str | None = Field(default=None, max_length=150)
+    character_description: str | None = Field(default=None, max_length=2000)
+    product_context: str | None = Field(default=None, max_length=3000)
 
     @field_validator("topic")
     @classmethod
@@ -87,6 +90,11 @@ class SceneSpec(BaseModel):
     duration_seconds: float = Field(gt=0, description="Scene duration in seconds.")
     on_screen_text: str | None = Field(default=None, max_length=500, description="Persian on-screen text.")
     subtitle_text: str | None = Field(default=None, max_length=2000, description="Persian subtitle text.")
+    scene_type: Literal["problem", "presenter", "product_demo", "b_roll", "motion_graphic", "cta"] = "b_roll"
+    speaker: Literal["brand_character", "customer", "narrator", "none"] = "narrator"
+    dialogue: str | None = Field(default=None, max_length=2000, description="Optional spoken dialogue for the scene.")
+    camera_direction: str | None = Field(default=None, max_length=1000)
+    transition: Literal["cut", "dissolve", "whip", "match_cut", "fade"] = "cut"
 
     @field_validator("narration", "visual_prompt")
     @classmethod
@@ -119,6 +127,8 @@ class Scenario(BaseModel):
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     target_duration_seconds: int = Field(ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS)
     visual_style: str | None = Field(default=None, max_length=1000)
+    character_name: str | None = Field(default=None, max_length=150)
+    character_description: str | None = Field(default=None, max_length=2000)
     language: str = Field(default="fa-IR", min_length=2, max_length=20)
 
     @field_validator("title", "opening_hook", "narration")
@@ -243,6 +253,11 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
                 duration_seconds=duration,
                 on_screen_text=item.get("on_screen_text") or item.get("display_text"),
                 subtitle_text=item.get("subtitle_text") or item.get("subtitle"),
+                scene_type=item.get("scene_type", "b_roll"),
+                speaker=item.get("speaker", "narrator"),
+                dialogue=item.get("dialogue"),
+                camera_direction=item.get("camera_direction"),
+                transition=item.get("transition", "cut"),
             )
         )
 
@@ -293,5 +308,7 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
         hashtags=hashtags,
         target_duration_seconds=request.target_duration_seconds,
         visual_style=visual_style,
+        character_name=request.character_name,
+        character_description=request.character_description,
         language=request.language,
     )

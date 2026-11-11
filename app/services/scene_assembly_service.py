@@ -48,6 +48,48 @@ class SceneAssemblyError(Exception):
         self.code = code
 
 
+_TRANSITION_FILTERS = {
+    "dissolve": "dissolve",
+    "fade": "fade",
+    "whip": "smoothleft",
+}
+_TRANSITION_DURATIONS = {"dissolve": 0.35, "fade": 0.35, "whip": 0.25}
+
+
+def _transition_overlap(scene: Any, next_scene: Any) -> float:
+    """Return a safe overlap for the requested transition between two clips."""
+    requested = _TRANSITION_DURATIONS.get(getattr(scene, "transition", "cut"), 0.0)
+    if requested <= 0:
+        return 0.0
+    return min(requested, scene.duration_seconds / 3, next_scene.duration_seconds / 3)
+
+
+def build_scene_timeline(scenario: Scenario) -> tuple[list[float], float]:
+    """Calculate scene start offsets and final duration after transition overlaps."""
+    offsets: list[float] = []
+    cursor = 0.0
+    total_duration = sum(scene.duration_seconds for scene in scenario.scenes)
+    scenes = scenario.scenes
+    for index, scene in enumerate(scenes):
+        offsets.append(round(cursor, 3))
+        cursor += scene.duration_seconds
+        if index + 1 < len(scenes):
+            cursor -= _transition_overlap(scene, scenes[index + 1])
+    # Preserve the authored runtime (and full narration); the final frame is
+    # held for the accumulated overlap removed by xfade.
+    return offsets, round(total_duration, 3)
+
+
+def _scene_windows(scenario: Scenario) -> list[tuple[Any, float, float]]:
+    offsets, total_duration = build_scene_timeline(scenario)
+    windows: list[tuple[Any, float, float]] = []
+    for index, scene in enumerate(scenario.scenes):
+        start = offsets[index]
+        end = offsets[index + 1] if index + 1 < len(offsets) else total_duration
+        windows.append((scene, start, max(0.0, end - start)))
+    return windows
+
+
 def build_scene_on_screen_text(
     scenario: Scenario,
     *,
@@ -58,15 +100,13 @@ def build_scene_on_screen_text(
 ) -> str:
     """Build a top-centred Persian ASS overlay for each scene's display text."""
     segments: list[SubtitleSegment] = []
-    cursor = 0.0
-    for scene in scenario.scenes:
-        if scene.on_screen_text:
+    for scene, start, duration in _scene_windows(scenario):
+        if scene.on_screen_text and duration > 0:
             segments.append(SubtitleSegment(
                 text=scene.on_screen_text,
-                start_seconds=round(cursor, 3),
-                end_seconds=round(cursor + scene.duration_seconds, 3),
+                start_seconds=round(start, 3),
+                end_seconds=round(start + duration, 3),
             ))
-        cursor += scene.duration_seconds
     return build_ass_subtitle(
         segments, width=width, height=height, font_name=font_name,
         font_size=font_size or max(36, height // 28), alignment=8,
@@ -86,18 +126,18 @@ def build_scene_subtitles(
 ) -> str:
     """Build a single ASS document whose timings follow the scene plan."""
     segments: list[SubtitleSegment] = []
-    cursor = 0.0
-    for scene in scenario.scenes:
+    for scene, start, duration in _scene_windows(scenario):
         text = scene.subtitle_text or scene.narration
-        for segment in build_segments(text, scene.duration_seconds):
+        if duration <= 0:
+            continue
+        for segment in build_segments(text, duration):
             segments.append(
                 SubtitleSegment(
                     text=segment.text,
-                    start_seconds=round(cursor + segment.start_seconds, 3),
-                    end_seconds=round(cursor + segment.end_seconds, 3),
+                    start_seconds=round(start + segment.start_seconds, 3),
+                    end_seconds=round(start + segment.end_seconds, 3),
                 )
             )
-        cursor += scene.duration_seconds
     return build_ass_subtitle(
         segments,
         width=width,
@@ -182,9 +222,15 @@ class SceneAssemblyService:
                 normalized.append(target)
 
             concatenated = temp_dir / "concatenated.mp4"
-            await self._concatenate(normalized, concatenated, timeout_seconds=timeout_seconds, cwd=temp_dir)
+            await self._compose_transitions(
+                normalized,
+                concatenated,
+                scenario,
+                timeout_seconds=timeout_seconds,
+                cwd=temp_dir,
+            )
 
-            total_duration = round(sum(job.duration_seconds for job in ordered), 3)
+            _scene_offsets, total_duration = build_scene_timeline(scenario)
             subtitles_path = temp_dir / "subtitles.ass"
             subtitles_path.write_text(
                 build_scene_subtitles(
@@ -383,6 +429,86 @@ class SceneAssemblyService:
             cwd=cwd,
             timeout_seconds=timeout_seconds,
         )
+
+    async def _compose_transitions(
+        self,
+        inputs: list[Path],
+        target: Path,
+        scenario: Scenario,
+        *,
+        timeout_seconds: float,
+        cwd: Path,
+    ) -> None:
+        """Join clips with real FFmpeg transitions while preserving scene timing."""
+        if len(inputs) == 1:
+            await self._concatenate(inputs, target, timeout_seconds=timeout_seconds, cwd=cwd)
+            return
+        if len(inputs) != len(scenario.scenes):
+            raise SceneAssemblyError(
+                "Scene clips do not match the approved scenario.",
+                code="scene_count_mismatch",
+            )
+
+        command = [self.ffmpeg_bin, "-y"]
+        for path in inputs:
+            command += ["-i", path.name]
+
+        filters = [
+            f"[{index}:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v{index}]"
+            for index in range(len(inputs))
+        ]
+        current_label = "v0"
+        current_duration = scenario.scenes[0].duration_seconds
+        scenes = scenario.scenes
+        for index in range(1, len(inputs)):
+            previous_scene = scenes[index - 1]
+            next_scene = scenes[index]
+            overlap = _transition_overlap(previous_scene, next_scene)
+            output_label = f"joined{index}"
+            if overlap > 0:
+                transition = _TRANSITION_FILTERS[previous_scene.transition]
+                offset = max(0.0, current_duration - overlap)
+                filters.append(
+                    f"[{current_label}][v{index}]xfade=transition={transition}:"
+                    f"duration={overlap:.3f}:offset={offset:.3f}[{output_label}]"
+                )
+                current_duration += next_scene.duration_seconds - overlap
+            else:
+                filters.append(
+                    f"[{current_label}][v{index}]concat=n=2:v=1:a=0[{output_label}]"
+                )
+                current_duration += next_scene.duration_seconds
+            current_label = output_label
+
+        authored_duration = sum(scene.duration_seconds for scene in scenes)
+        hold_duration = max(0.0, authored_duration - current_duration)
+        output_label = current_label
+        if hold_duration > 0:
+            output_label = "vfinal"
+            filters.append(
+                f"[{current_label}]tpad=stop_mode=clone:"
+                f"stop_duration={hold_duration:.3f}[{output_label}]"
+            )
+
+        command += [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            f"[{output_label}]",
+            "-an",
+            "-t",
+            f"{authored_duration:.3f}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            target.name,
+        ]
+        await self._run(command, cwd=cwd, timeout_seconds=timeout_seconds)
 
     async def _concatenate(
         self, inputs: list[Path], target: Path, *, timeout_seconds: float, cwd: Path
@@ -607,4 +733,5 @@ __all__ = [
     "SceneAssemblyService",
     "build_scene_on_screen_text",
     "build_scene_subtitles",
+    "build_scene_timeline",
 ]
