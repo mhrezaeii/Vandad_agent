@@ -12,7 +12,7 @@ import math
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
@@ -36,6 +36,7 @@ class APIMasterConfig:
     base_url: str = "https://apimaster.ai"
     model: str = "wan3.0-video-prime"
     resolution: str = "720P"
+    route: Literal["gmi", "native"] = "gmi"
     timeout_seconds: float = 60.0
     download_allowed_hosts: tuple[str, ...] = ()
 
@@ -103,9 +104,19 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
             "aspect_ratio": request.aspect_ratio,
         }
         if request.reference_image_url:
-            body["input_reference"] = self._validate_reference_image_url(
+            reference_url = self._validate_reference_image_url(
                 request.reference_image_url
             )
+            # input_reference is a first-frame control, not a character
+            # reference. Use the route-specific reference-image contract.
+            if self.config.route == "gmi":
+                body["reference_image"] = reference_url
+            else:
+                body["metadata"] = {
+                    "input": {
+                        "media": [{"type": "reference_image", "url": reference_url}]
+                    }
+                }
         if request.seed is not None:
             if not 1 <= request.seed <= 2_147_483_647:
                 raise SceneVideoPermanentError(
