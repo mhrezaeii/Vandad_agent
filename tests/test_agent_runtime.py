@@ -1,13 +1,19 @@
 """Agent dispatcher and durable outbox integration tests."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
 from sqlalchemy import select
 
 from app.agents import build_default_agent_registry
-from app.agents.runtime import AgentDispatcher, AgentExecutionContext, MonitoringAgentHandler
+from app.agents.runtime import (
+    AgentDispatcher,
+    AgentExecutionCancelled,
+    AgentExecutionContext,
+    MonitoringAgentHandler,
+)
 from app.core.exceptions import ConflictError
 from app.models import AgentTask, AgentTaskOutbox, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
@@ -261,3 +267,24 @@ async def test_monitoring_agent_composes_discovery_and_knowledge_extraction(
         ("knowledge_service_created",),
         ("extract", platform.id, connection_id, 12),
     ]
+
+
+async def test_agent_execution_context_exposes_cooperative_cancellation():
+    cancel_event = asyncio.Event()
+    context = AgentExecutionContext(
+        company_id=uuid.uuid4(),
+        task_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        worker_id="test-worker",
+        payload={},
+        session_factory=None,
+        provider_registry=None,
+        provider_executor=None,
+        master_key_box=None,
+        cancel_event=cancel_event,
+    )
+
+    context.raise_if_cancelled()
+    cancel_event.set()
+    with pytest.raises(AgentExecutionCancelled):
+        context.raise_if_cancelled()
