@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -29,6 +30,10 @@ class CompanyProviderBudget(Base, TimestampMixin):
     __tablename__ = "company_provider_budgets"
     __table_args__ = (
         UniqueConstraint("company_id", "provider_id", name="uq_company_provider_budgets_provider"),
+        CheckConstraint(
+            "monthly_limit_usd > 0 AND per_operation_limit_usd > 0",
+            name="ck_company_provider_budget_limits_positive",
+        ),
         Index("ix_company_provider_budgets_company_enabled", "company_id", "enabled"),
     )
 
@@ -47,6 +52,14 @@ class ProviderUsageRecord(Base):
     __tablename__ = "provider_usage_records"
     __table_args__ = (
         UniqueConstraint("company_id", "idempotency_key", name="uq_provider_usage_company_idempotency"),
+        CheckConstraint(
+            "status IN ('reserved', 'settled', 'unknown', 'failed')",
+            name="ck_provider_usage_status_valid",
+        ),
+        CheckConstraint(
+            "reserved_amount_usd >= 0 AND (actual_cost_usd IS NULL OR actual_cost_usd >= 0)",
+            name="ck_provider_usage_amounts_non_negative",
+        ),
         Index("ix_provider_usage_company_provider_created", "company_id", "provider_id", "created_at"),
         Index("ix_provider_usage_company_status", "company_id", "status"),
     )
