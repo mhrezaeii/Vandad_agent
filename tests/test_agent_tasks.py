@@ -159,6 +159,15 @@ async def test_task_payload_rejects_secrets_and_oversized_content(client):
     )
     assert secret.status_code == 422
 
+    embedded_secret = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(
+            idempotency_key=f"embedded-secret-{uuid.uuid4()}",
+            input_payload={"project_id": "00000000-0000-4000-8000-000000000001", "connection_id": "00000000-0000-4000-8000-000000000002", "note": "api_key=do-not-store"},
+        ),
+    )
+    assert embedded_secret.status_code == 422
+
     oversized = await client.post(
         "/api/v1/agent-tasks",
         json=_task_payload(
