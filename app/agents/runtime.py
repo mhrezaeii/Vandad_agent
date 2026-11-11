@@ -325,7 +325,7 @@ class VideoProductionAgentHandler:
                 except (KeyError, ValueError, TypeError) as exc:
                     raise ValueError("Avatar video tasks require a valid connection_id.") from exc
                 updated = await service.generate_video(
-                    project_id, scope=scope, connection_id=connection_id
+                    project_id, scope=scope, connection_id=connection_id, task_id=context.task_id
                 )
             else:
                 raise ConflictError("Unsupported video production capability.")
