@@ -149,7 +149,10 @@ def main() -> int:
     parser.add_argument("--avatar", help="A clear, front-facing portrait image.")
     parser.add_argument("--text", help="Persian narration. If omitted, --topic is used as narration.")
     parser.add_argument("--topic", help="Alias/fallback for --text; does not call an LLM.")
-    parser.add_argument("--duration", type=int, default=120, help="Maximum allowed narration duration; output follows the actual speech length.")
+    parser.add_argument(
+        "--duration", type=int, default=120,
+        help="Maximum narration duration; output follows the actual speech length.",
+    )
     parser.add_argument("--output", default="outputs/vandiyar/first-video.mp4")
     parser.add_argument("--aspect", choices=tuple(ASPECTS), default="9:16")
     parser.add_argument("--fps", type=int, default=25)
@@ -320,4 +323,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except VideoError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from exc
