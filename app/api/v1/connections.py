@@ -14,10 +14,10 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.deps import (
     company_scope,
-    require_company_admin,
     get_connection_service,
     get_connection_validation_service,
     pagination_params,
+    require_company_admin,
 )
 from app.core.exceptions import ConflictError, ForbiddenError, UnprocessableEntityError
 from app.models import CredentialStorageType, CredentialType
