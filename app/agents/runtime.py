@@ -1,6 +1,7 @@
 """Agent execution contracts, handler registry and dispatcher."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -23,6 +24,15 @@ class AgentExecutionContext:
     provider_registry: Any
     provider_executor: Any
     master_key_box: Any
+    cancel_event: asyncio.Event | None = None
+
+    def raise_if_cancelled(self) -> None:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise AgentExecutionCancelled("Agent task cancellation was requested.")
+
+
+class AgentExecutionCancelled(Exception):
+    """Raised when cooperative cancellation is observed at a safe boundary."""
 
 
 class AgentHandler(Protocol):
@@ -72,6 +82,7 @@ class MonitoringAgentHandler:
     })
 
     async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
+        context.raise_if_cancelled()
         payload = context.payload
         try:
             platform_id = uuid.UUID(str(payload["platform_id"]))
@@ -91,6 +102,7 @@ class MonitoringAgentHandler:
                     mode="public",
                     max_pages=max(1, min(int(payload.get("max_pages", 10)), 25)),
                 )
+                context.raise_if_cancelled()
                 if capability != "platform.monitor":
                     await session.commit()
                     return {"capability": capability, **discovery_result}
@@ -99,6 +111,7 @@ class MonitoringAgentHandler:
                 await session.flush()
 
             if capability in {"platform.knowledge.extract", "platform.monitor"}:
+                context.raise_if_cancelled()
                 try:
                     connection_id = uuid.UUID(str(payload["connection_id"]))
                 except (KeyError, ValueError, TypeError) as exc:
@@ -115,6 +128,7 @@ class MonitoringAgentHandler:
                     connection_id=connection_id,
                     max_documents=max(1, min(int(payload.get("max_documents", 20)), 20)),
                 )
+                context.raise_if_cancelled()
                 await session.commit()
                 knowledge_result = {
                     "snapshot_id": str(snapshot.id),
@@ -142,6 +156,7 @@ class ContentAgentHandler:
     async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
         if capability != "content.scenario.generate":
             raise ConflictError("Unsupported content capability.")
+        context.raise_if_cancelled()
 
         def _required_uuid(field: str) -> uuid.UUID:
             try:
@@ -167,5 +182,6 @@ class ContentAgentHandler:
                     1.0, min(float(context.payload.get("timeout_seconds", 180)), 180.0)
                 ),
             )
+            context.raise_if_cancelled()
             await session.commit()
             return {"capability": capability, **result}
