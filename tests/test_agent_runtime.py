@@ -190,3 +190,74 @@ async def test_manual_retry_writes_next_outbox_attempt(db_session):
     )).all())
     assert [row.attempt_number for row in rows] == [1, 2]
     assert rows[1].status == "pending"
+
+
+
+async def test_monitoring_agent_composes_discovery_and_knowledge_extraction(
+    company_and_platform, session_factory, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.agents import runtime
+    from app.services.platform_discovery_service import PlatformDiscoveryService
+
+    company, platform = company_and_platform
+    calls = []
+
+    async def fake_discover(self, selected_platform, *, mode="public", max_pages=25,
+                            connection=None, credentials=None):
+        calls.append(("discover", selected_platform.id, mode, max_pages))
+        return {
+            "platform_id": str(selected_platform.id),
+            "mode": mode,
+            "scanned": 4,
+            "created": 2,
+            "changed": 1,
+            "unchanged": 1,
+            "warnings": [],
+        }
+
+    class FakeKnowledgeService:
+        def __init__(self, session, registry, executor, master_key_box):
+            calls.append(("knowledge_service_created",))
+
+        async def extract(self, *, platform, connection_id, max_documents):
+            calls.append(("extract", platform.id, connection_id, max_documents))
+            return SimpleNamespace(
+                id=uuid.uuid4(),
+                source_fingerprint="f" * 64,
+                model="test-model",
+            )
+
+    monkeypatch.setattr(PlatformDiscoveryService, "discover", fake_discover)
+    monkeypatch.setattr(runtime, "PlatformKnowledgeService", FakeKnowledgeService)
+
+    connection_id = uuid.uuid4()
+    context = AgentExecutionContext(
+        company_id=company.id,
+        task_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        worker_id="test-worker",
+        payload={
+            "platform_id": str(platform.id),
+            "connection_id": str(connection_id),
+            "max_pages": 40,
+            "max_documents": 12,
+        },
+        session_factory=session_factory,
+        provider_registry=object(),
+        provider_executor=object(),
+        master_key_box=object(),
+    )
+
+    result = await MonitoringAgentHandler().execute("platform.monitor", context)
+
+    assert result["capability"] == "platform.monitor"
+    assert result["discovery"]["scanned"] == 4
+    assert result["knowledge"]["platform_id"] == str(platform.id)
+    assert result["knowledge"]["source_fingerprint"] == "f" * 64
+    assert calls == [
+        ("discover", platform.id, "public", 25),
+        ("knowledge_service_created",),
+        ("extract", platform.id, connection_id, 12),
+    ]
