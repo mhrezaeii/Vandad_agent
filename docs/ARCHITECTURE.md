@@ -62,7 +62,7 @@ These are two different levels of abstraction:
 - An **agent task** is a company-scoped request to accomplish a capability-oriented outcome. It has an idempotency key, priority, attempt budget, cancellation state and run history.
 - An agent task may eventually invoke one or more workflows/tools, but it must not be silently treated as a workflow execution without an explicit orchestration contract.
 
-Current state: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owned capability router, Monitoring, Content scenario and approval-gated Video Production handlers exist. Only agents with real registered handlers and verified end-to-end coverage may be dispatch-ready. Worker reliability hardening is being validated on the production-hardening branch.
+Current state: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owned capability router, Monitoring, Content scenario and approval-gated Video Production handlers exist. Only agents with real registered handlers and verified end-to-end coverage may be dispatch-ready. Worker reliability, durable progress events, reconnectable SSE, and code-owned capability input contracts are implemented on `fix/phase1-agent-runtime-failure-injection`; aggregate CI validation remains pending.
 
 ### Provider adapters
 
@@ -101,12 +101,12 @@ The Video Production Agent routes approved tasks into these existing workflows, 
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
 | Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
 | Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, LLM usage settlement and paid video reservations; unknown costs remain reserved |
-| Provider health/latency/error telemetry | Partial | LLM latency, attempts and usage are recorded; provider health history and reconciliation remain |
+| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day request/error/latency metrics derived from the usage ledger; live health probes remain |
 | Deterministic provider/model routing and fallback | Partial | Explicit connection/model selection exists; ordered fallback and cross-provider capability negotiation remain |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
 | Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
 | Talking-avatar local renderer | Utility script exists | Local runtime/model assets are not source-controlled |
-| Web UI | Initial implementation | Persian RTL Next.js operator console under `web/`; visual/accessibility hardening and production identity/RBAC remain |
+| Web UI and identity | Initial implementation | Persian RTL Next.js console, live task SSE, trusted OIDC-proxy identity, tenant claims and baseline roles; visual/accessibility review and deployment integration remain |
 
 ## Required security and reliability invariants
 
@@ -137,7 +137,7 @@ The Video Production Agent routes approved tasks into these existing workflows, 
 - [ ] Failure-injection and full CI validation before merge/deployment.
 - [x] Durable task lifecycle/progress events, JSON event history and company-scoped SSE stream.
 - [x] Explicit code-owned Tool/Capability Router for every registered handler/capability pair.
-- [ ] Tenant-isolated end-to-end tests for every dispatch-ready agent.
+- [x] Tenant-boundary tests for Monitoring, Content and Video handlers; full worker-level E2E matrix still requires aggregate CI validation.
 - [ ] Aggregate failure-injection and full CI acceptance before merge/deployment.
 
 ### P1 — Provider and cost control (not complete)
@@ -146,7 +146,7 @@ The Video Production Agent routes approved tasks into these existing workflows, 
 - [x] Add company/provider monthly budgets and per-operation reservations; unknown cost remains reserved rather than being reported as free.
 - [x] Record LLM provider-reported usage, latency, attempts and actual cost when explicitly supplied.
 - [x] Require a configured company budget before dispatching paid video-agent operations.
-- [ ] Complete provider health/error history, operator reconciliation and explicit ordered fallback/capability routing.
+- [x] Add tenant-scoped rolling provider request/error/latency telemetry and admin-only manual spend reconciliation.\n- [ ] Add explicit ordered fallback/capability routing and live provider health probes.
 - [ ] Add provider/model capability constraints for language, modality, duration, aspect ratio and lip-sync.
 - Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
 
@@ -158,12 +158,12 @@ Paid autonomous execution remains gated until these controls are implemented and
 - [x] Content scenario generation handler.
 - [x] Human approval lifecycle for paid video tasks and project script/scenario approval before generation.
 - [x] Video Production Agent routes approved avatar and scene projects to their separate workflow pipelines.
-- [ ] Provider settlement callback from completed media jobs into the usage ledger; current paid-video reservation remains conservative until reconciliation.
+- [x] Settle scene-video reservations automatically when every completed scene reports an explicit USD cost; otherwise keep the reservation for operator reconciliation.
 - [ ] Mock-provider integration coverage and opt-in live smoke tests with spend ceilings.
 
 ### P3 — Web UI (initial implementation)
 
-A separate Next.js + TypeScript frontend has been added under `web/` and consumes the public API. It is Persian-first, RTL and responsive. It is an initial operator console; visual polish, accessibility review, user authentication/RBAC and full production deployment remain before P3 acceptance.
+A separate Next.js + TypeScript frontend has been added under `web/` and consumes the API. It is Persian-first, RTL and responsive, with live task event streaming. Production requests now require a trusted OIDC/auth proxy to inject verified user, company-membership and role claims using a shared secret; viewer is read-only, operator can execute, and owner/admin control agent activation and budgets. The reverse proxy must strip inbound `X-Auth-*` headers before injecting trusted claims. Visual polish, accessibility review and deployment integration remain before P3 acceptance.
 
 Initial screens:
 - Overview: task activity, recent runs, provider health and spend.
