@@ -1,5 +1,7 @@
 """Provider-native video finalization tests; no local renderer is required."""
 
+from __future__ import annotations
+
 from app.services.subtitle_service import build_ass_for_script, build_segments
 
 
