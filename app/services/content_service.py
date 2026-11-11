@@ -1240,6 +1240,18 @@ class ContentService:
             "llm_usage": project.llm_usage,
         }
 
+    async def list_projects(
+        self, *, company_id: uuid.UUID, limit: int = 50, offset: int = 0
+    ) -> list[ContentProject]:
+        rows = await self.session.scalars(
+            select(ContentProject)
+            .where(ContentProject.company_id == company_id)
+            .order_by(ContentProject.updated_at.desc(), ContentProject.id.desc())
+            .limit(max(1, min(limit, 100)))
+            .offset(max(0, offset))
+        )
+        return list(rows.all())
+
     async def list_videos(self, *, company_id: uuid.UUID) -> list[ContentProject]:
         return list(
             (
