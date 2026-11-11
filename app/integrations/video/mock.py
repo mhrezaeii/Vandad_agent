@@ -5,7 +5,7 @@ synthetic MP4-shaped payload after a configurable number of status polls. That
 lets the full pipeline (submission -> polling -> download -> assembly) run
 without spending credits or requiring ffmpeg on the host.
 
-The payload is intentionally not a playable AI clip. The payload is only a container-shaped fixture; it is not a playable video.
+The payload is a container-shaped fixture only; it is not a playable AI video.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from app.integrations.video.base import (
     InMemorySceneVideoProvider,
     SceneGenerationStatus,
     SceneJobState,
-    SceneVideoCompositionRequest,
     SceneVideoPermanentError,
+    SceneVideoCompositionRequest,
     SceneVideoRequest,
 )
 
