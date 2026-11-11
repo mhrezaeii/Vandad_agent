@@ -5,7 +5,7 @@ Last reviewed: 2026-11-11 (backend completion pass)
 ## Intended runtime shape
 
 ```text
-Web UI (not implemented yet)
+Web UI (Next.js operator console — initial implementation)
         |
         v
 FastAPI API / authentication / company scope
@@ -62,7 +62,7 @@ These are two different levels of abstraction:
 - An **agent task** is a company-scoped request to accomplish a capability-oriented outcome. It has an idempotency key, priority, attempt budget, cancellation state and run history.
 - An agent task may eventually invoke one or more workflows/tools, but it must not be silently treated as a workflow execution without an explicit orchestration contract.
 
-Current state on `feature/monitoring-to-knowledge-pipeline`: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owned dispatcher, Monitoring and Content scenario handlers exist. Only agents with real registered handlers and verified end-to-end coverage may be dispatch-ready. Worker reliability hardening is being validated on the production-hardening branch.
+Current state: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owned capability router, Monitoring, Content scenario and approval-gated Video Production handlers exist. Only agents with real registered handlers and verified end-to-end coverage may be dispatch-ready. Worker reliability hardening is being validated on the production-hardening branch.
 
 ### Provider adapters
 
@@ -86,7 +86,7 @@ Keep the two video paths separate:
 1. **Talking avatar**: Persian speech generation, face/lip animation and final rendering. It is the path for a persistent presenter speaking a script.
 2. **Scene video**: storyboard, independent scene generation, clip retrieval and assembly. It is the path for product footage, B-roll and cinematic scenes.
 
-A future Video Production Agent can orchestrate both, but each pipeline retains its own capability contract. Scene generation is not a substitute for lip-sync.
+The Video Production Agent routes approved tasks into these existing workflows, but each pipeline retains its own capability contract. Scene generation is not a substitute for lip-sync.
 
 ## Current implementation map
 
@@ -99,7 +99,7 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 | Workflow graph runtime and worker | Implemented | Redis-backed workflow execution |
 | Agent catalog and company enablement | Implemented on feature stack | Definitions are code-owned; company rows only enable approved agents |
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
-| Agent dispatcher and dedicated worker | Implemented on feature stack | Monitoring and Content scenario handlers; reliability hardening under validation |
+| Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
 | Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, LLM usage settlement and paid video reservations; unknown costs remain reserved |
 | Provider health/latency/error telemetry | Partial | LLM latency, attempts and usage are recorded; provider health history and reconciliation remain |
 | Deterministic provider/model routing and fallback | Partial | Explicit connection/model selection exists; ordered fallback and cross-provider capability negotiation remain |
