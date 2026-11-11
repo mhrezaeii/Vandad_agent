@@ -9,7 +9,10 @@ from fastapi import APIRouter, Depends, Query, status
 from app.agents import AgentRegistry
 from app.api.deps import company_scope, get_agent_task_service
 from app.schemas.agent_task import (
-    AgentTaskCreate, AgentTaskListRead, AgentTaskRead, AgentTaskRunRead,
+    AgentTaskCreate,
+    AgentTaskListRead,
+    AgentTaskRead,
+    AgentTaskRunRead,
 )
 from app.security.authorization import CompanyScope
 from app.services.agent_task_service import AgentTaskService
