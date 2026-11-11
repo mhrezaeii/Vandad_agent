@@ -18,7 +18,10 @@ def _task_payload(**overrides):
         "agent_key": "content",
         "capability": "content.scenario.generate",
         "title": "Draft a short product announcement",
-        "input_payload": {"project_id": "00000000-0000-4000-8000-000000000001", "connection_id": "00000000-0000-4000-8000-000000000002"},
+        "input_payload": {
+            "project_id": "00000000-0000-4000-8000-000000000001",
+            "connection_id": "00000000-0000-4000-8000-000000000002",
+        },
         "idempotency_key": "task-request-001",
         "priority": 50,
         "max_attempts": 3,
@@ -163,7 +166,11 @@ async def test_task_payload_rejects_secrets_and_oversized_content(client):
         "/api/v1/agent-tasks",
         json=_task_payload(
             idempotency_key=f"embedded-secret-{uuid.uuid4()}",
-            input_payload={"project_id": "00000000-0000-4000-8000-000000000001", "connection_id": "00000000-0000-4000-8000-000000000002", "note": "api_key=do-not-store"},
+            input_payload={
+                "project_id": "00000000-0000-4000-8000-000000000001",
+                "connection_id": "00000000-0000-4000-8000-000000000002",
+                "note": "api_key=do-not-store",
+            },
         ),
     )
     assert embedded_secret.status_code == 422
