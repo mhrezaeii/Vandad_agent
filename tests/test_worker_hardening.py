@@ -80,6 +80,9 @@ def _make_worker(
     worker.registry = registry
     worker.executor = executor
     worker.queue = queue
+    # Keep the manually constructed worker aligned with the production
+    # constructor after scene-video orchestration was added.
+    worker.scene_video_registry = None
     # Media nodes need storage; these hardening tests never touch artifacts.
     worker.artifact_storage = None
     worker._stopping = asyncio.Event()

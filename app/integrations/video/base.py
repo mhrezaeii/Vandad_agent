@@ -64,6 +64,7 @@ class SceneVideoRequest:
     aspect_ratio: str = "9:16"
     width: int = 1080
     height: int = 1920
+    reference_image_url: str | None = None
     seed: int | None = None
     idempotency_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -133,7 +134,9 @@ class SceneVideoProvider(ABC):
     provider_id: str = ""
     display_name: str = ""
     supports_cancellation: bool = False
+    supports_lipsync: bool = False
     requires_network: bool = False
+    supports_reference_image: bool = False
 
     @abstractmethod
     async def generate_video(self, request: SceneVideoRequest) -> str:

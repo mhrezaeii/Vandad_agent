@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.integrations.video import (
+    APIMasterConfig,
     GenericHttpConfig,
     SceneVideoProviderRegistry,
     build_scene_video_registry,
@@ -12,12 +13,7 @@ from app.integrations.video import (
 
 
 def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegistry:
-    """Return the configured registry, failing fast on an unusable selection.
-
-    ``mock`` is always available. ``generic_http`` is registered only when a
-    base URL is configured; selecting it without one is a configuration error,
-    never a silent fallback to another provider.
-    """
+    """Build configured scene-video providers and fail closed on bad selection."""
     http_config: GenericHttpConfig | None = None
     base_url = getattr(settings, "scene_video_http_base_url", None)
     if base_url:
@@ -36,7 +32,27 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             ),
         )
 
-    registry = build_scene_video_registry(http_config=http_config)
+    apimaster_config: APIMasterConfig | None = None
+    apimaster_key = getattr(settings, "scene_video_apimaster_api_key", None)
+    if apimaster_key and apimaster_key.strip():
+        apimaster_config = APIMasterConfig(
+            api_key=apimaster_key.strip(),
+            base_url=getattr(settings, "scene_video_apimaster_base_url", "https://apimaster.ai"),
+            model=getattr(settings, "scene_video_apimaster_model", "wan3.0-video-prime"),
+            route=getattr(settings, "scene_video_apimaster_route", "gmi"),
+            resolution=getattr(settings, "scene_video_apimaster_resolution", "720P"),
+            timeout_seconds=getattr(settings, "scene_video_apimaster_timeout_seconds", 60.0),
+            download_allowed_hosts=tuple(
+                host.strip()
+                for host in getattr(settings, "scene_video_apimaster_download_allowed_hosts", "").split(",")
+                if host.strip()
+            ),
+        )
+
+    registry = build_scene_video_registry(
+        http_config=http_config,
+        apimaster_config=apimaster_config,
+    )
     selected = getattr(settings, "scene_video_provider", "mock")
     if getattr(settings, "is_production", False) and selected == "mock":
         raise ValueError("The mock scene-video provider is forbidden in production.")

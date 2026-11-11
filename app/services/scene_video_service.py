@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError
 from app.integrations.video import (
     SceneJobState,
+    SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoProviderRegistry,
     SceneVideoQuotaExhaustedError,
@@ -31,6 +32,7 @@ from app.integrations.video import (
 )
 from app.models import (
     ArtifactKind,
+    BrandCharacter,
     ContentProject,
     ProjectStatus,
     ProviderQuotaUsage,
@@ -44,6 +46,42 @@ from app.storage.base import ArtifactStorage
 
 _SCENE_RESOURCE = "scene_video_job"
 _PREVIEW_BYTES = 64 * 1024
+
+
+def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
+    """Translate structured storyboard direction into a provider-ready prompt."""
+    lines = [
+        f"SCENE TYPE: {scene.scene_type}",
+        f"SPEAKER: {scene.speaker}",
+        f"VISUAL STYLE: {scenario.visual_style or 'consistent premium brand film'}",
+    ]
+    if scene.scene_type == "presenter":
+        lines.append(
+            "PRESENTER IDENTITY: Keep the recurring brand character visually identical "
+            "to every other presenter scene."
+        )
+        if scenario.character_name:
+            lines.append(f"CHARACTER NAME: {scenario.character_name}")
+        if scenario.character_description:
+            lines.append(f"CHARACTER REFERENCE DESCRIPTION: {scenario.character_description}")
+        if scene.dialogue:
+            lines.append(f"SPOKEN DIALOGUE (Persian; do not render as on-screen text): {scene.dialogue}")
+        lines.append("Frame as a polished medium close-up with natural expression and direct eye contact.")
+    elif scene.scene_type == "product_demo":
+        lines.append(
+            "PRODUCT DEMO: Show a believable close-up or over-the-shoulder interaction with the product UI. "
+            "Do not invent readable labels, metrics, customer data or product features."
+        )
+    elif scene.scene_type == "motion_graphic":
+        lines.append(
+            "MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic "
+            "composition; no generated text."
+        )
+    if scene.camera_direction:
+        lines.append(f"CAMERA: {scene.camera_direction}")
+    lines.append(f"TRANSITION INTO NEXT SCENE: {scene.transition}")
+    lines.append(f"VISUAL PROMPT: {scene.visual_prompt}")
+    return "\n".join(lines)
 
 
 class SceneVideoService:
@@ -65,12 +103,50 @@ class SceneVideoService:
         self.max_size_bytes = max_size_bytes
         self.audit = AuditService(session)
 
+    async def _character_reference_image(self, project: ContentProject) -> str | None:
+        """Return the tenant-owned source portrait for this brand, if configured."""
+        result = await self.session.execute(
+            select(BrandCharacter.source_image_url)
+            .where(
+                BrandCharacter.brand_id == project.brand_id,
+                BrandCharacter.company_id == project.company_id,
+                BrandCharacter.source_image_url.is_not(None),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     # -------------------------------------------------------------- preparation
     async def prepare_scenes(
         self, project: ContentProject, scenario: Scenario, *, provider_id: str
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
+        presenter_scenes = [
+            scene
+            for scene in scenario.scenes
+            if scene.scene_type == "presenter" and scene.speaker == "brand_character"
+        ]
+        unsupported_presenters = [
+            scene.index for scene in presenter_scenes if scene.dialogue and not provider.supports_lipsync
+        ]
+        if unsupported_presenters:
+            raise ConflictError(
+                "Spoken brand-character presenter scenes require real image/audio lip-sync support; "
+                f"provider {provider.provider_id!r} cannot generate them (scene indexes: "
+                f"{unsupported_presenters})."
+            )
+        if presenter_scenes and provider.supports_reference_image:
+            if not await self._character_reference_image(project):
+                raise ConflictError(
+                    "A saved public source_image_url is required for brand-character image-to-video scenes."
+                )
+        elif presenter_scenes and not provider.supports_lipsync:
+            raise ConflictError(
+                "Brand-character presenter scenes require a provider with real image/audio lip-sync support "
+                "or image-reference support; "
+                f"provider {provider.provider_id!r} cannot generate them."
+            )
         existing = {
             job.scene_index: job
             for job in (
@@ -91,7 +167,7 @@ class SceneVideoService:
                     scene_key=f"scene-{scene.index:02d}",
                     provider=provider.provider_id,
                     status=SceneVideoJobStatus.PENDING.value,
-                    prompt=scene.visual_prompt,
+                    prompt=build_scene_provider_prompt(scene, scenario),
                     narration=scene.narration,
                     on_screen_text=scene.on_screen_text,
                     subtitle_text=scene.subtitle_text or scene.narration,
@@ -115,7 +191,7 @@ class SceneVideoService:
             else:
                 # Keep the persisted prompt/narration in sync with an approved
                 # scenario without resetting provider state.
-                job.prompt = scene.visual_prompt
+                job.prompt = build_scene_provider_prompt(scene, scenario)
                 job.narration = scene.narration
                 job.on_screen_text = scene.on_screen_text
                 job.subtitle_text = scene.subtitle_text or scene.narration
@@ -146,6 +222,19 @@ class SceneVideoService:
 
         submitted = 0
         first_transient: Exception | None = None
+        first_permanent: SceneVideoPermanentError | None = None
+        scenario_scenes = (project.scenario or {}).get("scenes", [])
+        presenter_indexes = {
+            int(scene.get("index", -1))
+            for scene in scenario_scenes
+            if scene.get("scene_type") == "presenter"
+            and scene.get("speaker") == "brand_character"
+        }
+        character_reference_image = (
+            await self._character_reference_image(project)
+            if presenter_indexes and provider.supports_reference_image
+            else None
+        )
         for job in jobs:
             if job.provider_job_id is not None:
                 continue
@@ -166,6 +255,11 @@ class SceneVideoService:
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,
                 duration_seconds=job.duration_seconds,
+                reference_image_url=(
+                    character_reference_image
+                    if job.scene_index in presenter_indexes
+                    else None
+                ),
                 idempotency_key=f"vandad-scene-{job.id}",
                 metadata={"project_id": str(project.id), "scene_index": job.scene_index},
             )
@@ -186,7 +280,16 @@ class SceneVideoService:
                 await self.session.flush()
                 first_transient = first_transient or exc
                 continue
-            except Exception as exc:  # permanent / unexpected: fail this scene
+            except SceneVideoPermanentError as exc:
+                job.status = SceneVideoJobStatus.FAILED.value
+                job.error_code = exc.code
+                job.error_message = exc.message
+                await self.session.flush()
+                # Scenes are independent: preserve this failure but continue
+                # submitting the remaining scenes in the same storyboard.
+                first_permanent = first_permanent or exc
+                continue
+            except Exception as exc:  # unexpected provider failure
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = getattr(exc, "code", "provider_error")
                 job.error_message = getattr(exc, "message", str(exc))
@@ -217,6 +320,8 @@ class SceneVideoService:
         await self.session.flush()
         if first_transient is not None:
             raise first_transient
+        if first_permanent is not None:
+            raise first_permanent
         return {
             "submitted": submitted,
             "total": len(jobs),

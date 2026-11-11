@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
+from app.core.exceptions import ConflictError
 from app.integrations.video import (
     MockSceneVideoProvider,
     SceneVideoPermanentError,
@@ -21,7 +22,7 @@ from app.models import (
 )
 from app.schemas.scenario import Scenario, SceneSpec
 from app.security.authorization import CompanyScope, Principal
-from app.services.scene_video_service import SceneVideoService
+from app.services.scene_video_service import SceneVideoService, build_scene_provider_prompt
 
 
 @pytest.fixture
@@ -116,6 +117,21 @@ async def test_prepare_scenes_is_idempotent(
     assert project.status == "scenes_prepared"
     assert project.scene_video_provider == "mock"
     assert project.scenario is not None
+
+
+async def test_prepare_scenes_rejects_brand_presenter_without_lipsync_provider(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    scenario = _scenario()
+    scenario.scenes[1].scene_type = "presenter"
+    scenario.scenes[1].speaker = "brand_character"
+    scenario.scenes[1].dialogue = "سلام، من وندی هستم."
+    service = _service(db_session, MockSceneVideoProvider())
+
+    with pytest.raises(ConflictError, match="real image/audio lip-sync support"):
+        await service.prepare_scenes(project, scenario, provider_id="mock")
 
 
 async def test_submit_pending_never_submits_twice(
@@ -272,3 +288,48 @@ async def test_scene_project_is_tenant_isolated(
                 principal=Principal(subject="x", company_ids=frozenset({"*"})),
             ),
         )
+
+
+
+def test_scene_provider_prompt_carries_character_identity_dialogue_and_product_direction():
+    presenter = SceneSpec(
+        index=0,
+        narration="سلام، من وندی هستم.",
+        visual_prompt="A friendly brand presenter in a modern office.",
+        duration_seconds=5,
+        scene_type="presenter",
+        speaker="brand_character",
+        dialogue="سلام، من وندی هستم.",
+        camera_direction="medium close-up, slow push-in",
+        transition="match_cut",
+    )
+    scenario = Scenario(
+        title="معرفی وندیار",
+        opening_hook="همه ابزارها یک‌جا",
+        scenes=[presenter, SceneSpec(
+            index=1,
+            narration="همه چیز یکپارچه است.",
+            visual_prompt="A clean SaaS dashboard on a desktop monitor.",
+            duration_seconds=5,
+            scene_type="product_demo",
+        ), SceneSpec(
+            index=2,
+            narration="همین حالا شروع کن.",
+            visual_prompt="Brand end card with abstract motion shapes.",
+            duration_seconds=5,
+            scene_type="cta",
+        )],
+        narration="سلام، من وندی هستم. همه چیز یکپارچه است. همین حالا شروع کن.",
+        target_duration_seconds=15,
+        character_name="وندی",
+        character_description="Short dark hair, glasses, navy outfit, same face in every shot.",
+        visual_style="premium cinematic navy and teal brand film",
+    )
+    prompt = build_scene_provider_prompt(presenter, scenario)
+
+    assert "SCENE TYPE: presenter" in prompt
+    assert "CHARACTER NAME: وندی" in prompt
+    assert "same face in every shot" in prompt
+    assert "SPOKEN DIALOGUE" in prompt
+    assert "medium close-up" in prompt
+    assert "match_cut" in prompt

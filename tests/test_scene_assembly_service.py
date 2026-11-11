@@ -13,6 +13,7 @@ from app.services.scene_assembly_service import (
     SceneAssemblyService,
     build_scene_on_screen_text,
     build_scene_subtitles,
+    build_scene_timeline,
 )
 
 
@@ -82,3 +83,46 @@ async def test_assembly_rejects_missing_narration_unless_silent_is_explicit():
     with pytest.raises(ConflictError, match="Persian narration audio is required"):
         await service.assemble(**kwargs)
 
+
+
+def test_scene_timeline_accounts_for_real_transition_overlaps():
+    scenario = _scenario()
+    scenario.scenes[0].transition = "dissolve"
+    scenario.scenes[1].transition = "whip"
+
+    offsets, total_duration = build_scene_timeline(scenario)
+
+    assert offsets == [0.0, 4.65, 9.4]
+    assert total_duration == 15.0
+    subtitles = build_scene_subtitles(scenario)
+    assert "0:00:04.65" in subtitles
+    assert "0:00:15.00" in subtitles
+
+
+@pytest.mark.asyncio
+async def test_assembly_builds_ffmpeg_xfade_filters_for_storyboard_transitions(tmp_path):
+    scenario = _scenario()
+    scenario.scenes[0].transition = "dissolve"
+    scenario.scenes[1].transition = "whip"
+    service = SceneAssemblyService(None, None)
+    captured = {}
+
+    async def fake_run(command, *, cwd, timeout_seconds):
+        captured["command"] = command
+
+    service._run = fake_run
+    inputs = [tmp_path / f"scene-{index}.mp4" for index in range(3)]
+    await service._compose_transitions(
+        inputs,
+        tmp_path / "joined.mp4",
+        scenario,
+        timeout_seconds=30,
+        cwd=tmp_path,
+    )
+
+    command = captured["command"]
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "xfade=transition=dissolve:duration=0.350:offset=4.650" in filter_graph
+    assert "xfade=transition=smoothleft:duration=0.250:offset=9.400" in filter_graph
+    assert "tpad=stop_mode=clone:stop_duration=0.600" in filter_graph
+    assert command[command.index("-t") + 1] == "15.000"

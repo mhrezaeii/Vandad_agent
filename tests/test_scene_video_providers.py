@@ -6,6 +6,8 @@ import httpx
 import pytest
 
 from app.integrations.video import (
+    APIMasterConfig,
+    APIMasterSceneVideoProvider,
     GenericHttpConfig,
     GenericHttpSceneVideoProvider,
     MockSceneVideoProvider,
@@ -209,7 +211,7 @@ def test_registry_includes_mock_and_only_configured_http():
 
 
 async def test_generic_http_never_sends_api_key_to_media_cdn():
-    payload = b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 128
+    payload = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
     media_auth: list[str | None] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -248,3 +250,171 @@ async def test_generic_http_rejects_private_media_ip():
     with pytest.raises(SceneVideoPermanentError) as exc:
         provider._validate_media_url("https://127.0.0.1/private")
     assert exc.value.code == "provider_private_media_ip"
+
+
+# --------------------------------------------------------------- APIMaster
+def _apimaster_provider(handler) -> APIMasterSceneVideoProvider:
+    config = APIMasterConfig(
+        api_key="apimaster-test-secret",
+        base_url="https://api.apimaster.test",
+        model="wan3.0-video-prime",
+        resolution="720P",
+        route="gmi",
+        download_allowed_hosts=("media.apimaster.test",),
+    )
+    return APIMasterSceneVideoProvider(
+        config,
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+
+
+async def test_apimaster_submits_wan_request_with_image_reference():
+    import json
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        captured["body"] = request.read()
+        return httpx.Response(201, json={"id": "task-123", "status": "queued"})
+
+    provider = _apimaster_provider(handler)
+    request = SceneVideoRequest(
+        scene_id="p:0",
+        prompt="A consistent presenter moves naturally in a studio.",
+        duration_seconds=5.4,
+        reference_image_url="https://assets.example.test/vandiar.png",
+        aspect_ratio="9:16",
+    )
+    task_id = await provider.generate_video(request)
+
+    body = json.loads(captured["body"])
+    assert task_id == "task-123"
+    assert captured["request"].headers["Authorization"] == "Bearer apimaster-test-secret"
+    assert body == {
+        "model": "wan3.0-video-prime",
+        "prompt": request.prompt,
+        "duration": 5,
+        "resolution": "720P",
+        "aspect_ratio": "9:16",
+        "reference_image": "https://assets.example.test/vandiar.png",
+    }
+
+
+async def test_apimaster_native_route_submits_reference_image_media():
+    import json
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(201, json={"id": "native-task", "status": "queued"})
+
+    provider = APIMasterSceneVideoProvider(
+        APIMasterConfig(
+            api_key="apimaster-test-secret",
+            base_url="https://api.apimaster.test",
+            route="native",
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    await provider.generate_video(
+        SceneVideoRequest(
+            scene_id="p:0",
+            prompt="Animate the character shown in image 1.",
+            duration_seconds=5,
+            reference_image_url="https://assets.example.test/vandiar.png",
+            aspect_ratio="9:16",
+        )
+    )
+    body = json.loads(captured["body"])
+    assert body["metadata"]["input"]["media"] == [
+        {"type": "reference_image", "url": "https://assets.example.test/vandiar.png"}
+    ]
+    assert "input_reference" not in body
+
+
+async def test_apimaster_polls_status_and_downloads_with_api_auth():
+    video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
+    calls: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url), request.headers.get("Authorization")))
+        if request.method == "GET" and str(request.url).endswith("/v1/videos/task-9"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "task-9",
+                    "status": "completed",
+                    "progress": 100,
+                    "metadata": {"url": "https://api.apimaster.test/v1/videos/task-9/content"},
+                },
+            )
+        if str(request.url).endswith("/v1/videos/task-9/content"):
+            return httpx.Response(200, content=video, headers={"content-type": "video/mp4"})
+        return httpx.Response(404, json={})
+
+    provider = _apimaster_provider(handler)
+    status = await provider.get_generation_status("task-9")
+    assert status.is_completed is True
+    assert status.progress == 1.0
+    assert await _drain(provider, "task-9") == video
+    assert all(auth == "Bearer apimaster-test-secret" for _method, _url, auth in calls)
+
+
+async def test_apimaster_never_sends_api_key_to_redirected_media_host():
+    video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
+    media_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/v1/videos/task-10"):
+            return httpx.Response(200, json={"status": "completed"})
+        if str(request.url).endswith("/v1/videos/task-10/content"):
+            return httpx.Response(
+                302,
+                headers={"location": "https://media.apimaster.test/task-10.mp4"},
+            )
+        media_auth.append(request.headers.get("Authorization"))
+        return httpx.Response(200, content=video, headers={"content-type": "video/mp4"})
+
+    provider = _apimaster_provider(handler)
+    assert await _drain(provider, "task-10") == video
+    assert media_auth == [None]
+
+
+async def test_apimaster_rejects_invalid_duration_and_untrusted_reference():
+    provider = _apimaster_provider(lambda _request: httpx.Response(201, json={"id": "unused"}))
+    with pytest.raises(SceneVideoPermanentError, match="duration from 2 to 30 seconds"):
+        await provider.generate_video(
+            SceneVideoRequest(scene_id="p:1", prompt="test", duration_seconds=1.5)
+        )
+    with pytest.raises(SceneVideoPermanentError) as exc:
+        await provider.generate_video(
+            SceneVideoRequest(
+                scene_id="p:2",
+                prompt="test",
+                duration_seconds=5,
+                reference_image_url="http://127.0.0.1/private.png",
+            )
+        )
+    assert exc.value.code == "provider_invalid_reference_image"
+
+
+async def test_apimaster_maps_insufficient_balance_to_quota_error():
+    provider = _apimaster_provider(lambda _request: httpx.Response(402, json={"error": "balance"}))
+    with pytest.raises(SceneVideoQuotaExhaustedError):
+        await provider.generate_video(_request())
+
+
+def test_registry_registers_apimaster_only_when_configured():
+    from app.integrations.video import build_scene_video_registry
+
+    assert build_scene_video_registry().has("apimaster") is False
+    configured = build_scene_video_registry(
+        apimaster_config=APIMasterConfig(api_key="test-key")
+    )
+    assert configured.has("apimaster") is True
