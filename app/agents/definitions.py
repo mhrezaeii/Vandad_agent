@@ -23,7 +23,7 @@ BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
         key="monitoring",
         name="Monitoring Agent",
         description="کشف پلتفرم‌ها، رصد تغییرات و آماده‌سازی دانش مستند به منبع.",
-        capabilities=("platform.discover", "platform.change.detect", "platform.knowledge.extract"),
+        capabilities=("platform.monitor", "platform.discover", "platform.change.detect", "platform.knowledge.extract"),
         maturity="partial",
         dispatch_ready=True,
     ),
