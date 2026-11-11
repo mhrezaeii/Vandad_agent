@@ -64,10 +64,11 @@ async def test_task_creation_requires_active_agent_and_is_idempotent(client):
 
 async def test_task_spend_ceiling_is_validated_and_persisted(client):
     await _activate_agent(client)
+    key = f"spend-ceiling-{uuid.uuid4()}"
     created = await client.post(
         "/api/v1/agent-tasks",
         json=_task_payload(
-            idempotency_key=f"spend-ceiling-{uuid.uuid4()}",
+            idempotency_key=key,
             spend_ceiling_usd="2.500000",
         ),
     )
@@ -77,7 +78,7 @@ async def test_task_spend_ceiling_is_validated_and_persisted(client):
     replay = await client.post(
         "/api/v1/agent-tasks",
         json=_task_payload(
-            idempotency_key=f"spend-ceiling-{uuid.uuid4()}",
+            idempotency_key=key,
             spend_ceiling_usd="2.500000",
         ),
     )
