@@ -39,10 +39,13 @@ _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
 class ScenarioGenerationError(Exception):
     """The text API did not return a usable scenario (message is client-safe)."""
 
-    def __init__(self, message: str, *, code: str = "scenario_generation_failed") -> None:
+    def __init__(
+        self, message: str, *, code: str = "scenario_generation_failed", retryable: bool = False
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
+        self.retryable = retryable
 
 
 LlmCall = Callable[..., Awaitable[Any]]
@@ -270,7 +273,9 @@ class ScenarioService:
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
             await budget_service.settle(reservation, error_code=error.code or "llm_failure")
-            raise ScenarioGenerationError(error.message, code=error.code or "llm_failure")
+            raise ScenarioGenerationError(
+                error.message, code=error.code or "llm_failure", retryable=error.is_transient
+            )
         metadata = outcome.result.metadata or {}
         usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
         await budget_service.settle(
