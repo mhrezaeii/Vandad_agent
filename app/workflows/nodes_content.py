@@ -470,7 +470,11 @@ async def _download_video(
     if engine.artifact_storage is None:
         raise ProviderPermanentError("Artifact storage is not configured.", code="storage_unavailable")
 
-    artifact_service = ArtifactService(\n        engine.session, engine.artifact_storage, max_size_bytes=2 * 1024**3\n    )
+    artifact_service = ArtifactService(
+        engine.session,
+        engine.artifact_storage,
+        max_size_bytes=2 * 1024**3,
+    )
 
     async def _video_chunks() -> Any:
         async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
