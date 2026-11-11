@@ -1,7 +1,7 @@
 name: backend-tests
 
 concurrency:
-  group: backend-tests-${{ github.event.pull_request.head.ref || github.ref }}
+  group: backend-tests-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 on:
