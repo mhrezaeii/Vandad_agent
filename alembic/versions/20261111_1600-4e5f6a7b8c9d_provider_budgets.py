@@ -37,10 +37,12 @@ def upgrade() -> None:
     op.create_index("ix_company_provider_budgets_company_enabled", "company_provider_budgets", ["company_id", "enabled"])
     op.create_index("ix_company_provider_budgets_company_id", "company_provider_budgets", ["company_id"])
 
+    op.add_column("agent_tasks", sa.Column("spend_ceiling_usd", sa.Numeric(14, 6), nullable=True))
     op.create_table(
         "provider_usage_records",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("company_id", sa.Uuid(), nullable=False),
+        sa.Column("task_id", sa.Uuid(), nullable=True),
         sa.Column("provider_id", sa.String(length=80), nullable=False),
         sa.Column("operation", sa.String(length=100), nullable=False),
         sa.Column("model", sa.String(length=160), nullable=True),
@@ -54,6 +56,7 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["company_id"], ["companies.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["task_id", "company_id"], ["agent_tasks.id", "agent_tasks.company_id"], ondelete="CASCADE", name="fk_provider_usage_task_company"),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_provider_usage_records")),
         sa.UniqueConstraint("company_id", "idempotency_key", name="uq_provider_usage_company_idempotency"),
         sa.CheckConstraint("status IN ('reserved', 'settled', 'unknown', 'failed')", name="ck_provider_usage_status_valid"),
@@ -62,13 +65,16 @@ def upgrade() -> None:
     op.create_index("ix_provider_usage_company_provider_created", "provider_usage_records", ["company_id", "provider_id", "created_at"])
     op.create_index("ix_provider_usage_company_status", "provider_usage_records", ["company_id", "status"])
     op.create_index("ix_provider_usage_records_company_id", "provider_usage_records", ["company_id"])
+    op.create_index("ix_provider_usage_records_task_id", "provider_usage_records", ["task_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_provider_usage_records_task_id", table_name="provider_usage_records")
     op.drop_index("ix_provider_usage_records_company_id", table_name="provider_usage_records")
     op.drop_index("ix_provider_usage_company_status", table_name="provider_usage_records")
     op.drop_index("ix_provider_usage_company_provider_created", table_name="provider_usage_records")
     op.drop_table("provider_usage_records")
+    op.drop_column("agent_tasks", "spend_ceiling_usd")
     op.drop_index("ix_company_provider_budgets_company_id", table_name="company_provider_budgets")
     op.drop_index("ix_company_provider_budgets_company_enabled", table_name="company_provider_budgets")
     op.drop_table("company_provider_budgets")
