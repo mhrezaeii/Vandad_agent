@@ -88,6 +88,25 @@ def _parse_payload(raw: Any, allowed_urls: set[str]) -> PlatformKnowledgePayload
     return payload
 
 
+def validate_knowledge_evidence(
+    payload: PlatformKnowledgePayload, documents: list[PlatformSourceDocument]
+) -> None:
+    """Reject model-generated facts whose cited URL or evidence is not in source text."""
+    source_text = {document.url: (document.content_text or "").casefold() for document in documents}
+    groups = (
+        payload.products_and_services, payload.capabilities, payload.workflows,
+        payload.target_audiences, payload.differentiators,
+    )
+    for group in groups:
+        for fact in group:
+            source = source_text.get(fact.source_url)
+            if source is None or fact.evidence.casefold() not in source:
+                raise PlatformKnowledgeExtractionError(
+                    "A knowledge fact contained evidence not found in its cited source.",
+                    code="knowledge_evidence_mismatch",
+                )
+
+
 class PlatformKnowledgeService:
     def __init__(
         self, session: AsyncSession, registry: ProviderRegistry, executor: ProviderExecutor,
@@ -152,17 +171,7 @@ class PlatformKnowledgeService:
         allowed_urls = {document.url for document in documents}
         knowledge = _parse_payload(raw, allowed_urls)
         # Enforce evidence provenance locally, not merely by trusting the model.
-        source_text = {document.url: (document.content_text or "").casefold() for document in documents}
-        for group in (
-            knowledge.products_and_services, knowledge.capabilities, knowledge.workflows,
-            knowledge.target_audiences, knowledge.differentiators,
-        ):
-            for fact in group:
-                if fact.evidence.casefold() not in source_text[fact.source_url]:
-                    raise PlatformKnowledgeExtractionError(
-                        "A knowledge fact contained evidence not found in its cited source.",
-                        code="knowledge_evidence_mismatch",
-                    )
+        validate_knowledge_evidence(knowledge, documents)
         fingerprint = hashlib.sha256(
             "|".join(sorted(f"{doc.id}:{doc.content_hash}" for doc in documents)).encode()
         ).hexdigest()
