@@ -872,7 +872,12 @@ class ContentService:
         return project
 
     async def generate_video(
-        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        connection_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         project = await self.get_project(project_id, company_id=scope.company_id)
         if project.status != ProjectStatus.APPROVED.value:
