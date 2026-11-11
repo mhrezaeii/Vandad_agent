@@ -1415,34 +1415,39 @@ class ContentService:
             timeout_seconds=60.0,
             operation=operation,
         )
-        budget_key = hashlib.sha256(
-            f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode("utf-8")
-        ).hexdigest()
+        billable_operations = {"create_photo_avatar", "train_photo_avatar", "submit_video"}
         budget_service = ProviderBudgetService(self.session)
-        reservation = await budget_service.reserve(
-            company_id,
-            adapter.provider_id,
-            f"heygen.{operation}",
-            idempotency_key=f"heygen:{budget_key}",
-            require_budget=True,
-        )
+        reservation = None
+        if operation in billable_operations:
+            budget_key = hashlib.sha256(
+                f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode("utf-8")
+            ).hexdigest()
+            reservation = await budget_service.reserve(
+                company_id,
+                adapter.provider_id,
+                f"heygen.{operation}",
+                idempotency_key=f"heygen:{budget_key}",
+                require_budget=True,
+            )
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
             error = outcome.error or ProviderError(
                 "The HeyGen operation failed.", code="heygen_failure"
             )
-            await budget_service.settle(reservation, error_code=error.code)
+            if reservation is not None:
+                await budget_service.settle(reservation, error_code=error.code)
             raise error
         metadata = outcome.result.metadata or {}
-        usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
-        await budget_service.settle(
-            reservation,
-            usage={
-                **usage,
-                "latency_ms": outcome.result.latency_ms,
-                "attempts": outcome.attempts,
-            },
-        )
+        if reservation is not None:
+            usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
+            await budget_service.settle(
+                reservation,
+                usage={
+                    **usage,
+                    "latency_ms": outcome.result.latency_ms,
+                    "attempts": outcome.attempts,
+                },
+            )
         return metadata
 
     @staticmethod
