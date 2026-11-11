@@ -27,6 +27,8 @@ class AgentExecutionContext:
     master_key_box: Any
     cancel_event: asyncio.Event | None = None
     progress_callback: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
+    workflow_queue: Any = None
+    scene_video_registry: Any = None
 
     async def report_progress(self, stage: str, **details: Any) -> None:
         self.raise_if_cancelled()
@@ -220,3 +222,106 @@ class ContentAgentHandler:
             await context.report_progress("content.scenario.completed", project_id=str(project_id))
             await session.commit()
             return {"capability": capability, **result}
+
+
+
+class VideoProductionAgentHandler:
+    """Route approved projects to the existing avatar or scene workflow pipeline."""
+
+    agent_key = "video"
+    capabilities = frozenset({"video.avatar.generate", "video.scene.generate"})
+
+    async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
+        await context.report_progress("video.routing.started", capability=capability)
+        if context.workflow_queue is None:
+            raise ConflictError("The workflow queue is unavailable; video generation was not dispatched.")
+        try:
+            project_id = uuid.UUID(str(context.payload["project_id"]))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError("Video tasks require a valid project_id.") from exc
+
+        from app.models import ContentProject
+        from app.security.authorization import CompanyScope, Principal
+        from app.services.content_service import ContentService
+        from app.services.provider_budget_service import ProviderBudgetService
+
+        async with context.session_factory() as session:
+            project = await session.get(ContentProject, project_id)
+            if project is None or project.company_id != context.company_id:
+                raise NotFoundError("Content project not found for this company.")
+            if project.status != "approved":
+                raise ConflictError("Human approval is required before video generation.")
+            if capability == "video.scene.generate" and project.video_mode != "scene":
+                raise ConflictError("The requested scene route does not match this project mode.")
+            if capability == "video.avatar.generate" and project.video_mode != "avatar":
+                raise ConflictError("The requested avatar route does not match this project mode.")
+
+            if capability == "video.scene.generate":
+                provider_id = str(
+                    context.payload.get("provider_id")
+                    or (project.scene_options or {}).get("provider_id")
+                    or "mock"
+                )
+            else:
+                provider_id = "heygen"
+
+            reservation = await ProviderBudgetService(session).reserve(
+                context.company_id,
+                provider_id,
+                capability,
+                idempotency_key=f"agent-video:{context.task_id}",
+                require_budget=True,
+            )
+            scope = CompanyScope(
+                company_id=context.company_id,
+                principal=Principal(
+                    subject="agent-worker",
+                    company_ids=frozenset({str(context.company_id)}),
+                ),
+            )
+            service = ContentService(
+                session,
+                context.provider_registry,
+                context.provider_executor,
+                context.master_key_box,
+                workflow_queue=context.workflow_queue,
+                scene_video_registry=context.scene_video_registry,
+            )
+            try:
+                if capability == "video.scene.generate":
+                    updated = await service.generate_scene_video(
+                        project_id, scope=scope, provider_id=provider_id
+                    )
+                elif capability == "video.avatar.generate":
+                    try:
+                        connection_id = uuid.UUID(str(context.payload["connection_id"]))
+                    except (KeyError, ValueError, TypeError) as exc:
+                        raise ValueError("Avatar video tasks require a valid connection_id.") from exc
+                    updated = await service.generate_video(
+                        project_id, scope=scope, connection_id=connection_id
+                    )
+                else:
+                    raise ConflictError("Unsupported video production capability.")
+                await context.report_progress(
+                    "video.workflow.dispatched",
+                    project_id=str(updated.id),
+                    workflow_execution_id=str(updated.video_workflow_execution_id),
+                    provider_id=provider_id,
+                    budget_reservation_id=str(reservation.id) if reservation else None,
+                )
+                await session.commit()
+                return {
+                    "capability": capability,
+                    "project_id": str(updated.id),
+                    "project_status": updated.status,
+                    "workflow_execution_id": str(updated.video_workflow_execution_id),
+                    "provider_id": provider_id,
+                    "budget_reservation_id": str(reservation.id) if reservation else None,
+                    "cost_status": "reserved_unknown_until_provider_settlement",
+                }
+            except Exception:
+                if reservation is not None:
+                    await ProviderBudgetService(session).settle(
+                        reservation, error_code="video_dispatch_failed"
+                    )
+                raise
