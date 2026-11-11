@@ -74,7 +74,7 @@ export default function HomePage() {
       api<Record<string, unknown>[]>("/providers/usage?limit=50"),
       api<Brand[]>("/content/brands"),
       api<Platform[]>("/platforms"),
-    ]);
+    ] as const);
     const [catalogResult, agentsResult, tasksResult, providersResult, budgetsResult, usageResult, brandsResult, platformsResult] = results;
     if (catalogResult.status === "fulfilled") setCatalog(catalogResult.value.items || []);
     if (agentsResult.status === "fulfilled") setCompanyAgents(agentsResult.value || []);
@@ -93,6 +93,7 @@ export default function HomePage() {
   useEffect(() => {
     const saved = window.localStorage.getItem("vandad.companyId") || process.env.NEXT_PUBLIC_COMPANY_ID || "";
     setCompanyId(saved);
+    if (saved) window.localStorage.setItem("vandad.companyId", saved);
     void load();
   }, [load]);
 
