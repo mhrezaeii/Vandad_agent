@@ -22,6 +22,7 @@ from app.security.authorization import (
     authorize_company_access,
 )
 from app.security.crypto import MasterKeyBox
+from app.services.agent_service import AgentService
 from app.services.connection_service import ConnectionService
 from app.services.connection_validation_service import ConnectionValidationService
 from app.services.platform_service import PlatformService
@@ -36,6 +37,18 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     async with session_factory() as session:
         try:
             yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def get_agent_service(request: Request) -> AsyncIterator[AgentService]:
+    """Provide an agent service using the app's approved catalog."""
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        try:
+            yield AgentService(session, request.app.state.agent_registry)
             await session.commit()
         except Exception:
             await session.rollback()
