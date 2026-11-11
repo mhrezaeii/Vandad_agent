@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -26,6 +27,7 @@ from app.security.authorization import CompanyScope, Principal
 from app.services.content_service import (
     ContentService,
 )
+from app.services.provider_budget_service import ProviderBudgetService
 from app.services.subtitle_service import build_ass_for_script, build_segments
 from app.workflows.engine import WorkflowEngine
 from tests.test_worker_hardening import _keybox, _make_worker
@@ -67,6 +69,12 @@ async def _heygen_connection(db_session, company_id, *, with_credential: bool = 
             .scalars()
             .first()
         ).id
+    await ProviderBudgetService(db_session).set_budget(
+        company_id,
+        "heygen",
+        monthly_limit_usd=Decimal("50.00"),
+        per_operation_limit_usd=Decimal("10.00"),
+    )
     await db_session.commit()
     return connection.id
 
