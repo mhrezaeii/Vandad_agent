@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -197,6 +197,44 @@ class ProviderBudgetService:
             },
         )
         return record
+
+    async def telemetry(self, company_id: uuid.UUID) -> list[dict[str, Any]]:
+        """Return tenant-scoped rolling 30-day provider health metrics."""
+        since = datetime.now(UTC) - timedelta(days=30)
+        rows = list((await self.session.scalars(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.company_id == company_id,
+                ProviderUsageRecord.created_at >= since,
+            ).order_by(ProviderUsageRecord.created_at.desc()).limit(2000)
+        )).all())
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = grouped.setdefault(row.provider_id, {
+                "provider_id": row.provider_id,
+                "calls_30d": 0,
+                "errors_30d": 0,
+                "latency_samples": [],
+                "last_call_at": row.created_at,
+            })
+            item["calls_30d"] += 1
+            if row.error_code:
+                item["errors_30d"] += 1
+            latency = (row.usage_payload or {}).get("latency_ms")
+            if isinstance(latency, (int, float)) and not isinstance(latency, bool):
+                item["latency_samples"].append(float(latency))
+        result: list[dict[str, Any]] = []
+        for item in grouped.values():
+            calls = item["calls_30d"]
+            samples = item.pop("latency_samples")
+            result.append({
+                "provider_id": item["provider_id"],
+                "calls_30d": calls,
+                "errors_30d": item["errors_30d"],
+                "success_rate": round((calls - item["errors_30d"]) / calls, 4) if calls else None,
+                "average_latency_ms": round(sum(samples) / len(samples), 2) if samples else None,
+                "last_call_at": item["last_call_at"],
+            })
+        return sorted(result, key=lambda item: item["provider_id"])
 
     async def assert_budget_enabled(
         self, company_id: uuid.UUID, provider_id: str
