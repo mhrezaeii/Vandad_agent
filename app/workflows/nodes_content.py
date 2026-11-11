@@ -619,18 +619,47 @@ async def _generate_scenario(
     )).all())
     platform_knowledge_context = None
     if linked_platform_ids:
-        latest_snapshot = await engine.session.scalar(
+        snapshots = list((await engine.session.scalars(
             select(PlatformKnowledgeSnapshot)
             .where(
                 PlatformKnowledgeSnapshot.company_id == execution.company_id,
                 PlatformKnowledgeSnapshot.platform_id.in_(linked_platform_ids),
             )
             .order_by(PlatformKnowledgeSnapshot.extracted_at.desc())
-            .limit(1)
-        )
-        if latest_snapshot is not None:
+        )).all())
+        latest_by_platform = {}
+        for snapshot in snapshots:
+            latest_by_platform.setdefault(str(snapshot.platform_id), snapshot)
+        compact_knowledge = []
+        fact_groups = {
+            "products_and_services": 3,
+            "capabilities": 5,
+            "workflows": 3,
+            "target_audiences": 3,
+            "differentiators": 3,
+        }
+        for platform_id, snapshot in latest_by_platform.items():
+            knowledge = snapshot.knowledge_json or {}
+            item = {
+                "platform_id": platform_id,
+                "summary": str(knowledge.get("summary") or "")[:1000],
+                "unknowns": [str(value)[:180] for value in (knowledge.get("unknowns") or [])[:6]],
+            }
+            for group, limit in fact_groups.items():
+                item[group] = [
+                    {
+                        "name": str(fact.get("name") or "")[:100],
+                        "description": str(fact.get("description") or "")[:240],
+                        "evidence": str(fact.get("evidence") or "")[:160],
+                        "source_url": str(fact.get("source_url") or "")[:500],
+                    }
+                    for fact in (knowledge.get(group) or [])[:limit]
+                    if isinstance(fact, dict)
+                ]
+            compact_knowledge.append(item)
+        if compact_knowledge:
             platform_knowledge_context = json.dumps(
-                latest_snapshot.knowledge_json, ensure_ascii=False, separators=(",", ":")
+                compact_knowledge, ensure_ascii=False, separators=(",", ":")
             )[:11000]
     request = ScenarioRequest(
         topic=project.topic,
