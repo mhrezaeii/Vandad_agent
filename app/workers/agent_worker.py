@@ -252,6 +252,8 @@ class AgentTaskWorker:
                 progress_callback=persist_progress,
                 workflow_queue=self.workflow_queue,
                 scene_video_registry=self.scene_video_registry,
+                default_scene_video_provider=self.settings.scene_video_provider,
+                is_production=self.settings.is_production,
             )
             result = await self.dispatcher.dispatch(agent_key, capability, context)
             context.raise_if_cancelled()
