@@ -50,6 +50,7 @@ export default function HomePage() {
   const [sceneProviders, setSceneProviders] = useState<SceneProvider[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [usage, setUsage] = useState<Record<string, unknown>[]>([]);
+  const [reconcileAmounts, setReconcileAmounts] = useState<Record<string, string>>({});
   const [brands, setBrands] = useState<Brand[]>([]);
   const [projects, setProjects] = useState<ContentProject[]>([]);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
@@ -232,6 +233,20 @@ export default function HomePage() {
         });
       }
     }, "Workflow تولید ویدیو به صف ارسال شد.");
+  };
+
+  const reconcileUsage = async (recordId: string) => {
+    await run(async () => {
+      const amount = reconcileAmounts[recordId];
+      if (!amount || Number(amount) < 0) throw new Error("هزینه واقعی را وارد کنید.");
+      await api(`/providers/usage/${recordId}/reconcile`, {
+        method: "POST",
+        body: JSON.stringify({
+          actual_cost_usd: amount,
+          note: "Verified against the provider billing record by the company operator.",
+        }),
+      });
+    }, "هزینه واقعی ثبت و رزرو قبلی تسویه شد.");
   };
 
   const createBudget = async (event: FormEvent<HTMLFormElement>) => {
@@ -451,7 +466,21 @@ export default function HomePage() {
                 {sceneProviders.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · lip-sync: {provider.supports_lipsync ? "yes" : "no"} · reference image: {provider.supports_reference_image ? "yes" : "no"}</p></div><Status value="active" /></div>)}
               </div>
               <div className="section-head section"><h2>Usage Ledger</h2><span className="muted small">{usage.length} رکورد اخیر</span></div>
-              <div className="list">{usage.slice(0, 10).map((item, index) => <div className="row-item" key={String(item.id || index)}><div><strong dir="ltr">{String(item.provider_id || "provider")}</strong><p>{String(item.operation || "")} · هزینه: {item.actual_cost_usd == null ? "نامشخص" : String(item.actual_cost_usd) + " USD"}</p></div><Status value={String(item.status || "unknown")} /></div>)}{!usage.length && <div className="empty">هنوز Usage ثبت نشده است.</div>}</div>
+              <div className="list">{usage.slice(0, 10).map((item, index) => {
+                const recordId = String(item.id || index);
+                const status = String(item.status || "unknown");
+                return <div className="row-item" key={recordId}>
+                  <div style={{ minWidth: 0 }}>
+                    <strong dir="ltr">{String(item.provider_id || "provider")}</strong>
+                    <p>{String(item.operation || "")} · هزینه: {item.actual_cost_usd == null ? "نامشخص" : String(item.actual_cost_usd) + " USD"}</p>
+                    {["unknown", "reserved"].includes(status) && <div className="actions" style={{ marginTop: 7 }}>
+                      <input style={{ maxWidth: 120 }} type="number" min="0" step="0.000001" placeholder="هزینه USD" value={reconcileAmounts[recordId] || ""} onChange={(event) => setReconcileAmounts((current) => ({ ...current, [recordId]: event.target.value }))} />
+                      <button className="button ghost" onClick={() => void reconcileUsage(recordId)}>تسویه دستی</button>
+                    </div>}
+                  </div>
+                  <Status value={status} />
+                </div>;
+              })}{!usage.length && <div className="empty">هنوز Usage ثبت نشده است.</div>}</div>
             </div>
             <div className="card">
               <h2 style={{ fontSize: 16, marginTop: 0 }}>سیاست سقف هزینه</h2>
