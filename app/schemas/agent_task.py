@@ -1,11 +1,13 @@
 """API contracts for agent task requests and execution runs."""
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 TaskStatus = Literal[
     "pending", "queued", "awaiting_approval", "running", "completed", "failed", "cancelled"
@@ -22,6 +24,32 @@ class AgentTaskCreate(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
     priority: int = Field(default=50, ge=0, le=100)
     max_attempts: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("input_payload")
+    @classmethod
+    def validate_input_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > 64 * 1024:
+            raise ValueError("input_payload must not exceed 64 KiB.")
+
+        sensitive_hints = (
+            "password", "passwd", "secret", "token", "apikey", "authorization",
+            "credential", "privatekey", "encryptionkey",
+        )
+
+        def inspect(item: Any) -> None:
+            if isinstance(item, Mapping):
+                for key, nested in item.items():
+                    normalized = str(key).lower().replace("_", "").replace("-", "")
+                    if any(hint in normalized for hint in sensitive_hints):
+                        raise ValueError("input_payload must contain secret references, not credentials.")
+                    inspect(nested)
+            elif isinstance(item, list):
+                for nested in item:
+                    inspect(nested)
+
+        inspect(value)
+        return value
 
 
 class AgentTaskRead(BaseModel):
