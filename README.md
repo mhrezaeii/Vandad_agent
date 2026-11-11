@@ -154,4 +154,4 @@ docs/               architecture and implementation status
 - Do not commit `.env`, API keys, runtime model weights, generated media, local databases, virtual environments or caches.
 - Do not remove the existing talking-avatar renderer just because the scene-video pipeline exists; they have different responsibilities.
 - Do not mark an agent dispatch-ready until its handler, authorization boundary, retries, cancellation and tests are implemented.
-- Keep the UI as a separate frontend application consuming stable, versioned API contracts. Do not expose the current bootstrap-principal UI publicly before authentication and RBAC are completed.
+- Keep the UI as a separate frontend application consuming stable, versioned API contracts. Production UI/API access must be behind the trusted OIDC identity proxy and role contract in [Production identity proxy](docs/DEPLOYMENT_AUTH.md); never expose the local bootstrap principal publicly.
