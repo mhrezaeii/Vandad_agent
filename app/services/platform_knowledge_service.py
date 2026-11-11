@@ -21,10 +21,13 @@ from app.services.provider_budget_service import ProviderBudgetService
 
 
 class PlatformKnowledgeExtractionError(Exception):
-    def __init__(self, message: str, *, code: str = "knowledge_extraction_failed") -> None:
+    def __init__(
+        self, message: str, *, code: str = "knowledge_extraction_failed", retryable: bool = False
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
+        self.retryable = retryable
 
 
 def build_knowledge_prompt(platform: Platform, documents: list[PlatformSourceDocument]) -> tuple[str, str]:
@@ -189,7 +192,9 @@ class PlatformKnowledgeService:
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
             await budget_service.settle(reservation, error_code=error.code or "llm_failure")
-            raise PlatformKnowledgeExtractionError(error.message, code=error.code or "llm_failure")
+            raise PlatformKnowledgeExtractionError(
+                error.message, code=error.code or "llm_failure", retryable=error.is_transient
+            )
         metadata = outcome.result.metadata or {}
         usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
         await budget_service.settle(
