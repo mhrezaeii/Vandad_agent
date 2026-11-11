@@ -59,7 +59,10 @@ async def upsert_provider_budget(
     scope: Annotated[object, Depends(company_scope)],
     registry: Annotated[ProviderRegistry, Depends(get_provider_registry)],
 ) -> ProviderBudgetRead:
-    if not registry.has(provider_id):
+    scene_registry = getattr(request.app.state, "scene_video_registry", None)
+    if not registry.has(provider_id) and not (
+        scene_registry is not None and scene_registry.has(provider_id)
+    ):
         from app.core.exceptions import NotFoundError
         raise NotFoundError("Provider is not registered.")
     async with request.app.state.session_factory() as session:
