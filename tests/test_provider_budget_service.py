@@ -163,6 +163,42 @@ async def test_task_spend_ceiling_aggregates_provider_reservations(db_session):
         )
 
 
+async def test_task_ceiling_counts_settled_actual_cost_and_open_reservations(db_session):
+    company = Company(name="Task Settlement", slug=f"task-settlement-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    task = AgentTask(
+        company_id=company.id, agent_key="content", capability="content.scenario.generate",
+        title="Settlement-aware task", spend_ceiling_usd=Decimal("2.50"),
+    )
+    db_session.add(task)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        company.id, "llm_openai", monthly_limit_usd=Decimal("10.00"),
+        per_operation_limit_usd=Decimal("1.50"),
+    )
+    first = await service.reserve(
+        company.id, "llm_openai", "scenario",
+        idempotency_key=f"task-settled-{uuid.uuid4()}",
+        require_budget=True, task_id=task.id,
+    )
+    await service.settle(first, usage={"cost_usd": "0.50"})
+
+    second = await service.reserve(
+        company.id, "llm_openai", "scenario",
+        idempotency_key=f"task-open-{uuid.uuid4()}",
+        require_budget=True, task_id=task.id,
+    )
+    assert second is not None
+    with pytest.raises(ConflictError, match="agent task spend ceiling"):
+        await service.reserve(
+            company.id, "llm_openai", "scenario",
+            idempotency_key=f"task-over-{uuid.uuid4()}",
+            require_budget=True, task_id=task.id,
+        )
+
+
 async def test_task_budget_is_tenant_scoped(db_session):
     owner = Company(name="Task Budget Owner", slug=f"task-owner-{uuid.uuid4().hex[:8]}")
     stranger = Company(name="Task Budget Stranger", slug=f"task-stranger-{uuid.uuid4().hex[:8]}")
