@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Startup never aborts on a dependency failure: the readiness endpoint is
     the authority on dependency state, and containers orchestrate retries.
     """
-    settings = get_settings()
+    settings = getattr(app.state, "configured_settings", None) or get_settings()
 
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
@@ -110,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None if resolved.is_production else "/redoc",
         openapi_url=None if resolved.is_production else "/openapi.json",
     )
+    app.state.configured_settings = resolved
     app.add_middleware(CorrelationIdMiddleware)
     register_exception_handlers(app)
     app.include_router(api_router, prefix=resolved.api_prefix)
