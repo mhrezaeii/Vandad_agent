@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models import ActorType, CompanyProviderBudget, ProviderUsageRecord
 from app.services.audit_service import AuditService
 
