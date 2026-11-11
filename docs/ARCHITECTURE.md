@@ -97,7 +97,7 @@ The orchestrator selects provider capabilities for generation, speech, lip-sync,
 | Agent catalog and company enablement | Implemented on feature stack | Definitions are code-owned; company rows only enable approved agents |
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
 | Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
-| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, LLM usage settlement and paid video reservations; unknown costs remain reserved |
+| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, per-task aggregate spend ceilings across agent handlers and child workflows, LLM usage settlement and paid video reservations; unknown costs remain reserved; CI verification pending |
 | Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day request/error/latency metrics derived from the usage ledger; live health probes remain |
 | Deterministic provider/model routing and fallback | Partial | Explicit connection/model selection exists; ordered fallback and cross-provider capability negotiation remain |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
@@ -139,8 +139,8 @@ The orchestrator selects provider capabilities for generation, speech, lip-sync,
 
 ### P1 — Provider and cost control (not complete)
 
-- [ ] Add a per-agent-task spend ceiling and atomically aggregate reservations across all child provider operations and workflows.
-- [ ] Propagate the agent task execution context into every workflow/provider budget reservation and settlement.
+- [x] Add an optional per-agent-task spend ceiling and atomically aggregate reservations across child provider operations and workflows by locking the parent task row; implementation added, CI verification pending.
+- [x] Propagate task identity into Monitoring knowledge extraction, Content scenario generation, scene-video project reservations and avatar workflow provider reservations; CI verification pending.
 - [ ] Normalize provider/model capabilities and constraints.
 - [x] Add company/provider monthly budgets and per-operation reservations; unknown cost remains reserved rather than being reported as free.
 - [x] Record LLM provider-reported usage, latency, attempts and actual cost when explicitly supplied.
@@ -150,7 +150,7 @@ The orchestrator selects provider capabilities for generation, speech, lip-sync,
 - [ ] Add provider/model capability constraints for language, modality, duration, aspect ratio and lip-sync.
 - Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
 
-Paid autonomous execution remains gated until these controls are implemented and verified.
+Paid autonomous execution remains gated until CI and end-to-end tests verify the task ceiling/context propagation and the remaining ordered routing, capability and live-probe controls are implemented.
 
 ### P2 — Product workflows
 
