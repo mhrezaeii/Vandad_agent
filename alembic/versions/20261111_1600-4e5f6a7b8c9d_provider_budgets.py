@@ -38,6 +38,7 @@ def upgrade() -> None:
     op.create_index("ix_company_provider_budgets_company_id", "company_provider_budgets", ["company_id"])
 
     op.add_column("agent_tasks", sa.Column("spend_ceiling_usd", sa.Numeric(14, 6), nullable=True))
+    op.create_check_constraint("spend_ceiling_positive", "agent_tasks", "spend_ceiling_usd IS NULL OR spend_ceiling_usd > 0")
     op.create_table(
         "provider_usage_records",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -74,6 +75,7 @@ def downgrade() -> None:
     op.drop_index("ix_provider_usage_company_status", table_name="provider_usage_records")
     op.drop_index("ix_provider_usage_company_provider_created", table_name="provider_usage_records")
     op.drop_table("provider_usage_records")
+    op.drop_constraint("spend_ceiling_positive", "agent_tasks", type_="check")
     op.drop_column("agent_tasks", "spend_ceiling_usd")
     op.drop_index("ix_company_provider_budgets_company_id", table_name="company_provider_budgets")
     op.drop_index("ix_company_provider_budgets_company_enabled", table_name="company_provider_budgets")
