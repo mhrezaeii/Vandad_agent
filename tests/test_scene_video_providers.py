@@ -242,6 +242,27 @@ def test_generic_http_config_requires_status_placeholder():
 
 
 # ------------------------------------------------------------- registry
+def test_ordered_registry_selection_skips_models_missing_required_capabilities():
+    registry = build_scene_video_registry(
+        apimaster_config=APIMasterConfig(api_key="test-key"),
+        http_config=GenericHttpConfig(
+            base_url="https://video.example.test",
+            status_path="/v1/videos/{job_id}",
+            compose_path="/v1/compose",
+            request_extra={"model": "studio-compose-v1"},
+        ),
+    )
+    selected = registry.resolve_ordered(
+        ["apimaster", "generic_http"],
+        require_composition=True,
+    )
+    assert selected.provider_id == "generic_http"
+    assert selected.model_id == "studio-compose-v1"
+
+    with pytest.raises(Exception, match="satisfies the requested capabilities"):
+        registry.resolve_ordered(["apimaster"], require_composition=True)
+
+
 def test_registry_includes_mock_and_only_configured_http():
     mock_only = build_scene_video_registry()
     assert mock_only.has("mock") is True
