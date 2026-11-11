@@ -227,7 +227,7 @@ async def test_monitoring_agent_composes_discovery_and_knowledge_extraction(
         def __init__(self, session, registry, executor, master_key_box):
             calls.append(("knowledge_service_created",))
 
-        async def extract(self, *, platform, connection_id, max_documents):
+        async def extract(self, *, platform, connection_id, max_documents, task_id=None):
             calls.append(("extract", platform.id, connection_id, max_documents))
             return SimpleNamespace(
                 id=uuid.uuid4(),
