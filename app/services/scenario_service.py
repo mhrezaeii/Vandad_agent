@@ -261,7 +261,7 @@ class ScenarioService:
             operation=operation,
         )
         budget_key = idempotency_key or hashlib.sha256(
-            f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode("utf-8")
+            f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode()
         ).hexdigest()
         budget_service = ProviderBudgetService(self.session)
         reservation = await budget_service.reserve(
