@@ -7,8 +7,19 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint,
-    Index, Integer, SmallInteger, String, Text, UniqueConstraint, Uuid, text,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
