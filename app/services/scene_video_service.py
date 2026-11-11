@@ -520,13 +520,29 @@ class SceneVideoService:
         height: int,
         brand_context: dict[str, Any] | None = None,
     ) -> tuple[Any, dict[str, Any]]:
-        """Compose scene clips with the AI provider and store its final output.
+        """Compose scene clips through an AI provider and store its final output.
 
-        The provider job id is persisted before returning, so worker retries
-        poll the same paid operation and never submit a duplicate composition.
+        Composition job state is isolated in assembly_metadata. The legacy
+        provider_job_id and submission_metadata fields belong to the avatar
+        workflow and must never be overwritten by scene composition.
         """
         if self.storage is None:
             raise ConflictError("Artifact storage is not configured.")
+
+        # Serialize competing workers on the project row. Provider-side
+        # idempotency remains the second line of defence for ambiguous retries.
+        locked_project = await self.session.scalar(
+            select(ContentProject)
+            .where(
+                ContentProject.id == project.id,
+                ContentProject.company_id == project.company_id,
+            )
+            .with_for_update()
+        )
+        if locked_project is None:
+            raise ConflictError("The content project is no longer available.")
+        project = locked_project
+
         artifact_service = ArtifactService(
             self.session, self.storage, max_size_bytes=self.max_size_bytes
         )
@@ -543,7 +559,9 @@ class SceneVideoService:
                 "Every scene must have a provider-hosted video URL before AI composition."
             )
 
-        if not project.provider_job_id:
+        assembly = dict(project.assembly_metadata or {})
+        composition_job_id = assembly.get("composition_job_id")
+        if not composition_job_id:
             await self._reserve_quota(project.company_id, provider)
             request = SceneVideoCompositionRequest(
                 project_id=str(project.id),
@@ -554,27 +572,31 @@ class SceneVideoService:
                 brand_context=dict(brand_context or {}),
                 idempotency_key=f"vandad-compose-{project.id}",
             )
-            job_id = await provider.compose_video(request)
-            project.provider_job_id = str(job_id)
-            project.provider_status = SceneJobState.QUEUED.value
-            project.status = ProjectStatus.ASSEMBLING.value
-            project.submission_metadata = {
-                **(project.submission_metadata or {}),
+            composition_job_id = str(await provider.compose_video(request))
+            assembly.update({
+                "service": "ai_provider",
+                "mode": "ai_composition",
                 "production_path": "ai_provider_composition",
                 "provider": provider.provider_id,
-                "composition_job_id": str(job_id),
-            }
+                "composition_job_id": composition_job_id,
+                "composition_status": SceneJobState.QUEUED.value,
+            })
+            project.assembly_metadata = assembly
+            project.status = ProjectStatus.ASSEMBLING.value
             await self.session.flush()
             raise SceneVideoTransientError(
                 "AI video composition was submitted and is still processing.",
                 code="ai_composition_submitted",
             )
 
-        if (project.submission_metadata or {}).get("production_path") != "ai_provider_composition":
-            raise ConflictError("The project already has a non-composition provider job.")
+        if assembly.get("production_path") != "ai_provider_composition":
+            raise ConflictError("The project has an incompatible finalization state.")
+        if assembly.get("provider") != provider.provider_id:
+            raise ConflictError("The configured provider changed after composition submission.")
 
-        status = await provider.get_generation_status(project.provider_job_id)
-        project.provider_status = status.state
+        status = await provider.get_generation_status(str(composition_job_id))
+        assembly["composition_status"] = status.state
+        project.assembly_metadata = assembly
         if status.is_terminal and not status.is_completed:
             project.status = ProjectStatus.FAILED.value
             project.error_message = status.error_message or "AI video composition failed."
@@ -594,7 +616,7 @@ class SceneVideoService:
         preview = bytearray()
 
         async def chunks():
-            async for chunk in provider.retrieve_video(project.provider_job_id):
+            async for chunk in provider.retrieve_video(str(composition_job_id)):
                 if len(preview) < _PREVIEW_BYTES:
                     preview.extend(chunk[: _PREVIEW_BYTES - len(preview)])
                 yield chunk
@@ -622,10 +644,11 @@ class SceneVideoService:
 
         reported_cost = parse_reported_cost(status.raw or {})
         metadata = {
+            **assembly,
             "service": "ai_provider",
             "mode": "ai_composition",
             "provider": provider.provider_id,
-            "provider_job_id": project.provider_job_id,
+            "provider_job_id": str(composition_job_id),
             "scene_count": len(jobs),
             "width": width,
             "height": height,
@@ -633,6 +656,7 @@ class SceneVideoService:
             "size_bytes": artifact.size_bytes,
             "sha256": artifact.sha256,
             "provider_reported_cost_usd": str(reported_cost) if reported_cost is not None else None,
+            "composition_status": SceneJobState.COMPLETED.value,
         }
         project.final_artifact_id = artifact.id
         project.assembly_metadata = metadata
@@ -647,6 +671,7 @@ class SceneVideoService:
             metadata={
                 "artifact_id": str(artifact.id),
                 "provider": provider.provider_id,
+                "provider_job_id": str(composition_job_id),
                 "size_bytes": artifact.size_bytes,
                 "sha256": artifact.sha256,
             },
