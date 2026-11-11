@@ -62,9 +62,9 @@ def build_principal_from_settings(settings: Settings) -> Principal:
     """Build the bootstrap principal. Production never accepts the wildcard."""
     raw = settings.bootstrap_principal_company_ids.strip()
     if raw == "*":
-        if settings.is_production:
+        if settings.requires_proxy_auth:
             raise ForbiddenError(
-                "bootstrap_principal_company_ids='*' is not allowed in production; "
+                "bootstrap_principal_company_ids='*' is not allowed in staging/production; "
                 "configure explicit company IDs."
             )
         return Principal(
