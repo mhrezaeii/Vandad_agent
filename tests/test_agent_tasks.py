@@ -76,14 +76,14 @@ async def test_task_progress_events_are_persisted_and_company_scoped(client):
     history = await client.get(f"/api/v1/agent-tasks/{task_id}/events")
     assert [event["event_type"] for event in history.json()] == [
         "task.created",
-        "task.cancel_requested",
+        "task.cancelled",
     ]
 
     stream = await client.get(f"/api/v1/agent-tasks/{task_id}/events/stream?after=0")
     assert stream.status_code == 200
     assert "text/event-stream" in stream.headers["content-type"]
     assert "event: task.created" in stream.text
-    assert "event: task.cancel_requested" in stream.text
+    assert "event: task.cancelled" in stream.text
 
     resumed = await client.get(
         f"/api/v1/agent-tasks/{task_id}/events/stream",
@@ -91,7 +91,7 @@ async def test_task_progress_events_are_persisted_and_company_scoped(client):
     )
     assert resumed.status_code == 200
     assert "event: task.created" not in resumed.text
-    assert "event: task.cancel_requested" in resumed.text
+    assert "event: task.cancelled" in resumed.text
 
 
 async def test_completed_task_result_is_redacted_before_database_persistence(
