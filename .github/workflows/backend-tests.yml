@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - main
+      - fix/agent-runtime-production-hardening
   workflow_dispatch:
 
 permissions:
