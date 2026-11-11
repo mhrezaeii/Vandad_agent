@@ -5,11 +5,10 @@ on:
     branches:
       - main
       - feature/**
-      - fix/**
   pull_request:
     branches:
       - main
-      - fix/**
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -62,3 +61,21 @@ jobs:
         run: ruff check app tests
       - name: Test
         run: pytest -q
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Lint frontend
+        run: npm run lint
+      - name: Build frontend
+        run: npm run build
+
