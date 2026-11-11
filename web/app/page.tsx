@@ -188,7 +188,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!selectedTask) return;
     const controller = new AbortController();
-    let lastSequence = events.reduce((max, event) => Math.max(max, event.sequence), 0);
+    let lastSequence = 0;
     const headers = new Headers({ Accept: "text/event-stream" });
     if (companyId) headers.set("X-Company-ID", companyId);
 
@@ -206,7 +206,6 @@ export default function HomePage() {
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           let buffer = "";
-          let terminal = false;
           while (!controller.signal.aborted) {
             const chunk = await reader.read();
             if (chunk.done) break;
@@ -232,16 +231,17 @@ export default function HomePage() {
                 };
                 setEvents((current) => [...current.filter((event) => event.sequence !== item.sequence), item]
                   .sort((a, b) => a.sequence - b.sequence).slice(-200));
-                if (["run.completed", "run.failed", "task.cancelled"].includes(payload.type)) {
-                  terminal = true;
-                  void load();
-                }
+
               } catch {
                 // Ignore malformed SSE frames; the durable event endpoint remains available.
               }
             }
           }
-          if (terminal) return;
+          const currentTask = await api<Task>(`/agent-tasks/${selectedTask}`);
+          if (["completed", "failed", "cancelled"].includes(currentTask.status)) {
+            void load();
+            return;
+          }
         } catch (cause) {
           if (controller.signal.aborted) return;
           setError(cause instanceof Error ? cause.message : "ارتباط زنده رویدادها قطع شد.");
