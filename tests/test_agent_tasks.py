@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 from app.agents import AgentRegistry
 from app.agents.definitions import AgentDefinition
@@ -81,6 +82,14 @@ async def test_task_progress_events_are_persisted_and_company_scoped(client):
     assert "event: task.created" in stream.text
     assert "event: task.cancel_requested" in stream.text
 
+    resumed = await client.get(
+        f"/api/v1/agent-tasks/{task_id}/events/stream",
+        headers={"Last-Event-ID": "1"},
+    )
+    assert resumed.status_code == 200
+    assert "event: task.created" not in resumed.text
+    assert "event: task.cancel_requested" in resumed.text
+
 
 async def test_video_task_requires_approval_before_outbox_dispatch(client, db_session):
     await _activate_agent(client, "video")
@@ -110,6 +119,27 @@ async def test_video_task_requires_approval_before_outbox_dispatch(client, db_se
     )
     assert outbox_after is not None
     assert outbox_after.status == "pending"
+
+
+async def test_task_payload_rejects_secrets_and_oversized_content(client):
+    await _activate_agent(client)
+    secret = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(
+            idempotency_key=f"secret-{uuid.uuid4()}",
+            input_payload={"topic": "launch", "nested": {"api_key": "must-not-be-stored"}},
+        ),
+    )
+    assert secret.status_code == 422
+
+    oversized = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(
+            idempotency_key=f"large-{uuid.uuid4()}",
+            input_payload={"topic": "x" * (65 * 1024)},
+        ),
+    )
+    assert oversized.status_code == 422
 
 
 async def test_task_rejects_unregistered_capability(client):
