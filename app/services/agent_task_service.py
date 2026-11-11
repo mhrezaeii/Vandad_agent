@@ -275,13 +275,22 @@ class AgentTaskService:
             task.status = AgentTaskStatus.CANCELLED.value
             task.completed_at = datetime.now(UTC)
         await self.session.flush()
+        event_type = (
+            "task.cancel_requested"
+            if task.status == AgentTaskStatus.RUNNING.value
+            else "task.cancelled"
+        )
         await self._record_event(
             task,
-            "task.cancel_requested",
+            event_type,
             {"status": task.status, "cancel_requested": task.cancel_requested},
         )
         self.audit.record(
-            event_type="agent.task.cancel_requested",
+            event_type=(
+                "agent.task.cancel_requested"
+                if task.status == AgentTaskStatus.RUNNING.value
+                else "agent.task.cancelled"
+            ),
             action="cancel_task",
             actor_type=ActorType.USER,
             actor_id=requested_by,
