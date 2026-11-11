@@ -56,7 +56,7 @@ class ProviderBudgetService:
 
     async def reserve(
         self, company_id: uuid.UUID, provider_id: str, operation: str, *,
-        idempotency_key: str, model: str | None = None,
+        idempotency_key: str, model: str | None = None, require_budget: bool = False,
     ) -> ProviderUsageRecord | None:
         existing = await self.session.scalar(
             select(ProviderUsageRecord).where(
@@ -76,6 +76,8 @@ class ProviderBudgetService:
             ).with_for_update()
         )
         if budget is None:
+            if require_budget:
+                raise ConflictError("A company provider budget is required before this paid operation.")
             return None
         if not budget.enabled:
             raise ConflictError("This provider is disabled by the company budget policy.")
