@@ -21,6 +21,7 @@ from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
     SceneVideoPermanentError,
+    SceneVideoCompositionRequest,
     SceneVideoRequest,
 )
 
@@ -75,6 +76,30 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
         job_id = f"mock-{uuid.uuid4().hex}"
         self._jobs[job_id] = {
             "request": request,
+            "state": SceneJobState.QUEUED.value,
+            "polls": 0,
+            "payload": _synthetic_mp4(self.payload_size),
+        }
+        if request.idempotency_key:
+            self._idempotency[request.idempotency_key] = job_id
+        return job_id
+
+    async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
+        """Simulate provider-side editing/composition for integration tests."""
+        if request.idempotency_key and request.idempotency_key in self._idempotency:
+            return self._idempotency[request.idempotency_key]
+        self._consume_quota()
+        job_id = f"mock-compose-{uuid.uuid4().hex}"
+        synthetic_request = SceneVideoRequest(
+            scene_id=f"composition:{request.project_id}",
+            prompt="AI-native final video composition",
+            duration_seconds=30,
+            width=request.width,
+            height=request.height,
+            idempotency_key=request.idempotency_key,
+        )
+        self._jobs[job_id] = {
+            "request": synthetic_request,
             "state": SceneJobState.QUEUED.value,
             "polls": 0,
             "payload": _synthetic_mp4(self.payload_size),
