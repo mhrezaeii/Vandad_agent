@@ -228,7 +228,7 @@ class ConnectionValidationService:
             success=False,
             status_after=connection.status,
             provider_id=adapter.provider_id,
-            message=error.message,
+            message=redact_text(error.message),
             error_code=error.code,
             latency_ms=None,
             attempts=outcome.attempts,
