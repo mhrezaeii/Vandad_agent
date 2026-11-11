@@ -188,6 +188,8 @@ class PlatformKnowledgeService:
             model=str(context.configuration.get("model") or "") or None,
             require_budget=True,
         )
+        # The provider may bill even if this worker exits before settlement.
+        await self.session.commit()
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
