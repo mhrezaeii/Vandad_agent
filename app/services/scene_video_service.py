@@ -31,6 +31,7 @@ from app.integrations.video import (
 )
 from app.models import (
     ArtifactKind,
+    BrandCharacter,
     ContentProject,
     ProjectStatus,
     ProviderQuotaUsage,
@@ -101,24 +102,48 @@ class SceneVideoService:
         self.max_size_bytes = max_size_bytes
         self.audit = AuditService(session)
 
+    async def _character_reference_image(self, project: ContentProject) -> str | None:
+        """Return the tenant-owned source portrait for this brand, if configured."""
+        result = await self.session.execute(
+            select(BrandCharacter.source_image_url)
+            .where(
+                BrandCharacter.brand_id == project.brand_id,
+                BrandCharacter.company_id == project.company_id,
+                BrandCharacter.source_image_url.is_not(None),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     # -------------------------------------------------------------- preparation
     async def prepare_scenes(
         self, project: ContentProject, scenario: Scenario, *, provider_id: str
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
-        unsupported_presenters = [
-            scene.index
+        presenter_scenes = [
+            scene
             for scene in scenario.scenes
-            if scene.scene_type == "presenter"
-            and scene.speaker == "brand_character"
-            and not provider.supports_lipsync
+            if scene.scene_type == "presenter" and scene.speaker == "brand_character"
+        ]
+        unsupported_presenters = [
+            scene.index for scene in presenter_scenes if scene.dialogue and not provider.supports_lipsync
         ]
         if unsupported_presenters:
             raise ConflictError(
-                "Brand-character presenter scenes require a provider with real image/audio lip-sync support; "
+                "Spoken brand-character presenter scenes require real image/audio lip-sync support; "
                 f"provider {provider.provider_id!r} cannot generate them (scene indexes: "
                 f"{unsupported_presenters})."
+            )
+        if presenter_scenes and provider.supports_reference_image:
+            if not await self._character_reference_image(project):
+                raise ConflictError(
+                    "A saved public source_image_url is required for brand-character image-to-video scenes."
+                )
+        elif presenter_scenes and not provider.supports_lipsync:
+            raise ConflictError(
+                f"Provider {provider.provider_id!r} cannot generate brand-character scenes without "
+                "reference-image support."
             )
         existing = {
             job.scene_index: job
@@ -195,6 +220,18 @@ class SceneVideoService:
 
         submitted = 0
         first_transient: Exception | None = None
+        scenario_scenes = (project.scenario or {}).get("scenes", [])
+        presenter_indexes = {
+            int(scene.get("index", -1))
+            for scene in scenario_scenes
+            if scene.get("scene_type") == "presenter"
+            and scene.get("speaker") == "brand_character"
+        }
+        character_reference_image = (
+            await self._character_reference_image(project)
+            if presenter_indexes and provider.supports_reference_image
+            else None
+        )
         for job in jobs:
             if job.provider_job_id is not None:
                 continue
@@ -215,6 +252,11 @@ class SceneVideoService:
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,
                 duration_seconds=job.duration_seconds,
+                reference_image_url=(
+                    character_reference_image
+                    if job.scene_index in presenter_indexes
+                    else None
+                ),
                 idempotency_key=f"vandad-scene-{job.id}",
                 metadata={"project_id": str(project.id), "scene_index": job.scene_index},
             )

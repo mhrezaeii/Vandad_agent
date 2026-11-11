@@ -97,6 +97,14 @@ class Settings(BaseSettings):
     scene_video_output_fps: int = Field(default=30, ge=1, le=120)
     scene_assembly_timeout_seconds: float = Field(default=1800.0, gt=0, le=7200)
 
+    # APIMaster is opt-in; no paid request is made unless selected explicitly.
+    scene_video_apimaster_api_key: str | None = None
+    scene_video_apimaster_base_url: str = "https://apimaster.ai"
+    scene_video_apimaster_model: str = "wan3.0-video-prime"
+    scene_video_apimaster_resolution: Literal["480P", "720P", "1080P"] = "720P"
+    scene_video_apimaster_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    scene_video_apimaster_download_allowed_hosts: str = ""
+
     # Optional generic HTTP contract for a provider the operator is authorised
     # to use. Disabled unless ``SCENE_VIDEO_HTTP_BASE_URL`` is set. The key is
     # never logged; it is only sent as the configured auth header.
