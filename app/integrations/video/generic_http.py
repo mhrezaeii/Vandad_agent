@@ -14,8 +14,8 @@ import httpx
 from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
-    SceneVideoCompositionRequest,
     SceneVideoPermanentError,
+    SceneVideoCompositionRequest,
     SceneVideoProvider,
     SceneVideoRequest,
     SceneVideoTransientError,
