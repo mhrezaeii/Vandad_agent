@@ -7,8 +7,8 @@ lifespan; tests can attach their own instances.
 
 from __future__ import annotations
 
-import uuid
 import hmac
+import uuid
 from collections.abc import AsyncIterator
 
 from fastapi import Query, Request
