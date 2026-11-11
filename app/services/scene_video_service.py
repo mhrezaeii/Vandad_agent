@@ -351,7 +351,8 @@ class SceneVideoService:
             job.progress = status.progress
             raw_usage = (status.raw or {}).get("usage")
             reported_cost = parse_reported_cost(raw_usage) if isinstance(raw_usage, dict) else None
-            reported_cost = reported_cost or parse_reported_cost(status.raw or {})
+            if reported_cost is None:
+                reported_cost = parse_reported_cost(status.raw or {})
             if reported_cost is not None:
                 job.cost_metadata = {
                     **(job.cost_metadata or {}),
