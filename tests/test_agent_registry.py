@@ -1,6 +1,8 @@
 """Tests for the built-in agent catalog and company agent lifecycle API."""
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from app.agents import AgentRegistry, UnknownAgentError, build_default_agent_registry
@@ -80,7 +82,7 @@ async def test_company_agent_catalog_and_unknown_key(client):
 
 
 async def test_company_agent_instances_are_isolated_by_company(client, db_session):
-    first_company = Company(name="First", slug=f"first-{__import__('uuid').uuid4().hex[:8]}")
+    first_company = Company(name="First", slug=f"first-{uuid.uuid4().hex[:8]}")
     second_company = Company(name="Second", slug=f"second-{__import__('uuid').uuid4().hex[:8]}")
     db_session.add_all([first_company, second_company])
     await db_session.commit()
