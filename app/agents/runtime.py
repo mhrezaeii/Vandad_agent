@@ -265,13 +265,15 @@ class VideoProductionAgentHandler:
             else:
                 provider_id = "heygen"
 
-            reservation = await ProviderBudgetService(session).reserve(
-                context.company_id,
-                provider_id,
-                capability,
-                idempotency_key=f"agent-video:{context.task_id}",
-                require_budget=True,
-            )
+            reservation = None
+            if provider_id != "mock":
+                reservation = await ProviderBudgetService(session).reserve(
+                    context.company_id,
+                    provider_id,
+                    capability,
+                    idempotency_key=f"agent-video:{context.task_id}",
+                    require_budget=True,
+                )
             scope = CompanyScope(
                 company_id=context.company_id,
                 principal=Principal(
