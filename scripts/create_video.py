@@ -94,21 +94,26 @@ def build_ass(text: str, duration: float, width: int, height: int, font_size: in
         dialogues.append(f"Dialogue: 0,{ts(cursor)},{ts(end)},Persian,,0,0,0,,{chunk}")
         cursor = end
     margin = max(40, int(height * 0.06))
-    header = f"""[Script Info]
-; Persian subtitles
-ScriptType: v4.00+
-PlayResX: {width}
-PlayResY: {height}
-ScaledBorderAndShadow: yes
-WrapStyle: 0
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Persian,Vazirmatn,{font_size},&H00FFFFFF,&H000000FF,&H00101010,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,{margin},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+    header = (
+        "[Script Info]\n"
+        "; Persian subtitles\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {width}\n"
+        f"PlayResY: {height}\n"
+        "ScaledBorderAndShadow: yes\n"
+        "WrapStyle: 0\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Persian,Vazirmatn,{font_size},&H00FFFFFF,&H000000FF,"
+        f"&H00101010,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,{margin},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
     return header + "\n".join(dialogues) + "\n"
 
 
