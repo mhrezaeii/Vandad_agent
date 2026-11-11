@@ -8,6 +8,7 @@ type AgentDefinition = { key: string; name: string; description: string; capabil
 type CompanyAgent = { agent_key: string; status: string; definition: AgentDefinition };
 type Task = { id: string; agent_key: string; capability: string; title: string; status: string; created_at: string; attempt_count: number; max_attempts: number; error_message?: string | null };
 type Provider = { provider_id: string; display_name: string; description: string; capabilities: string[] };
+type SceneProvider = { provider_id: string; display_name: string; requires_network: boolean; supports_lipsync: boolean; supports_reference_image: boolean; supports_cancellation: boolean; daily_quota: number | null };
 type Budget = { provider_id: string; monthly_limit_usd: string; per_operation_limit_usd: string; enabled: boolean };
 type EventItem = { id: string; sequence: number; event_type: string; payload: Record<string, unknown>; created_at: string };
 type Brand = { id: string; name: string; display_name?: string; industry?: string; status: string };
@@ -45,6 +46,7 @@ export default function HomePage() {
   const [catalog, setCatalog] = useState<AgentDefinition[]>([]);
   const [companyAgents, setCompanyAgents] = useState<CompanyAgent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [sceneProviders, setSceneProviders] = useState<SceneProvider[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [usage, setUsage] = useState<Record<string, unknown>[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
@@ -70,16 +72,18 @@ export default function HomePage() {
       api<CompanyAgent[]>("/agents"),
       api<{ items: Task[] }>("/agent-tasks?limit=50"),
       api<Provider[]>("/providers"),
+      api<SceneProvider[]>("/providers/scene-video"),
       api<Budget[]>("/providers/budgets"),
       api<Record<string, unknown>[]>("/providers/usage?limit=50"),
       api<Brand[]>("/content/brands"),
       api<Platform[]>("/platforms"),
     ] as const);
-    const [catalogResult, agentsResult, tasksResult, providersResult, budgetsResult, usageResult, brandsResult, platformsResult] = results;
+    const [catalogResult, agentsResult, tasksResult, providersResult, sceneProvidersResult, budgetsResult, usageResult, brandsResult, platformsResult] = results;
     if (catalogResult.status === "fulfilled") setCatalog(catalogResult.value.items || []);
     if (agentsResult.status === "fulfilled") setCompanyAgents(agentsResult.value || []);
     if (tasksResult.status === "fulfilled") setTasks(tasksResult.value.items || []);
     if (providersResult.status === "fulfilled") setProviders(providersResult.value || []);
+    if (sceneProvidersResult.status === "fulfilled") setSceneProviders(sceneProvidersResult.value || []);
     if (budgetsResult.status === "fulfilled") setBudgets(budgetsResult.value || []);
     if (usageResult.status === "fulfilled") setUsage(usageResult.value || []);
     if (brandsResult.status === "fulfilled") setBrands(brandsResult.value || []);
@@ -236,7 +240,7 @@ export default function HomePage() {
                 <div className="section-head"><h2>وضعیت زیرساخت</h2><span className="status active">API Connected</span></div>
                 <div className="list">
                   <div className="row-item"><div><strong>Agent Catalog</strong><p>تعریف‌های code-owned</p></div><Status value="active" /></div>
-                  <div className="row-item"><div><strong>Provider Registry</strong><p>{providers.length} provider ثبت‌شده</p></div><Status value={providers.length ? "active" : "unknown"} /></div>
+                  <div className="row-item"><div><strong>Provider Registry</strong><p>{providers.length + sceneProviders.length} provider ثبت‌شده</p></div><Status value={providers.length ? "active" : "unknown"} /></div>
                   <div className="row-item"><div><strong>Company Brain</strong><p>{platforms.length} پلتفرم · {brands.length} برند</p></div><Status value="active" /></div>
                   <div className="row-item"><div><strong>Budget Policies</strong><p>{budgets.length} سیاست هزینه</p></div><Status value={budgets.length ? "active" : "unknown"} /></div>
                 </div>
@@ -332,14 +336,17 @@ export default function HomePage() {
         {tab === "providers" && (
           <div className="two-col section">
             <div className="card"><div className="section-head"><h2>Provider Registry</h2><span className="pill">{providers.length} مورد</span></div>
-              <div className="list">{providers.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · {provider.capabilities.join(", ")}</p></div><Status value="active" /></div>)}</div>
+              <div className="list">
+                {providers.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · {provider.capabilities.join(", ")}</p></div><Status value="active" /></div>)}
+                {sceneProviders.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · lip-sync: {provider.supports_lipsync ? "yes" : "no"} · reference image: {provider.supports_reference_image ? "yes" : "no"}</p></div><Status value="active" /></div>)}
+              </div>
               <div className="section-head section"><h2>Usage Ledger</h2><span className="muted small">{usage.length} رکورد اخیر</span></div>
               <div className="list">{usage.slice(0, 10).map((item, index) => <div className="row-item" key={String(item.id || index)}><div><strong dir="ltr">{String(item.provider_id || "provider")}</strong><p>{String(item.operation || "")} · هزینه: {item.actual_cost_usd == null ? "نامشخص" : String(item.actual_cost_usd) + " USD"}</p></div><Status value={String(item.status || "unknown")} /></div>)}{!usage.length && <div className="empty">هنوز Usage ثبت نشده است.</div>}</div>
             </div>
             <div className="card">
               <h2 style={{ fontSize: 16, marginTop: 0 }}>سیاست سقف هزینه</h2>
               <form className="form-grid" onSubmit={createBudget}>
-                <div className="field full"><label>Provider ID</label><select value={budgetProvider} onChange={(event) => setBudgetProvider(event.target.value)}>{providers.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.provider_id}</option>)}</select></div>
+                <div className="field full"><label>Provider ID</label><select value={budgetProvider} onChange={(event) => setBudgetProvider(event.target.value)}>{providers.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.provider_id}</option>)}{sceneProviders.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.provider_id}</option>)}</select></div>
                 <div className="field"><label>سقف ماهانه (USD)</label><input type="number" min="0.000001" step="0.01" value={monthlyLimit} onChange={(event) => setMonthlyLimit(event.target.value)} required /></div>
                 <div className="field"><label>سقف هر عملیات (USD)</label><input type="number" min="0.000001" step="0.01" value={operationLimit} onChange={(event) => setOperationLimit(event.target.value)} required /></div>
                 <div className="field full"><button className="button" type="submit">ذخیره سقف هزینه</button></div>
