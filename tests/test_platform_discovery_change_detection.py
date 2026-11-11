@@ -1,4 +1,4 @@
-from sqlalchemy import select
+﻿from sqlalchemy import select
 
 from app.integrations.platform_discovery.types import (
     DiscoveredPage,
@@ -96,7 +96,6 @@ async def test_discovery_detects_created_unchanged_and_changed_content(
         assert record.content_text == contents[2]
         assert record.changed_at > first_changed_at
 
-
 async def test_empty_discovery_does_not_delete_existing_snapshot(
     company_and_platform,
     session_factory,
@@ -156,3 +155,4 @@ async def test_empty_discovery_does_not_delete_existing_snapshot(
 
         assert record is not None
         assert record.content_text == "Important existing content"
+
