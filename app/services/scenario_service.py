@@ -216,6 +216,7 @@ class ScenarioService:
         timeout_seconds: float,
         operation: str,
         idempotency_key: str | None = None,
+        task_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         if self._llm_call is not None:
             raw = await self._llm_call(system=system, user=user)
@@ -271,6 +272,7 @@ class ScenarioService:
             idempotency_key=f"llm:{budget_key}",
             model=str(context.configuration.get("model") or "") or None,
             require_budget=True,
+            task_id=task_id,
         )
         # Persist the spend ceiling before crossing the provider boundary. If
         # this process dies mid-request, the reservation remains visible.
