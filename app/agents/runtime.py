@@ -29,6 +29,8 @@ class AgentExecutionContext:
     progress_callback: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
     workflow_queue: Any = None
     scene_video_registry: Any = None
+    default_scene_video_provider: str = "mock"
+    is_production: bool = False
 
     async def report_progress(self, stage: str, **details: Any) -> None:
         self.raise_if_cancelled()
@@ -260,8 +262,10 @@ class VideoProductionAgentHandler:
                 provider_id = str(
                     context.payload.get("provider_id")
                     or (project.scene_options or {}).get("provider_id")
-                    or "mock"
+                    or context.default_scene_video_provider
                 )
+                if provider_id == "mock" and context.is_production:
+                    raise ConflictError("The mock scene-video provider is forbidden in production.")
             else:
                 provider_id = "heygen"
 
