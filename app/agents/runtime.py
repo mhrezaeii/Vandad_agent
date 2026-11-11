@@ -182,7 +182,6 @@ class MonitoringAgentHandler:
                     connection_id=connection_id,
                     task_id=context.task_id,
                     max_documents=max(1, min(int(payload.get("max_documents", 20)), 20)),
-                    task_id=context.task_id,
                 )
                 await context.report_progress("monitoring.knowledge.completed", snapshot_id=str(snapshot.id))
                 await session.commit()
@@ -237,6 +236,7 @@ class ContentAgentHandler:
                 timeout_seconds=max(
                     1.0, min(float(context.payload.get("timeout_seconds", 180)), 180.0)
                 ),
+                task_id=context.task_id,
             )
             await context.report_progress("content.scenario.completed", project_id=str(project_id))
             await session.commit()
