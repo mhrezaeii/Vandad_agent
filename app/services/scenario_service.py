@@ -264,6 +264,7 @@ class ScenarioService:
             operation,
             idempotency_key=f"llm:{budget_key}",
             model=str(context.configuration.get("model") or "") or None,
+            require_budget=True,
         )
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
