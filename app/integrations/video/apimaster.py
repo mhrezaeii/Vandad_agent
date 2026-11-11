@@ -8,6 +8,7 @@ and never receive the API key.
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -77,13 +78,16 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
         if (
             isinstance(raw_duration, bool)
             or not isinstance(raw_duration, (int, float))
-            or not float(raw_duration).is_integer()
+            or not math.isfinite(float(raw_duration))
             or not 2 <= raw_duration <= 30
         ):
             raise SceneVideoPermanentError(
-                "APIMaster Wan 3.0 requires an integer duration from 2 to 30 seconds.",
+                "APIMaster Wan 3.0 requires a duration from 2 to 30 seconds.",
                 code="provider_invalid_duration",
             )
+        # Wan accepts whole seconds. Scene planning can produce fractional
+        # durations, so normalize by truncating the fractional part (5.4 -> 5)
+        # instead of rejecting an otherwise valid scene request.
         duration = int(raw_duration)
         if not request.prompt.strip() or len(request.prompt) > 5000:
             raise SceneVideoPermanentError(
