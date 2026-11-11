@@ -7,7 +7,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 TaskStatus = Literal[
     "pending", "queued", "awaiting_approval", "running", "completed", "failed", "cancelled"
 ]
