@@ -39,7 +39,19 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "total_cost_usd", "cost_usd", "model", "latency_ms",
         "attempts", "provider_request_id", "currency",
     }
-    return {key: value for key, value in payload.items() if key in allowed}
+    safe: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in allowed or isinstance(value, bool):
+            continue
+        if isinstance(value, str):
+            safe[key] = redact_text(value)[:160]
+        elif isinstance(value, Decimal) and value.is_finite():
+            safe[key] = str(value)
+        elif isinstance(value, int):
+            safe[key] = value
+        elif isinstance(value, float) and value == value and abs(value) != float("inf"):
+            safe[key] = value
+    return safe
 
 
 class ProviderBudgetService:
