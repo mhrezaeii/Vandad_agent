@@ -161,7 +161,8 @@ class Settings(BaseSettings):
     @field_validator("auth_proxy_shared_secret")
     @classmethod
     def _validate_auth_proxy_secret(cls, value: SecretStr | None) -> SecretStr | None:
-        if value is not None and len(value.get_secret_value()) < 32:
+        secret = value.get_secret_value() if value is not None else ""
+        if secret and len(secret) < 32:
             raise ValueError("auth_proxy_shared_secret must contain at least 32 characters")
         return value
 
