@@ -562,6 +562,11 @@ class SceneVideoService:
         assembly = dict(project.assembly_metadata or {})
         composition_job_id = assembly.get("composition_job_id")
         if not composition_job_id:
+            if not provider.supports_composition:
+                raise SceneVideoPermanentError(
+                    "The selected AI provider cannot compose a final storyboard video.",
+                    code="provider_composition_unsupported",
+                )
             await self._reserve_quota(project.company_id, provider)
             request = SceneVideoCompositionRequest(
                 project_id=str(project.id),
