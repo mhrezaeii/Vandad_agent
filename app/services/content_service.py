@@ -1439,6 +1439,7 @@ class ContentService:
                 idempotency_key=f"heygen:{budget_key}",
                 require_budget=True,
             )
+            await self.session.commit()
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
             error = outcome.error or ProviderError(
