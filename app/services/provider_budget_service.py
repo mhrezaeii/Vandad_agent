@@ -75,6 +75,16 @@ class ProviderBudgetService:
                 CompanyProviderBudget.provider_id == provider_id,
             ).with_for_update()
         )
+        # Serialize same-key reservations behind the budget row lock, then
+        # recheck so concurrent requests cannot double-reserve the same call.
+        existing = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.company_id == company_id,
+                ProviderUsageRecord.idempotency_key == idempotency_key,
+            ).with_for_update()
+        )
+        if existing is not None:
+            raise ConflictError("This provider operation already has a usage reservation; duplicate paid execution is blocked.")
         if budget is None:
             if require_budget:
                 raise ConflictError("A company provider budget is required before this paid operation.")
