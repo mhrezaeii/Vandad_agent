@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from app.services.subtitle_service import build_ass_for_script, build_segments
 
-
 PERSIAN_SCRIPT = (
     "شبکه سازمان شما هر ثانیه رویداد امنیتی تولید می‌کند. "
     "پایش متمرکز یعنی دیدن همه این رویدادها در یک نقطه. "
