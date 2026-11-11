@@ -259,6 +259,7 @@ def _apimaster_provider(handler) -> APIMasterSceneVideoProvider:
         base_url="https://api.apimaster.test",
         model="wan3.0-video-prime",
         resolution="720P",
+        route="gmi",
         download_allowed_hosts=("media.apimaster.test",),
     )
     return APIMasterSceneVideoProvider(
@@ -298,8 +299,43 @@ async def test_apimaster_submits_wan_request_with_image_reference():
         "duration": 5,
         "resolution": "720P",
         "aspect_ratio": "9:16",
-        "input_reference": "https://assets.example.test/vandiar.png",
+        "reference_image": "https://assets.example.test/vandiar.png",
     }
+
+
+async def test_apimaster_native_route_submits_reference_image_media():
+    import json
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(201, json={"id": "native-task", "status": "queued"})
+
+    provider = APIMasterSceneVideoProvider(
+        APIMasterConfig(
+            api_key="apimaster-test-secret",
+            base_url="https://api.apimaster.test",
+            route="native",
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    await provider.generate_video(
+        SceneVideoRequest(
+            scene_id="p:0",
+            prompt="Animate the character shown in image 1.",
+            duration_seconds=5,
+            reference_image_url="https://assets.example.test/vandiar.png",
+            aspect_ratio="9:16",
+        )
+    )
+    body = json.loads(captured["body"])
+    assert body["metadata"]["input"]["media"] == [
+        {"type": "reference_image", "url": "https://assets.example.test/vandiar.png"}
+    ]
+    assert "input_reference" not in body
 
 
 async def test_apimaster_polls_status_and_downloads_with_api_auth():
