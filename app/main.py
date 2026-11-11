@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.agents import build_default_agent_registry
-
 from app.api import api_router
 from app.api.deps import build_provider_executor
 from app.core.config import Settings, get_settings
