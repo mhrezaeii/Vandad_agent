@@ -18,6 +18,7 @@ from app.integrations.video import (
     SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
+    SceneVideoProviderRegistryError,
     SceneVideoTransientError,
     build_scene_video_registry,
 )
@@ -259,7 +260,7 @@ def test_ordered_registry_selection_skips_models_missing_required_capabilities()
     assert selected.provider_id == "generic_http"
     assert selected.model_id == "studio-compose-v1"
 
-    with pytest.raises(Exception, match="satisfies the requested capabilities"):
+    with pytest.raises(SceneVideoProviderRegistryError, match="satisfies the requested capabilities"):
         registry.resolve_ordered(["apimaster"], require_composition=True)
 
 
