@@ -11,6 +11,7 @@ what the tests use. Production code always goes through the provider executor.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -30,6 +31,7 @@ from app.schemas.scenario import (
 )
 from app.security.crypto import MasterKeyBox
 from app.services.credential_service import CredentialService
+from app.services.provider_budget_service import ProviderBudgetService
 
 _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
 
@@ -252,8 +254,31 @@ class ScenarioService:
             timeout_seconds=timeout_seconds,
             operation=operation,
         )
+        budget_key = hashlib.sha256(
+            f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode("utf-8")
+        ).hexdigest()
+        budget_service = ProviderBudgetService(self.session)
+        reservation = await budget_service.reserve(
+            company_id,
+            adapter.provider_id,
+            operation,
+            idempotency_key=f"llm:{budget_key}",
+            model=str(context.configuration.get("model") or "") or None,
+        )
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
+            await budget_service.settle(reservation, error_code=error.code or "llm_failure")
             raise ScenarioGenerationError(error.message, code=error.code or "llm_failure")
-        return outcome.result.metadata or {}
+        metadata = outcome.result.metadata or {}
+        usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else metadata
+        await budget_service.settle(
+            reservation,
+            usage={
+                **usage,
+                "model": metadata.get("model") or context.configuration.get("model"),
+                "latency_ms": outcome.result.latency_ms,
+                "attempts": outcome.attempts,
+            },
+        )
+        return metadata
