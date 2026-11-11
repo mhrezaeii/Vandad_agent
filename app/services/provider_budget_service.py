@@ -11,7 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
-from app.models import CompanyProviderBudget, ProviderUsageRecord
+from app.models import ActorType, CompanyProviderBudget, ProviderUsageRecord
+from app.services.audit_service import AuditService
 
 
 def parse_reported_cost(payload: dict[str, Any]) -> Decimal | None:
@@ -50,6 +51,7 @@ class ProviderBudgetService:
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        self.audit = AuditService(session)
 
     async def reserve(
         self, company_id: uuid.UUID, provider_id: str, operation: str, *,
@@ -152,6 +154,48 @@ class ProviderBudgetService:
                 record.actual_cost_usd = actual
                 record.reserved_amount_usd = Decimal("0")
         await self.session.flush()
+        return record
+
+    async def reconcile_usage(
+        self, company_id: uuid.UUID, record_id: uuid.UUID, *,
+        actual_cost_usd: Decimal, note: str, reconciled_by: str,
+    ) -> ProviderUsageRecord:
+        record = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.id == record_id,
+                ProviderUsageRecord.company_id == company_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise NotFoundError("Provider usage record not found.")
+        if record.status not in {"unknown", "reserved"}:
+            raise ConflictError("Only unknown or reserved usage records can be reconciled.")
+        if actual_cost_usd < 0:
+            raise ConflictError("Actual provider cost cannot be negative.")
+        record.actual_cost_usd = actual_cost_usd
+        record.reserved_amount_usd = Decimal("0")
+        record.status = "settled"
+        record.completed_at = datetime.now(UTC)
+        record.usage_payload = {
+            **(record.usage_payload or {}),
+            "operator_reconciled": True,
+            "reconciliation_note": note[:500],
+        }
+        await self.session.flush()
+        self.audit.record(
+            event_type="provider.usage.reconciled",
+            action="reconcile_provider_usage",
+            actor_type=ActorType.USER,
+            actor_id=reconciled_by,
+            company_id=company_id,
+            resource_type="provider_usage_record",
+            resource_id=record.id,
+            metadata={
+                "provider_id": record.provider_id,
+                "actual_cost_usd": str(actual_cost_usd),
+                "note": note[:500],
+            },
+        )
         return record
 
     async def assert_budget_enabled(
