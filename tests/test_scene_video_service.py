@@ -12,6 +12,7 @@ from app.integrations.video import (
     SceneGenerationStatus,
     SceneJobState,
     SceneVideoPermanentError,
+    SceneVideoTransientError,
     SceneVideoQuotaExhaustedError,
     build_scene_video_registry,
 )
@@ -196,6 +197,75 @@ async def test_poll_and_retrieve_completed_scenes(
     assert all(job.status == SceneVideoJobStatus.DOWNLOADED.value for job in jobs)
     assert all(job.artifact_id is not None for job in jobs)
     assert all(job.cost_metadata["size_bytes"] > 0 for job in jobs)
+
+
+
+async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    from app.storage.local import LocalArtifactStorage
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="ai-compose-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.commit()
+
+    provider = MockSceneVideoProvider(poll_steps=1)
+    storage = LocalArtifactStorage(tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024)
+    service = _service(db_session, provider, storage=storage)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    jobs = await _jobs(db_session, project.id)
+    for job in jobs:
+        job.video_url = f"https://provider.example/{job.scene_key}.mp4"
+    await db_session.commit()
+
+    with pytest.raises(SceneVideoTransientError, match="submitted"):
+        await service.finalize_project_video(
+            project,
+            execution_id=execution.id,
+            width=1080,
+            height=1920,
+            brand_context={"name": "Vandad"},
+        )
+    persisted_job_id = project.provider_job_id
+    assert persisted_job_id
+    await db_session.commit()
+
+    artifact, metadata = await service.finalize_project_video(
+        project,
+        execution_id=execution.id,
+        width=1080,
+        height=1920,
+        brand_context={"name": "Vandad"},
+    )
+    await db_session.commit()
+
+    assert project.status == "completed"
+    assert project.final_artifact_id == artifact.id
+    assert metadata["service"] == "ai_provider"
+    assert metadata["mode"] == "ai_composition"
+    assert metadata["provider_job_id"] == persisted_job_id
+    assert artifact.content_type == "video/mp4"
+    assert artifact.size_bytes > 0
+    assert len(provider.jobs) == len(jobs) + 1
+
+    same_artifact, _ = await service.finalize_project_video(
+        project,
+        execution_id=execution.id,
+        width=1080,
+        height=1920,
+        brand_context={"name": "Vandad"},
+    )
+    assert same_artifact.id == artifact.id
+    assert len(provider.jobs) == len(jobs) + 1
+
+
 
 
 async def test_completed_scene_jobs_settle_provider_usd_cost(
