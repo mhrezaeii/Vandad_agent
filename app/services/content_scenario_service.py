@@ -54,6 +54,7 @@ class ContentScenarioService:
         project_id: uuid.UUID,
         connection_id: uuid.UUID,
         timeout_seconds: float = 180.0,
+        task_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         project = await self.session.get(ContentProject, project_id)
         if project is None or project.company_id != company_id:
@@ -147,6 +148,7 @@ class ContentScenarioService:
             request=request,
             timeout_seconds=min(timeout_seconds, 180.0),
             idempotency_key=f"content-scenario:{project_id}",
+            task_id=task_id,
         )
 
         project.scenario = scenario.model_dump(mode="json")
