@@ -431,7 +431,7 @@ async def _download_video(
     if engine.artifact_storage is None:
         raise ProviderPermanentError("Artifact storage is not configured.", code="storage_unavailable")
 
-    artifact_service = ArtifactService(engine.session, engine.artifact_storage, max_size_bytes=2 * 1024**3)
+    artifact_service = ArtifactService(\n        engine.session, engine.artifact_storage, max_size_bytes=2 * 1024**3\n    )
 
     async def _video_chunks() -> Any:
         async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
@@ -513,6 +513,43 @@ async def _render_video(
         "artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
         "sha256": artifact.sha256, "production_path": "ai_provider_native_output",
     }
+
+
+# ============================================================================
+# Scene-based AI video pipeline helpers
+# ============================================================================
+def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
+    """Build a SceneVideoService bound to the engine's session and storage."""
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.services.scene_video_service import SceneVideoService  # noqa: PLC0415
+
+    if engine.scene_video_registry is None:
+        raise ProviderPermanentError(
+            "The scene-video provider registry is not configured.",
+            code="scene_registry_unavailable",
+        )
+    if engine.artifact_storage is None:
+        raise ProviderPermanentError(
+            "Artifact storage is not configured.", code="storage_unavailable"
+        )
+    settings = get_settings()
+    return SceneVideoService(
+        engine.session,
+        engine.scene_video_registry,
+        storage=engine.artifact_storage,
+        daily_quota=settings.scene_video_daily_quota,
+        max_attempts=settings.scene_video_max_scene_attempts,
+        max_size_bytes=settings.artifact_max_size_bytes,
+    )
+
+
+async def _brand_for(
+    engine, execution: WorkflowExecution, project: ContentProject
+) -> ContentBrand:
+    brand = await engine.session.get(ContentBrand, project.brand_id)
+    if brand is None or brand.company_id != execution.company_id:
+        raise NotFoundError("Brand not found for this project.")
+    return brand
 
 
 # --------------------------------------------------------- generate_scenario
