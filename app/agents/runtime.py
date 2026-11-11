@@ -131,3 +131,39 @@ class MonitoringAgentHandler:
                 return {"capability": capability, **knowledge_result}
 
         raise ConflictError("Unsupported monitoring capability.")
+
+
+class ContentAgentHandler:
+    """Generate an approved-brand scenario from its latest company knowledge."""
+
+    agent_key = "content"
+    capabilities = frozenset({"content.scenario.generate"})
+
+    async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
+        if capability != "content.scenario.generate":
+            raise ConflictError("Unsupported content capability.")
+
+        def _required_uuid(field: str) -> uuid.UUID:
+            try:
+                return uuid.UUID(str(context.payload[field]))
+            except (KeyError, ValueError, TypeError) as exc:
+                raise ValueError(f"Content scenario tasks require a valid {field}.") from exc
+
+        project_id = _required_uuid("project_id")
+        connection_id = _required_uuid("connection_id")
+        from app.services.content_scenario_service import ContentScenarioService
+
+        async with context.session_factory() as session:
+            result = await ContentScenarioService(
+                session,
+                context.provider_registry,
+                context.provider_executor,
+                context.master_key_box,
+            ).generate(
+                company_id=context.company_id,
+                project_id=project_id,
+                connection_id=connection_id,
+                timeout_seconds=min(float(context.payload.get("timeout_seconds", 180)), 180.0),
+            )
+            await session.commit()
+            return {"capability": capability, **result}
