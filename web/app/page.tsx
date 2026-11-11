@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
+import { api, apiUrl } from "@/lib/api";
 
 type Tab = "overview" | "agents" | "tasks" | "brain" | "content" | "providers" | "settings";
 type AgentDefinition = { key: string; name: string; description: string; capabilities: string[]; maturity: string; dispatch_ready: boolean };
@@ -62,7 +62,7 @@ export default function HomePage() {
   const [taskAgent, setTaskAgent] = useState("monitoring");
   const [taskCapability, setTaskCapability] = useState("platform.monitor");
   const [taskTitle, setTaskTitle] = useState("رصد و تحلیل پلتفرم");
-  const [taskPayload, setTaskPayload] = useState('{"platform_id": ""}');
+  const [taskPayload, setTaskPayload] = useState('{"platform_id": "", "connection_id": ""}');
   const [budgetProvider, setBudgetProvider] = useState("llm_openai");
   const [monthlyLimit, setMonthlyLimit] = useState("20");
   const [operationLimit, setOperationLimit] = useState("2");
@@ -123,6 +123,20 @@ export default function HomePage() {
     }
   }, [selectedDefinition]);
 
+  useEffect(() => {
+    const templates: Record<string, Record<string, string | number>> = {
+      "platform.monitor": { platform_id: "", connection_id: "", max_pages: 10, max_documents: 20 },
+      "platform.discover": { platform_id: "", max_pages: 10 },
+      "platform.change.detect": { platform_id: "", max_pages: 10 },
+      "platform.knowledge.extract": { platform_id: "", connection_id: "", max_documents: 20 },
+      "content.scenario.generate": { project_id: "", connection_id: "", timeout_seconds: 180 },
+      "video.scene.generate": { project_id: "", provider_id: "apimaster" },
+      "video.avatar.generate": { project_id: "", connection_id: "" },
+    };
+    const template = templates[taskCapability];
+    if (template) setTaskPayload(JSON.stringify(template, null, 2));
+  }, [taskCapability]);
+
   const run = async (action: () => Promise<unknown>, success: string) => {
     setError("");
     setNotice("");
@@ -170,6 +184,75 @@ export default function HomePage() {
       setError(cause instanceof Error ? cause.message : "دریافت رویدادها ناموفق بود.");
     }
   };
+
+  useEffect(() => {
+    if (!selectedTask) return;
+    const controller = new AbortController();
+    let lastSequence = events.reduce((max, event) => Math.max(max, event.sequence), 0);
+    const headers = new Headers({ Accept: "text/event-stream" });
+    if (companyId) headers.set("X-Company-ID", companyId);
+
+    const streamEvents = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          const streamHeaders = new Headers(headers);
+          if (lastSequence > 0) streamHeaders.set("Last-Event-ID", String(lastSequence));
+          const response = await fetch(`${apiUrl}/agent-tasks/${selectedTask}/events/stream`, {
+            headers: streamHeaders,
+            signal: controller.signal,
+            cache: "no-store",
+          });
+          if (!response.ok || !response.body) throw new Error(`SSE request failed (${response.status})`);
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let terminal = false;
+          while (!controller.signal.aborted) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            const blocks = buffer.split("\n\n");
+            buffer = blocks.pop() || "";
+            for (const block of blocks) {
+              const dataLine = block.split("\n").find((line) => line.startsWith("data:"));
+              if (!dataLine) continue;
+              try {
+                const payload = JSON.parse(dataLine.slice(5).trim()) as {
+                  id: string; sequence: number; type: string;
+                  payload: Record<string, unknown>; created_at: string;
+                };
+                if (!payload.sequence || payload.sequence <= lastSequence) continue;
+                lastSequence = payload.sequence;
+                const item: EventItem = {
+                  id: payload.id,
+                  sequence: payload.sequence,
+                  event_type: payload.type,
+                  payload: payload.payload || {},
+                  created_at: payload.created_at,
+                };
+                setEvents((current) => [...current.filter((event) => event.sequence !== item.sequence), item]
+                  .sort((a, b) => a.sequence - b.sequence).slice(-200));
+                if (["run.completed", "run.failed", "task.cancelled"].includes(payload.type)) {
+                  terminal = true;
+                  void load();
+                }
+              } catch {
+                // Ignore malformed SSE frames; the durable event endpoint remains available.
+              }
+            }
+          }
+          if (terminal) return;
+        } catch (cause) {
+          if (controller.signal.aborted) return;
+          setError(cause instanceof Error ? cause.message : "ارتباط زنده رویدادها قطع شد.");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      }
+    };
+
+    void streamEvents();
+    return () => controller.abort();
+  }, [selectedTask, companyId, load]);
 
   const createContentProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
