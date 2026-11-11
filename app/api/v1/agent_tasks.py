@@ -1,14 +1,21 @@
 """Company-scoped API for agent task requests and run history."""
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 
 from app.agents import AgentRegistry
 from app.api.deps import company_scope, get_agent_task_service
+from app.models import AgentTask, AgentTaskEvent
 from app.schemas.agent_task import (
+    AgentTaskEventRead,
     AgentTaskCreate,
     AgentTaskListRead,
     AgentTaskRead,
@@ -105,6 +112,73 @@ async def list_agent_task_runs(
     service: Annotated[AgentTaskService, Depends(get_agent_task_service)],
 ) -> list[AgentTaskRunRead]:
     return await service.list_runs(scope.company_id, task_id)
+
+
+@router.get("/{task_id}/events", response_model=list[AgentTaskEventRead])
+async def list_agent_task_events(
+    task_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[AgentTaskService, Depends(get_agent_task_service)],
+    after: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[AgentTaskEventRead]:
+    events = await service.list_events(scope.company_id, task_id, after=after, limit=limit)
+    return [AgentTaskEventRead.model_validate(event) for event in events]
+
+
+@router.get("/{task_id}/events/stream")
+async def stream_agent_task_events(
+    task_id: uuid.UUID,
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    after: Annotated[int, Query(ge=0)] = 0,
+) -> StreamingResponse:
+    """Stream durable task events as SSE; reconnect with the last event sequence."""
+    company_id = scope.company_id
+    session_factory = request.app.state.session_factory
+
+    async def event_stream():
+        cursor = after
+        while not await request.is_disconnected():
+            async with session_factory() as session:
+                task = await session.scalar(
+                    select(AgentTask).where(
+                        AgentTask.id == task_id, AgentTask.company_id == company_id
+                    )
+                )
+                if task is None:
+                    yield "event: error\\ndata: {\"code\":\"not_found\"}\\n\\n"
+                    return
+                events = list((await session.scalars(
+                    select(AgentTaskEvent).where(
+                        AgentTaskEvent.task_id == task_id,
+                        AgentTaskEvent.company_id == company_id,
+                        AgentTaskEvent.sequence > cursor,
+                    ).order_by(AgentTaskEvent.sequence.asc()).limit(100)
+                )).all())
+                terminal = task.status in {"completed", "failed", "cancelled"}
+            for event in events:
+                cursor = event.sequence
+                payload = {
+                    "id": str(event.id),
+                    "task_id": str(event.task_id),
+                    "sequence": event.sequence,
+                    "type": event.event_type,
+                    "payload": event.payload,
+                    "created_at": event.created_at.astimezone(UTC).isoformat(),
+                }
+                yield f"id: {cursor}\\nevent: {event.event_type}\\ndata: {json.dumps(payload, ensure_ascii=False)}\\n\\n"
+            if terminal and not events:
+                return
+            if not events:
+                yield ": keep-alive\\n\\n"
+                await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{task_id}/cancel", response_model=AgentTaskRead)
