@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -119,7 +121,7 @@ async def test_generic_http_composes_final_video_when_capability_is_configured()
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal received
-        received = __import__("json").loads(request.content)
+        received = json.loads(request.content)
         return httpx.Response(202, json={"id": "compose-1"})
 
     provider = _http_provider(handler, compose_path="/v1/compose")
