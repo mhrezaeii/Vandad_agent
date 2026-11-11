@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     auth_proxy_user_header: str = "X-Auth-Request-User"
     auth_proxy_company_ids_header: str = "X-Auth-Request-Company-IDs"
     auth_proxy_roles_header: str = "X-Auth-Request-Roles"
+    cors_allowed_origins: str = "http://localhost:3000"
 
     # --- Artifact storage (see app.storage) --------------------------------------
     # Root directory for generated workflow artifacts (mounted volume in Docker).
