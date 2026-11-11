@@ -77,3 +77,10 @@ class SceneVideoProviderRead(BaseModel):
     supports_reference_image: bool
     supports_cancellation: bool
     daily_quota: int | None = None
+
+
+class ProviderUsageReconcile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actual_cost_usd: Decimal = Field(ge=0, max_digits=14, decimal_places=6)
+    note: str = Field(min_length=5, max_length=500)
