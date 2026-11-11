@@ -111,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None if resolved.is_production else "/openapi.json",
     )
     app.state.configured_settings = resolved
+    app.state.settings = resolved
     app.add_middleware(CorrelationIdMiddleware)
     register_exception_handlers(app)
     app.include_router(api_router, prefix=resolved.api_prefix)
