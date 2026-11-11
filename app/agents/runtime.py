@@ -49,28 +49,54 @@ class AgentHandler(Protocol):
     async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]: ...
 
 
-class AgentDispatcher:
-    """Dispatch only registered agent/capability pairs; never execute DB-defined code."""
+class AgentCapabilityRouter:
+    """Resolve only explicitly registered (agent, capability) pairs."""
 
     def __init__(self, registry: AgentRegistry, handlers: list[AgentHandler]) -> None:
         self.registry = registry
         self.handlers = {handler.agent_key: handler for handler in handlers}
         if len(self.handlers) != len(handlers):
             raise ValueError("Agent handler keys must be unique.")
-        for key, handler in self.handlers.items():
-            definition = registry.get(key)
+        self._routes: dict[tuple[str, str], AgentHandler] = {}
+        for agent_key, handler in self.handlers.items():
+            definition = registry.get(agent_key)
             if not definition.dispatch_ready:
-                raise ValueError(f"Handler '{key}' is registered but its agent is not dispatch-ready.")
-            if not handler.capabilities.issubset(set(definition.capabilities)):
-                raise ValueError(f"Handler '{key}' exposes an unregistered capability.")
+                raise ValueError(
+                    f"Handler '{agent_key}' is registered but its agent is not dispatch-ready."
+                )
+            for capability in handler.capabilities:
+                if capability not in definition.capabilities:
+                    raise ValueError(
+                        f"Handler '{agent_key}' exposes an unregistered capability."
+                    )
+                route = (agent_key, capability)
+                if route in self._routes:
+                    raise ValueError(f"Duplicate agent capability route: {route!r}.")
+                self._routes[route] = handler
 
-    async def dispatch(self, agent_key: str, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
+    def resolve(self, agent_key: str, capability: str) -> AgentHandler:
         definition = self.registry.get(agent_key)
         if capability not in definition.capabilities:
             raise ConflictError("The requested capability is not registered for this agent.")
-        handler = self.handlers.get(agent_key)
-        if handler is None or capability not in handler.capabilities:
+        handler = self._routes.get((agent_key, capability))
+        if handler is None:
             raise ConflictError("No execution handler is available for this agent capability.")
+        return handler
+
+    def list_routes(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self._routes))
+
+
+class AgentDispatcher:
+    """Dispatch via the explicit code-owned Tool/Capability Router contract."""
+
+    def __init__(self, registry: AgentRegistry, handlers: list[AgentHandler]) -> None:
+        self.registry = registry
+        self.router = AgentCapabilityRouter(registry, handlers)
+        self.handlers = self.router.handlers
+
+    async def dispatch(self, agent_key: str, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
+        handler = self.router.resolve(agent_key, capability)
         result = await handler.execute(capability, context)
         if not isinstance(result, dict):
             raise TypeError("Agent handlers must return a JSON object.")
