@@ -6,6 +6,7 @@ start_run refuses to execute until the selected agent definition is dispatch-rea
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -102,8 +103,17 @@ class AgentTaskService:
         return list(rows.all())
 
     @staticmethod
-    def _same_request(task: AgentTask, *, agent_key: str, capability: str, title: str,
-                      input_payload: dict[str, Any], priority: int, max_attempts: int, spend_ceiling_usd=None) -> bool:
+    def _same_request(
+        task: AgentTask,
+        *,
+        agent_key: str,
+        capability: str,
+        title: str,
+        input_payload: dict[str, Any],
+        priority: int,
+        max_attempts: int,
+        spend_ceiling_usd: Decimal | None = None,
+    ) -> bool:
         return (
             task.agent_key == agent_key
             and task.capability == capability
@@ -118,7 +128,7 @@ class AgentTaskService:
         self, company_id: uuid.UUID, *, requested_by: str, agent_key: str,
         capability: str, title: str, input_payload: dict[str, Any],
         idempotency_key: str | None, priority: int, max_attempts: int,
-        spend_ceiling_usd=None,
+        spend_ceiling_usd: Decimal | None = None,
     ) -> AgentTask:
         try:
             definition = self.registry.get(agent_key)
