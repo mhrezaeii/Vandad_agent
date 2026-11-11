@@ -69,6 +69,15 @@ class ProviderUsageRead(BaseModel):
     created_at: datetime
 
 
+class ProviderHealthRead(BaseModel):
+    provider_id: str
+    calls_30d: int
+    errors_30d: int
+    success_rate: float | None
+    average_latency_ms: float | None
+    last_call_at: datetime
+
+
 class SceneVideoProviderRead(BaseModel):
     provider_id: str
     display_name: str
