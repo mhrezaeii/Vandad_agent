@@ -50,6 +50,7 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
         )
 
     registry = build_scene_video_registry(
+        include_mock=not getattr(settings, "is_production", False),
         http_config=http_config,
         apimaster_config=apimaster_config,
     )
