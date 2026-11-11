@@ -163,6 +163,7 @@ async def list_scene_video_providers(
             supports_lipsync=provider.supports_lipsync,
             supports_reference_image=provider.supports_reference_image,
             supports_cancellation=provider.supports_cancellation,
+            supports_composition=provider.supports_composition,
             daily_quota=provider.quota_limit_per_day(),
         )
         for provider in registry.list_providers()
