@@ -43,7 +43,7 @@ The frontend sends same-site session cookies with API and SSE requests. Keep the
 - \`admin\`: operator permissions plus agent activation and provider budget/reconciliation controls.
 - \`owner\`: same baseline control-plane permissions as admin.
 
-The identity proxy is responsible for mapping identity-provider groups to these roles and company memberships. The API does not trust role claims supplied directly by the browser.
+The identity proxy is responsible for mapping identity-provider groups to these roles and company memberships. For multi-company users, `X-Auth-Request-Roles` must contain the roles for the active company selected by `X-Company-ID`; do not send the union of a user's roles across all companies. The API does not trust role claims supplied directly by the browser.
 
 ## Local development
 
