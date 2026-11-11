@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from app.agents import AgentRegistry
@@ -25,6 +26,12 @@ class AgentExecutionContext:
     provider_executor: Any
     master_key_box: Any
     cancel_event: asyncio.Event | None = None
+    progress_callback: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
+
+    async def report_progress(self, stage: str, **details: Any) -> None:
+        self.raise_if_cancelled()
+        if self.progress_callback is not None:
+            await self.progress_callback(stage, details)
 
     def raise_if_cancelled(self) -> None:
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -82,7 +89,7 @@ class MonitoringAgentHandler:
     })
 
     async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
-        context.raise_if_cancelled()
+        await context.report_progress("monitoring.started", capability=capability)
         payload = context.payload
         try:
             platform_id = uuid.UUID(str(payload["platform_id"]))
@@ -97,12 +104,13 @@ class MonitoringAgentHandler:
             discovery_result = None
             if capability in {"platform.monitor", "platform.discover", "platform.change.detect"}:
                 # Browser-authenticated actions are intentionally not exposed by this first handler.
+                await context.report_progress("monitoring.discovery.started")
                 discovery_result = await PlatformDiscoveryService(session).discover(
                     platform,
                     mode="public",
                     max_pages=max(1, min(int(payload.get("max_pages", 10)), 25)),
                 )
-                context.raise_if_cancelled()
+                await context.report_progress("monitoring.discovery.completed")
                 if capability != "platform.monitor":
                     await session.commit()
                     return {"capability": capability, **discovery_result}
@@ -118,6 +126,7 @@ class MonitoringAgentHandler:
                     raise ValueError(
                         "Knowledge extraction requires a valid connection_id."
                     ) from exc
+                await context.report_progress("monitoring.knowledge.started")
                 snapshot = await PlatformKnowledgeService(
                     session,
                     context.provider_registry,
@@ -128,7 +137,7 @@ class MonitoringAgentHandler:
                     connection_id=connection_id,
                     max_documents=max(1, min(int(payload.get("max_documents", 20)), 20)),
                 )
-                context.raise_if_cancelled()
+                await context.report_progress("monitoring.knowledge.completed", snapshot_id=str(snapshot.id))
                 await session.commit()
                 knowledge_result = {
                     "snapshot_id": str(snapshot.id),
@@ -156,7 +165,7 @@ class ContentAgentHandler:
     async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
         if capability != "content.scenario.generate":
             raise ConflictError("Unsupported content capability.")
-        context.raise_if_cancelled()
+        await context.report_progress("content.scenario.started")
 
         def _required_uuid(field: str) -> uuid.UUID:
             try:
@@ -182,6 +191,6 @@ class ContentAgentHandler:
                     1.0, min(float(context.payload.get("timeout_seconds", 180)), 180.0)
                 ),
             )
-            context.raise_if_cancelled()
+            await context.report_progress("content.scenario.completed", project_id=str(project_id))
             await session.commit()
             return {"capability": capability, **result}
