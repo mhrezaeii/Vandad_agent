@@ -44,6 +44,7 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
     provider_id = "mock"
     display_name = "Local mock scene-video provider"
     supports_cancellation = True
+    supports_composition = True
     requires_network = False
 
     def __init__(
