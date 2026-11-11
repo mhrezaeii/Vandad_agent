@@ -67,7 +67,9 @@ class ProviderBudgetService:
         if existing is not None:
             if existing.provider_id != provider_id or existing.operation != operation:
                 raise ConflictError("Provider usage idempotency key was reused for a different operation.")
-            raise ConflictError("This provider operation already has a usage reservation; duplicate paid execution is blocked.")
+            raise ConflictError(
+                "This provider operation already has a usage reservation; duplicate paid execution is blocked."
+            )
 
         budget = await self.session.scalar(
             select(CompanyProviderBudget).where(
