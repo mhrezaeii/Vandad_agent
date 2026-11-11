@@ -3,7 +3,6 @@
 from fastapi import APIRouter
 
 from app.api.v1.agents import router as agents_router
-
 from app.api.v1.artifacts import artifact_router as artifacts_router
 from app.api.v1.artifacts import router as execution_artifacts_router
 from app.api.v1.connections import router as connections_router
