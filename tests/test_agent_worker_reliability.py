@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+
+import pytest
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+
+from app.core.exceptions import ConflictError
 
 from app.agents import build_default_agent_registry
 from app.models import AgentTask, AgentTaskOutbox, AgentTaskRun, CompanyAgent
@@ -130,5 +134,65 @@ async def test_agent_worker_failure_is_persisted_and_requeued(
         assert len(deliveries) == 2
         assert deliveries[1].attempt_number == 2
         assert deliveries[1].status == "pending"
+    finally:
+        await worker.engine.dispose()
+
+
+
+async def test_agent_worker_recovers_stale_run_and_fences_previous_owner(
+    company_and_platform, db_session
+):
+    company, _ = company_and_platform
+    outbox = await _create_dispatchable_task(db_session, company)
+    old_worker_id = "agent-worker-crashed"
+    service = AgentTaskService(db_session, build_default_agent_registry())
+    run = await service.start_run(company.id, outbox.task_id, worker_id=old_worker_id)
+
+    stale_at = datetime.now(UTC) - timedelta(minutes=5)
+    run.heartbeat_at = stale_at
+    outbox.status = "processing"
+    outbox.worker_id = old_worker_id
+    outbox.locked_at = stale_at
+    await db_session.commit()
+
+    worker = AgentTaskWorker()
+    worker.lease_seconds = 60
+    try:
+        recovered = await worker._recover_stale_runs_once()
+
+        assert recovered == 1
+        task = await db_session.get(AgentTask, outbox.task_id)
+        await db_session.refresh(task)
+        await db_session.refresh(run)
+        await db_session.refresh(outbox)
+
+        assert task.status == "queued"
+        assert task.attempt_count == 1
+        assert task.error_code == "worker_lease_expired"
+        assert run.status == "failed"
+        assert run.error_code == "worker_lease_expired"
+
+        deliveries = list(
+            (
+                await db_session.scalars(
+                    select(AgentTaskOutbox)
+                    .where(AgentTaskOutbox.task_id == task.id)
+                    .order_by(AgentTaskOutbox.attempt_number)
+                )
+            ).all()
+        )
+        assert len(deliveries) == 2
+        assert deliveries[0].status == "processing"
+        assert deliveries[1].attempt_number == 2
+        assert deliveries[1].status == "pending"
+
+        with pytest.raises(ConflictError):
+            await service.complete_run(
+                company.id,
+                task.id,
+                run.id,
+                result_payload={"late": True},
+                worker_id=old_worker_id,
+            )
     finally:
         await worker.engine.dispose()
