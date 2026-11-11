@@ -272,7 +272,7 @@ class ScenarioService:
             await budget_service.settle(reservation, error_code=error.code or "llm_failure")
             raise ScenarioGenerationError(error.message, code=error.code or "llm_failure")
         metadata = outcome.result.metadata or {}
-        usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else metadata
+        usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
         await budget_service.settle(
             reservation,
             usage={
