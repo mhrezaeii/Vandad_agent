@@ -158,6 +158,13 @@ class Settings(BaseSettings):
             raise ValueError("credential_master_keys must be a JSON object of version -> key")
         return value
 
+    @field_validator("auth_proxy_shared_secret")
+    @classmethod
+    def _validate_auth_proxy_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 32:
+            raise ValueError("auth_proxy_shared_secret must contain at least 32 characters")
+        return value
+
     @field_validator("bootstrap_principal_company_ids")
     @classmethod
     def _validate_bootstrap_companies(cls, value: str) -> str:
