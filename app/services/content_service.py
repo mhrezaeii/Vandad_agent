@@ -783,6 +783,7 @@ class ContentService:
             brand_id=brand.id,
             topic=topic,
             status=ProjectStatus.DRAFT.value,
+            video_mode="avatar",
         )
         self.session.add(project)
         await self.session.flush()
