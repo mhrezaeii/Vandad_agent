@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from starlette.requests import Request
 
-from app.api.deps import company_scope, get_principal
+from app.api.deps import company_scope, get_principal, require_company_admin
 from app.core.config import Settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError, UnprocessableEntityError
 
@@ -60,6 +60,13 @@ async def test_viewer_can_read_but_cannot_mutate_company_scope():
 
     with pytest.raises(ForbiddenError):
         await company_scope(_request(method="POST", companies=[company_id]))
+
+
+def test_admin_controls_require_owner_or_admin_role():
+    with pytest.raises(ForbiddenError):
+        require_company_admin(_request(roles="operator"))
+    admin = require_company_admin(_request(roles="admin"))
+    assert "admin" in admin.roles
 
 
 async def test_multi_company_identity_must_select_company_header():
