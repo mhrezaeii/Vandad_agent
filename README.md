@@ -1,159 +1,147 @@
-# Vandad Agent — Backend
+# Vandad Agent
 
-Foundation for an internal Autonomous Company Operations & Marketing Agent platform.
-Phase 1 delivered FastAPI + PostgreSQL + Redis + n8n on Docker Compose with the
-platform registry, provider execution and workflow engine. Phase 4 adds the
-first real content pipeline: a persistent Persian AI avatar and a branded
-1080x1920 video produced through HeyGen and FFmpeg.
+Vandad Agent is the backend foundation for a multi-company operations and content-production platform. It is an API-first Python service; a dedicated web UI has not been added yet.
 
-## Stack
+## Current stack
 
-- Python 3.12+, FastAPI (async), Pydantic v2
-- PostgreSQL 16 (SQLAlchemy 2.x async, asyncpg, Alembic)
-- Redis 7 (async connection manager)
-- n8n (community edition, persisted in the shared Postgres)
-- Docker Compose, Pytest
+- Python 3.12+, FastAPI, Pydantic v2
+- PostgreSQL 16, SQLAlchemy async, Alembic
+- Redis-backed workflow queue and worker
+- Provider adapters for OpenAI-compatible LLM APIs, browser automation, HeyGen and scene-video APIs
+- APIMaster scene-video adapter (Wan video models), generic HTTP scene-video adapter and mock provider
+- FFmpeg-based video rendering and local artifact storage
+- Docker Compose, pytest and Ruff
 
-## Quick start
+## Start locally
 
-```bash
-cp .env.example .env          # then edit every change-me value
-docker compose up -d --build  # api + postgres + redis + n8n
+```powershell
+Copy-Item .env.example .env
+# Edit .env and replace every required change-me value.
+docker compose up -d --build
 ```
 
-- API:        http://localhost:8000/api/v1/health  (docs at /docs)
-- n8n:        http://localhost:5678  (create the owner account on first visit)
-- Migrations run automatically when the api container starts
-  (`alembic upgrade head`).
+- API health: `http://localhost:8000/api/v1/health`
+- OpenAPI: `http://localhost:8000/docs`
+- PostgreSQL and Redis are required for normal API/worker operation.
+- The API and worker run Alembic migrations through the container startup configuration.
 
-### Local (host) development
+For host development:
 
-```bash
+```powershell
 docker compose up -d postgres redis
-python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"
-alembic upgrade head
-uvicorn app.main:app --reload
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
+.venv\Scripts\alembic upgrade head
+.venv\Scripts\uvicorn app.main:app --reload
 ```
 
-## API surface (Phase 1)
+Run tests:
 
-| Method | Path                             | Purpose                        |
-|--------|----------------------------------|--------------------------------|
-| GET    | `/api/v1/health`                 | Liveness (no dependency calls) |
-| GET    | `/api/v1/health/ready`           | Readiness (DB + Redis checks)  |
-| GET    | `/api/v1/platforms`              | List platforms (pagination)    |
-| POST   | `/api/v1/platforms`              | Create platform                |
-| GET    | `/api/v1/platforms/{id}`         | Retrieve platform              |
-| PATCH  | `/api/v1/platforms/{id}`         | Partial update                 |
-| DELETE | `/api/v1/platforms/{id}`         | Delete platform                |
+```powershell
+docker compose up -d postgres redis
+.venv\Scripts\python -m ruff check app tests
+.venv\Scripts\python -m pytest -q
+```
 
-Errors use one envelope: `{"error": {"code", "message", "details?", "correlation_id"}}`.
-Every response carries an `X-Request-ID` correlation id (or pass your own).
+The test suite expects an isolated test database and Redis DB 1. See `.github/workflows/backend-tests.yml` for the CI environment.
 
-## Content pipeline (Phase 4)
+## Product architecture
 
-The pipeline is deliberately brand-agnostic. Vandefence is seeded as the first
-brand, but every step reads its identity from `content_brands` +
-`content_brand_characters` and its look-and-feel from `brand.visual_config`.
-All endpoints live under `/api/v1/content` and are tenant-scoped by the
-`X-Company-ID` header (cross-tenant reads return `404`, never `403`).
+The backend is organized around these boundaries:
 
-| Method | Path                                              | Purpose                                         |
-|--------|---------------------------------------------------|-------------------------------------------------|
-| GET    | `/content/brands`                                 | List brands (bootstraps Vandefence on first call) |
-| GET    | `/content/brands/{id}/character`                  | Read the brand's persistent character           |
-| POST   | `/content/brands/{id}/character`                  | Create the character once (paid HeyGen training) |
-| POST   | `/content/brands/{id}/character/refresh`          | Poll avatar training and persist the avatar id  |
-| POST   | `/content/brands/{id}/character/status`           | Activate / deactivate the character             |
-| POST   | `/content/projects`                               | Create a video project (topic only)             |
-| GET    | `/content/projects/{id}`                          | Read project state, script, cost and artifacts  |
-| POST   | `/content/projects/{id}/generate-script`          | Start the LLM script workflow                   |
-| POST   | `/content/projects/{id}/approve-script`           | Human approval gate before any paid video call  |
-| POST   | `/content/projects/{id}/generate-video`           | Start the HeyGen + FFmpeg workflow              |
-| GET    | `/content/jobs/{id}`                              | Poll a workflow job / execution status          |
-| GET    | `/content/videos`                                 | List completed videos for the company           |
-| GET    | `/content/videos/{id}`                            | Read one completed video                        |
-| GET    | `/content/videos/{id}/content`                    | Stream the final MP4 (no storage paths exposed) |
+1. **API and tenant security** — FastAPI routes, company scope, request correlation and authorization.
+2. **Company context** — connected platforms, source documents, extracted platform knowledge and brand-specific context.
+3. **Agent catalog** — code-owned agent definitions and tenant-level enable/disable state.
+4. **Task lifecycle** — company-scoped task requests, idempotency, cancellation, retries and immutable run history.
+5. **Workflow runtime** — validated workflow graphs, persisted executions, Redis queue, worker, retries and schedules.
+6. **Provider fabric** — provider registry and adapters; credentials are resolved through the secret boundary.
+7. **Media pipeline** — brand character management, scene generation, assembly, Persian subtitles and artifact delivery.
 
-### Flow
+The current implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. **The agent-task dispatcher/orchestrator is not yet implemented**, so creating a task records intent and lifecycle state but does not invoke an agent or provider. Agent definitions remain non-dispatch-ready until a real handler is implemented and tested.
 
-1. `GET /content/brands` bootstraps the Vandefence brand for the company.
-2. Create the persistent character once from a source portrait. HeyGen trains a
-   photo avatar; `refresh` polls until the look is `completed` and stores its id.
-   Only a `not_created` or `failed` character may start (or restart) the paid
-   training flow — an active character is reactivated, never re-created.
-3. Create a project, run `generate-script`, review the output, then
-   `approve-script`. Video generation refuses to run without approval.
-4. `generate-video` drives the `content.*` workflow nodes:
-   `submit_video` (idempotent paid HeyGen submission) → `poll_video` →
-   `download_video` → `render_video` (FFmpeg subtitles + branding).
-5. Poll `GET /content/jobs/{id}` until the execution completes, then stream the
-   finished MP4 from `/content/videos/{id}/content`.
+See [Architecture and implementation status](docs/ARCHITECTURE.md).
 
-### Idempotency and cost honesty
+## API areas
 
-- Paid calls send a stable `Idempotency-Key` (`vandad-video-{project.id}`,
-  `vandad-avatar-{character.id}`) so retries and duplicate submissions never
-  charge twice. A `409 request_in_progress` is treated as transient.
-- LLM cost is recorded only when the provider reports it (for example OpenRouter
-  `usage.cost`). HeyGen does not report a per-video price, so `cost_metadata`
-  records duration and artifact metadata with `actual_cost_available: false`.
-  Prices are never invented.
+All routes are under `/api/v1`. The main route groups are:
 
-### Video rendering
+| Area | Route prefix | Purpose |
+|---|---|---|
+| Health | `/health` | Liveness and readiness |
+| Platforms | `/platforms` | Platform registry |
+| Platform discovery | `/platform-discovery` | Discover sources and extract platform knowledge |
+| Connections | `/connections` | Tenant-owned platform connections |
+| Providers | `/providers` | Provider metadata and execution capabilities |
+| Workflows | `/workflows` | Workflow definitions and versions |
+| Executions | `/executions` | Workflow execution and schedules |
+| Agents | `/agents` | Agent catalog and tenant agent activation |
+| Agent tasks | `/agent-tasks` | Task requests, cancellation, retry and run history |
+| Content | `/content` | Brand, character and video project workflows |
+| Artifacts | `/artifacts` | Tenant-scoped artifact metadata and delivery |
 
-`VideoRenderService` normalizes the raw HeyGen output to the brand's
-`video_width` x `video_height` (1080x1920 by default), burns Persian RTL
-subtitles (correct shaping, `Vazirmatn`), optionally concatenates intro/outro,
-overlays the logo, mixes background music and applies loudness normalization.
-Every stage runs in an isolated temp directory that is removed afterwards.
+Company-scoped endpoints use the `X-Company-ID` boundary. Cross-company resource access must remain denied without leaking resource existence.
 
-| Setting                   | Default            | Purpose                                             |
-|---------------------------|--------------------|-----------------------------------------------------|
-| `VIDEO_FONTS_DIR`         | `/usr/share/fonts` | Font directory for libass (falls back to fontconfig) |
-| `VIDEO_FONT_NAME`         | `Vazirmatn`        | Subtitle font family                                |
-| `VIDEO_FFMPEG_BIN`        | `ffmpeg`           | FFmpeg binary                                       |
-| `VIDEO_FFPROBE_BIN`       | `ffprobe`          | FFprobe binary                                      |
+## Video production: two distinct paths
 
-The Docker runtime installs `ffmpeg` and `fonts-vazirmatn`; node-level
-`fonts_dir`, `font_name`, `ffmpeg_bin` and `ffprobe_bin` override the defaults.
+These paths solve different jobs and should remain separate behind a common orchestration layer.
 
-## Layout
+### 1. Talking-avatar video
+
+The local renderer in `scripts/create_video.py` uses Persian Piper TTS, Wav2Lip and FFmpeg. It is intended for a persistent character speaking a generated script. The runtime assets and model weights are local setup artifacts; they must not be committed to Git.
+
+### 2. Scene-based video
+
+The scene pipeline creates a storyboard and generates individual scenes through a configured scene-video provider, then assembles and renders the result. Available adapters include:
+
+- **APIMaster** — configured through `SCENE_VIDEO_APIMASTER_*`; current default model is `wan3.0-video-prime`.
+- **Generic HTTP** — for a compatible asynchronous video API with explicitly configured paths and download host allowlist.
+- **Mock** — for tests and local development only; production rejects it.
+
+APIMaster is a scene-video provider, not automatically an LLM provider. The OpenAI-compatible LLM adapter is a separate integration and can target compatible endpoints when the provider exposes the expected chat-completions contract.
+
+APIMaster scene generation does not provide lip-sync. For a speaking character, generate speech and use the talking-avatar path or a provider that explicitly supports that capability; do not assume a scene-generation model can animate accurate dialogue.
+
+## Provider and cost policy
+
+- Provider selection is explicit through configuration; unavailable providers fail closed.
+- Keep API credentials in `.env` or the configured secret store, never in source code.
+- Record provider-reported usage/cost only. Do not infer or fabricate cost when a provider omits it.
+- Before enabling a paid provider in production, validate its endpoint contract, output retrieval, download allowlist, timeout behavior and retry/idempotency behavior.
+- Add new providers as isolated adapters; do not add vendor-specific branches to workflow business logic.
+
+## Deployment notes
+
+Docker Compose currently includes API, worker, PostgreSQL, Redis and an n8n service. The in-repository workflow engine and worker are the execution path implemented by this codebase. n8n should be treated as an optional/legacy integration until its intended responsibility is confirmed; do not remove its service, volumes or configuration until local deployment usage has been checked.
+
+Artifacts are stored through the configured artifact storage backend and shared between API and worker containers. Never expose internal filesystem paths through public API responses.
+
+## Repository map
 
 ```
 app/
-  api/          routers + request-scoped dependencies (unit of work)
-  common/       framework-independent helpers (slugify)
-  core/         config, logging, middleware, exceptions, redis manager, queue
-  database/     engine/session factories, declarative base
-  integrations/ provider adapters (HeyGen, OpenAI-compatible LLM) + registry/executor
-  models/       SQLAlchemy ORM models (incl. content brands/characters/projects)
-  repositories/ data access (no commits here)
-  schemas/      Pydantic request/response models
-  security/     secret references, encryption, redaction, authorization
-  services/     business logic (content, video render, subtitles, artifacts, ...)
-  storage/      artifact storage backends (local filesystem)
-  workflows/    engine, node registry, content nodes
-  workers/      queue consumer process
-alembic/        migrations
-tests/          pytest suite (needs dockerized postgres+redis running)
+  agents/          code-owned agent catalog and registry
+  api/             FastAPI routers and request dependencies
+  core/            settings, logging, middleware, queue and Redis
+  database/        SQLAlchemy engine/session setup
+  integrations/    platform discovery and provider adapters
+  models/          SQLAlchemy models
+  repositories/    data access
+  schemas/         API request/response schemas
+  security/        authorization, encryption, secret handling, redaction
+  services/        business services
+  storage/         artifact storage backends
+  workers/         background workflow worker
+  workflows/       workflow graph validation, mapping, engine and nodes
+alembic/            database migrations (append-only history)
+scripts/            local utilities, including talking-avatar renderer setup
+tests/              automated tests
+docs/               architecture and implementation status
 ```
 
-## Tests
+## Safety rules for repository maintenance
 
-```bash
-docker compose up -d postgres redis
-.venv/Scripts/python -m pytest
-```
-
-Tests run against an isolated `vandad_agent_test` database (created and
-migrated automatically) and Redis DB 1. Override with `TEST_DATABASE_URL` /
-`TEST_REDIS_URL`.
-
-## Notes
-
-- Credentials live only in `.env` (never committed). The database stores
-  *references* to secrets (e.g. `vault://...`), never secrets themselves.
-- Docker Desktop was configured with `ProxyHTTPMode: manual` (no proxy) during
-  setup because the system proxy at `127.0.0.1:10808` was offline; a backup of
-  the original settings is at `%APPDATA%\Docker\settings-store.json.bak-vandad`.
+- Do not delete or rewrite applied Alembic migrations.
+- Do not commit `.env`, API keys, runtime model weights, generated media, local databases, virtual environments or caches.
+- Do not remove the existing talking-avatar renderer just because the scene-video pipeline exists; they have different responsibilities.
+- Do not mark an agent dispatch-ready until its handler, authorization boundary, retries, cancellation and tests are implemented.
+- Keep the UI as a separate frontend application consuming stable, versioned API contracts.
