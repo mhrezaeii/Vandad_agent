@@ -103,7 +103,7 @@ class AgentTaskService:
 
     @staticmethod
     def _same_request(task: AgentTask, *, agent_key: str, capability: str, title: str,
-                      input_payload: dict[str, Any], priority: int, max_attempts: int) -> bool:
+                      input_payload: dict[str, Any], priority: int, max_attempts: int, spend_ceiling_usd=None) -> bool:
         return (
             task.agent_key == agent_key
             and task.capability == capability
@@ -197,6 +197,7 @@ class AgentTaskService:
                 if existing is not None and self._same_request(
                     existing, agent_key=agent_key, capability=capability, title=title,
                     input_payload=input_payload, priority=priority, max_attempts=max_attempts,
+                    spend_ceiling_usd=spend_ceiling_usd,
                 ):
                     return existing
             raise ConflictError("Task creation conflicted with another request.") from exc
