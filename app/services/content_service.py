@@ -1444,7 +1444,14 @@ class ContentService:
                 "The HeyGen operation failed.", code="heygen_failure"
             )
             if reservation is not None:
-                await budget_service.settle(reservation, error_code=error.code)
+                failed_result = getattr(outcome, "result", None)
+                failure_usage = {"attempts": outcome.attempts}
+                failed_latency = getattr(failed_result, "latency_ms", None)
+                if failed_latency is not None:
+                    failure_usage["latency_ms"] = failed_latency
+                await budget_service.settle(
+                    reservation, error_code=error.code, usage=failure_usage
+                )
             raise error
         metadata = outcome.result.metadata or {}
         if reservation is not None:
