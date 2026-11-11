@@ -15,8 +15,8 @@ from app.agents import AgentRegistry
 from app.api.deps import company_scope, get_agent_task_service
 from app.models import AgentTask, AgentTaskEvent
 from app.schemas.agent_task import (
-    AgentTaskEventRead,
     AgentTaskCreate,
+    AgentTaskEventRead,
     AgentTaskListRead,
     AgentTaskRead,
     AgentTaskRunRead,
