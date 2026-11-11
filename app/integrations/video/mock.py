@@ -5,9 +5,7 @@ synthetic MP4-shaped payload after a configurable number of status polls. That
 lets the full pipeline (submission -> polling -> download -> assembly) run
 without spending credits or requiring ffmpeg on the host.
 
-The payload is intentionally not a playable AI clip. Assembly tests that need a
-real decodable video generate their own fixtures with ffmpeg and skip when the
-binary is unavailable.
+The payload is intentionally not a playable AI clip. The payload is only a container-shaped fixture; it is not a playable video.
 """
 
 from __future__ import annotations
