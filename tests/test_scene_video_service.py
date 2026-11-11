@@ -267,7 +267,7 @@ async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
         brand_context={"name": "Vandad"},
     )
     assert same_artifact.id == artifact.id
-    assert len(provider.jobs) == len(jobs) + 1
+    assert len(provider.jobs) == 1
 
 
 
