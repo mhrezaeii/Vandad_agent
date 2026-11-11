@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.agents import AgentRegistry
 from app.agents.definitions import AgentDefinition
 from app.core.exceptions import ConflictError
-from app.models import AgentTaskOutbox, Company, CompanyAgent
+from app.models import AgentTask, AgentTaskOutbox, Company, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
 
 
@@ -89,6 +89,33 @@ async def test_task_progress_events_are_persisted_and_company_scoped(client):
     assert resumed.status_code == 200
     assert "event: task.created" not in resumed.text
     assert "event: task.cancel_requested" in resumed.text
+
+
+async def test_progress_events_are_redacted_and_allowlisted(client, db_session):
+    await _activate_agent(client)
+    created = await client.post("/api/v1/agent-tasks", json=_task_payload(
+        idempotency_key=f"events-{uuid.uuid4()}",
+    ))
+    assert created.status_code == 202, created.text
+    task_id = uuid.UUID(created.json()["id"])
+    task = await db_session.get(AgentTask, task_id)
+    service = AgentTaskService(db_session, client.app.state.agent_registry)
+    await service._record_event(
+        task,
+        "progress",
+        {
+            "stage": "provider.requested",
+            "api_key": "do-not-store",
+            "untrusted_extra": "must-be-dropped",
+            "status": "running",
+        },
+    )
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/agent-tasks/{task_id}/events")
+    assert response.status_code == 200
+    event = response.json()[-1]
+    assert event["payload"] == {"stage": "provider.requested", "status": "running"}
 
 
 async def test_video_task_requires_approval_before_outbox_dispatch(client, db_session):
