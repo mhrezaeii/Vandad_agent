@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.exceptions import ConflictError
-from app.models import Company, ProviderUsageRecord
+from app.models import AgentTask, Company, ProviderUsageRecord
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 
 
@@ -124,6 +124,66 @@ async def test_budget_rejects_spend_above_monthly_limit(db_session):
     with pytest.raises(ConflictError, match="remaining monthly budget"):
         await service.reserve(
             company.id, "llm_openai", "second", idempotency_key=f"second-{uuid.uuid4()}"
+        )
+
+
+async def test_task_spend_ceiling_aggregates_provider_reservations(db_session):
+    company = Company(name="Task Budget", slug=f"task-budget-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    task = AgentTask(
+        company_id=company.id,
+        agent_key="content",
+        capability="content.scenario.generate",
+        title="Bounded task",
+        spend_ceiling_usd=Decimal("2.50"),
+    )
+    db_session.add(task)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    for provider in ("llm_openai", "apimaster"):
+        await service.set_budget(
+            company.id, provider,
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("1.50"),
+        )
+
+    first = await service.reserve(
+        company.id, "llm_openai", "scenario",
+        idempotency_key=f"task-first-{uuid.uuid4()}",
+        require_budget=True, task_id=task.id,
+    )
+    assert first is not None and first.task_id == task.id
+
+    with pytest.raises(ConflictError, match="agent task spend ceiling"):
+        await service.reserve(
+            company.id, "apimaster", "video",
+            idempotency_key=f"task-second-{uuid.uuid4()}",
+            require_budget=True, task_id=task.id,
+        )
+
+
+async def test_task_budget_is_tenant_scoped(db_session):
+    owner = Company(name="Task Budget Owner", slug=f"task-owner-{uuid.uuid4().hex[:8]}")
+    stranger = Company(name="Task Budget Stranger", slug=f"task-stranger-{uuid.uuid4().hex[:8]}")
+    db_session.add_all([owner, stranger])
+    await db_session.flush()
+    task = AgentTask(
+        company_id=owner.id, agent_key="content", capability="content.scenario.generate",
+        title="Owner task", spend_ceiling_usd=Decimal("1.00"),
+    )
+    db_session.add(task)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        stranger.id, "llm_openai", monthly_limit_usd=Decimal("5.00"),
+        per_operation_limit_usd=Decimal("1.00"),
+    )
+    with pytest.raises(ConflictError, match="task budget context"):
+        await service.reserve(
+            stranger.id, "llm_openai", "scenario",
+            idempotency_key=f"foreign-task-{uuid.uuid4()}",
+            require_budget=True, task_id=task.id,
         )
 
 
