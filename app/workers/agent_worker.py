@@ -281,30 +281,37 @@ class AgentTaskWorker:
     async def _recover_stale_runs(self) -> None:
         while not self.stopping.is_set():
             await asyncio.sleep(30)
-            cutoff = datetime.now(UTC) - timedelta(seconds=self.lease_seconds * 2)
-            async with self.session_factory() as session:
-                stale = list((await session.scalars(
-                    select(AgentTaskRun).where(
-                        AgentTaskRun.status == "running",
-                        or_(AgentTaskRun.heartbeat_at < cutoff, AgentTaskRun.heartbeat_at.is_(None)),
-                    ).order_by(AgentTaskRun.heartbeat_at).limit(50)
-                )).all())
-                for run in stale:
-                    service = AgentTaskService(session, self.agent_registry)
-                    try:
-                        task = await service.fail_run(
-                            run.company_id, run.task_id, run.id,
-                            error_code="worker_lease_expired",
-                            error_message="Agent worker lease expired; execution was recovered.",
-                            heartbeat_before=cutoff,
+            await self._recover_stale_runs_once()
+
+    async def _recover_stale_runs_once(self) -> int:
+        """Recover stale executions once; separated for deterministic integration tests."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=self.lease_seconds * 2)
+        recovered = 0
+        async with self.session_factory() as session:
+            stale = list((await session.scalars(
+                select(AgentTaskRun).where(
+                    AgentTaskRun.status == "running",
+                    or_(AgentTaskRun.heartbeat_at < cutoff, AgentTaskRun.heartbeat_at.is_(None)),
+                ).order_by(AgentTaskRun.heartbeat_at).limit(50)
+            )).all())
+            for run in stale:
+                service = AgentTaskService(session, self.agent_registry)
+                try:
+                    task = await service.fail_run(
+                        run.company_id, run.task_id, run.id,
+                        error_code="worker_lease_expired",
+                        error_message="Agent worker lease expired; execution was recovered.",
+                        heartbeat_before=cutoff,
+                    )
+                    if task.status == "failed" and task.attempt_count < task.max_attempts:
+                        await service.retry_task(
+                            task.company_id, task.id, requested_by=self.worker_id, delay_seconds=1
                         )
-                        if task.status == "failed" and task.attempt_count < task.max_attempts:
-                            await service.retry_task(
-                                task.company_id, task.id, requested_by=self.worker_id, delay_seconds=1
-                            )
-                        await session.commit()
-                    except ConflictError:
-                        await session.rollback()
-                    except Exception:
-                        await session.rollback()
-                        logger.exception("stale run recovery failed for %s", run.id)
+                    await session.commit()
+                    recovered += 1
+                except ConflictError:
+                    await session.rollback()
+                except Exception:
+                    await session.rollback()
+                    logger.exception("stale run recovery failed for %s", run.id)
+        return recovered
