@@ -57,7 +57,7 @@ The backend is organized around these boundaries:
 6. **Provider fabric** — provider registry and adapters; credentials are resolved through the secret boundary.
 7. **Media pipeline** — brand character management, scene generation, assembly, Persian subtitles and artifact delivery.
 
-The current implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. **The agent-task dispatcher/orchestrator is not yet implemented**, so creating a task records intent and lifecycle state but does not invoke an agent or provider. Agent definitions remain non-dispatch-ready until a real handler is implemented and tested.
+The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned dispatcher, and Monitoring / Content scenario handlers. Only agents with real registered handlers and verified end-to-end coverage may be marked dispatch-ready. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
 
 See [Architecture and implementation status](docs/ARCHITECTURE.md).
 
