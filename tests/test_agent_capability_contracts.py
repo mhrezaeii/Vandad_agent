@@ -16,7 +16,7 @@ def test_monitoring_discovery_payload_is_normalized_and_bounded():
         "platform.discover",
         {"platform_id": str(platform_id), "max_pages": 25},
     )
-    assert payload == {"platform_id": str(platform_id), "max_pages": 99}
+    assert payload == {"platform_id": str(platform_id), "max_pages": 25}
 
 
 def test_monitoring_discovery_rejects_out_of_range_limits():
