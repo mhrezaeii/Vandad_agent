@@ -41,7 +41,6 @@ from app.models import (
     ContentProject,
     Platform,
     PlatformConnection,
-    PlatformKnowledgeSnapshot,
     ProjectStatus,
     Workflow,
     WorkflowDefinitionStatus,
