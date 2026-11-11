@@ -211,7 +211,7 @@ def test_registry_includes_mock_and_only_configured_http():
 
 
 async def test_generic_http_never_sends_api_key_to_media_cdn():
-    payload = b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 128
+    payload = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
     media_auth: list[str | None] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -303,7 +303,7 @@ async def test_apimaster_submits_wan_request_with_image_reference():
 
 
 async def test_apimaster_polls_status_and_downloads_with_api_auth():
-    video = b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 128
+    video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
     calls: list[tuple[str, str, str | None]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -331,7 +331,7 @@ async def test_apimaster_polls_status_and_downloads_with_api_auth():
 
 
 async def test_apimaster_never_sends_api_key_to_redirected_media_host():
-    video = b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 128
+    video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
     media_auth: list[str | None] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

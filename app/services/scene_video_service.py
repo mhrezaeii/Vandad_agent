@@ -142,8 +142,9 @@ class SceneVideoService:
                 )
         elif presenter_scenes and not provider.supports_lipsync:
             raise ConflictError(
-                f"Provider {provider.provider_id!r} cannot generate brand-character scenes without "
-                "reference-image support."
+                "Brand-character presenter scenes require a provider with real image/audio lip-sync support "
+                "or image-reference support; "
+                f"provider {provider.provider_id!r} cannot generate them."
             )
         existing = {
             job.scene_index: job
