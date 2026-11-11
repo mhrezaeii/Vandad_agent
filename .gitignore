@@ -37,3 +37,9 @@ data/
 *.pth
 *.pt
 *.part
+
+# Next.js frontend
+node_modules/
+web/.next/
+web/out/
+web/.env.local
