@@ -8,7 +8,7 @@ These nodes wire the generic engine to the video-production domain:
 - ``content.poll_video``      — non-terminal statuses raise transient errors so
   the engine's retry/backoff loop re-polls from the persisted job id
 - ``content.download_video``  — stream the provider video into ArtifactStorage
-- ``content.render_video``    — FFmpeg render (subtitles/branding) into storage
+- ``content.render_video``    — accept and register the AI provider's final video artifact
 
 All handlers resolve the project inside the execution's tenant: a project of
 another company reads as missing. Paid submission happens exactly once per
@@ -476,119 +476,43 @@ async def _download_video(
 async def _render_video(
     engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
 ) -> dict[str, Any]:
+    """Finalize a provider-produced video without local creative processing."""
     project_id = _project_id(params, node)
     project = await _require_project(engine, execution, project_id)
     if not project.raw_artifact_id:
-        raise ProviderPermanentError("No raw video artifact to render.", code="raw_artifact_missing")
+        raise ProviderPermanentError("No provider video artifact is available.", code="raw_artifact_missing")
     if engine.artifact_storage is None:
         raise ProviderPermanentError("Artifact storage is not configured.", code="storage_unavailable")
 
-    from app.core.config import get_settings  # noqa: PLC0415
-    from app.services.video_render_service import VideoRenderService  # noqa: PLC0415
-
-    settings = get_settings()
-    brand = await engine.session.get(ContentBrand, project.brand_id)
-    if brand is None or brand.company_id != execution.company_id:
-        raise NotFoundError("Brand not found for this project.")
-
-    render_service = VideoRenderService(
-        engine.session,
-        engine.artifact_storage,
-        max_size_bytes=2 * 1024**3,
-        ffmpeg_bin=str(node.configuration.get("ffmpeg_bin", settings.video_ffmpeg_bin)),
-        ffprobe_bin=str(node.configuration.get("ffprobe_bin", settings.video_ffprobe_bin)),
-        fonts_dir=str(node.configuration.get("fonts_dir", settings.video_fonts_dir)),
-        font_name=str(node.configuration.get("font_name", settings.video_font_name)),
+    artifact_service = ArtifactService(engine.session, engine.artifact_storage, max_size_bytes=2 * 1024**3)
+    artifact = await artifact_service.get_artifact(
+        uuid.UUID(str(project.raw_artifact_id)), company_id=execution.company_id
     )
-    subtitle_text = params.get("subtitle_text") or project.script_text or ""
-    artifact, subtitle_path_used = await render_service.render_branded_video(
-        execution_id=execution.id,
-        company_id=execution.company_id,
-        raw_artifact_id=uuid.UUID(str(project.raw_artifact_id)),
-        script_text=str(subtitle_text),
-        brand_name=brand.name,
-        width=brand.video_width,
-        height=brand.video_height,
-        visual_config=brand.visual_config or {},
-        timeout_seconds=min(timeout_seconds, 1800.0),
-    )
+    if artifact.kind != ArtifactKind.VIDEO.value or not artifact.content_type.startswith("video/"):
+        raise ProviderPermanentError("The AI provider artifact is not a supported video.", code="invalid_video_artifact")
+
+    # The AI provider owns subtitles, branding, audio, editing and composition.
+    # Register its output directly; do not copy, transcode or re-render it.
     project.final_artifact_id = artifact.id
     project.status = ProjectStatus.COMPLETED.value
     cost = dict(project.cost_metadata or {})
     cost["final_artifact"] = {
-        "artifact_id": str(artifact.id),
-        "size_bytes": artifact.size_bytes,
-        "sha256": artifact.sha256,
-        "content_type": artifact.content_type,
-        "width": brand.video_width,
-        "height": brand.video_height,
+        "artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256, "content_type": artifact.content_type,
     }
-    cost["render"] = {
-        "service": "ffmpeg",
-        "subtitles": "persian_ass",
-        "font": str(node.configuration.get("font_name", "Vazirmatn")),
+    cost["production"] = {
+        "path": "ai_provider_native_output", "local_rendering": False,
+        "provider": cost.get("provider") or (project.submission_metadata or {}).get("provider"),
     }
     project.cost_metadata = cost
     await engine.session.flush()
-    engine._log(  # noqa: SLF001
-        execution,
-        "info",
-        f"Final video rendered and stored as artifact {artifact.id}.",
-        node_key=node.node_key,
-    )
+    engine._log(execution, "info",
+        f"AI provider output accepted as final artifact {artifact.id}; no local render performed.",
+        node_key=node.node_key)
     return {
-        "artifact_id": str(artifact.id),
-        "size_bytes": artifact.size_bytes,
-        "sha256": artifact.sha256,
+        "artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256, "production_path": "ai_provider_native_output",
     }
-
-
-# ============================================================================
-# Scene-based (non-avatar) pipeline
-# ============================================================================
-def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
-    """Build a SceneVideoService bound to the engine's session and storage."""
-    from app.core.config import get_settings  # noqa: PLC0415
-    from app.services.scene_video_service import SceneVideoService  # noqa: PLC0415
-
-    if engine.scene_video_registry is None:
-        raise ProviderPermanentError(
-            "The scene-video provider registry is not configured.",
-            code="scene_registry_unavailable",
-        )
-    if engine.artifact_storage is None:
-        raise ProviderPermanentError(
-            "Artifact storage is not configured.", code="storage_unavailable"
-        )
-    settings = get_settings()
-    return SceneVideoService(
-        engine.session,
-        engine.scene_video_registry,
-        storage=engine.artifact_storage,
-        daily_quota=settings.scene_video_daily_quota,
-        max_attempts=settings.scene_video_max_scene_attempts,
-        max_size_bytes=settings.artifact_max_size_bytes,
-    )
-
-
-async def _brand_for(
-    engine, execution: WorkflowExecution, project: ContentProject
-) -> ContentBrand:
-    brand = await engine.session.get(ContentBrand, project.brand_id)
-    if brand is None or brand.company_id != execution.company_id:
-        raise NotFoundError("Brand not found for this project.")
-    return brand
-
-
-def _as_uuid_or_none(value: Any) -> uuid.UUID | None:
-    if not value:
-        return None
-    try:
-        return uuid.UUID(str(value))
-    except ValueError as exc:
-        raise ProviderPermanentError(
-            "The provided artifact id is not a UUID.", code="invalid_configuration"
-        ) from exc
 
 
 # --------------------------------------------------------- generate_scenario
@@ -861,79 +785,52 @@ async def _retrieve_scene_videos(
 async def _assemble_scenes(
     engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
 ) -> dict[str, Any]:
-    from app.core.config import get_settings  # noqa: PLC0415
-    from app.services.scene_assembly_service import SceneAssemblyService  # noqa: PLC0415
-
+    """Request AI-provider composition; never assemble clips locally."""
     project_id = _project_id(params, node)
     project = await _require_project(engine, execution, project_id)
     brand = await _brand_for(engine, execution, project)
-    if engine.artifact_storage is None:
-        raise ProviderPermanentError("Artifact storage is not configured.", code="storage_unavailable")
-
     service = _scene_service(engine)
-    jobs = await service.list_jobs(project)
-    if not jobs:
-        raise ProviderPermanentError("No scene jobs to assemble.", code="scenes_missing")
-    if any(job.artifact_id is None for job in jobs):
-        raise ProviderPermanentError(
-            "Every scene must be downloaded before assembly.", code="scene_artifact_missing"
+    brand_context = {
+        "name": brand.display_name or brand.name,
+        "description": brand.description,
+        "tone": brand.tone,
+        "language": brand.language,
+        "visual_config": dict(brand.visual_config or {}),
+        "cta_config": dict(brand.cta_config or {}),
+        "width": brand.video_width,
+        "height": brand.video_height,
+        "script": project.script_text,
+        "call_to_action": project.call_to_action,
+    }
+    try:
+        artifact, metadata = await service.finalize_project_video(
+            project, execution_id=execution.id, width=brand.video_width,
+            height=brand.video_height, brand_context=brand_context,
         )
+    except Exception as exc:
+        from app.integrations.video.base import SceneVideoPermanentError, SceneVideoTransientError
+        if isinstance(exc, SceneVideoTransientError):
+            raise ProviderTransientError(exc.message, code=exc.code) from exc
+        if isinstance(exc, SceneVideoPermanentError):
+            raise ProviderPermanentError(exc.message, code=exc.code) from exc
+        raise
 
-    settings = get_settings()
-    assembly = SceneAssemblyService(
-        engine.session,
-        engine.artifact_storage,
-        ffmpeg_bin=settings.video_ffmpeg_bin,
-        ffprobe_bin=settings.video_ffprobe_bin,
-        fonts_dir=settings.video_fonts_dir,
-        font_name=settings.video_font_name,
-        max_size_bytes=settings.artifact_max_size_bytes,
-    )
-    narration_artifact_id = _as_uuid_or_none(
-        params.get("narration_artifact_id") or node.configuration.get("narration_artifact_id")
-    )
-    artifact, metadata = await assembly.assemble(
-        execution_id=execution.id,
-        company_id=execution.company_id,
-        project=project,
-        brand=brand,
-        scene_jobs=jobs,
-        narration_artifact_id=narration_artifact_id,
-        allow_silent=bool(params.get("allow_silent", False) or node.configuration.get("allow_silent", False)),
-        width=brand.video_width or settings.scene_video_output_width,
-        height=brand.video_height or settings.scene_video_output_height,
-        fps=settings.scene_video_output_fps,
-        timeout_seconds=min(timeout_seconds, settings.scene_assembly_timeout_seconds),
-    )
     project.final_artifact_id = artifact.id
     project.assembly_metadata = metadata
     project.status = ProjectStatus.COMPLETED.value
     project.error_message = None
     AuditService(engine.session).record(
-        event_type="scene.assembled",
-        action="assemble",
-        company_id=execution.company_id,
-        resource_type="content_project",
+        event_type="scene.ai_composed", action="compose",
+        company_id=execution.company_id, resource_type="content_project",
         resource_id=project.id,
-        metadata={
-            "artifact_id": str(artifact.id),
-            "size_bytes": artifact.size_bytes,
-            "scenes": metadata.get("scenes"),
-            "narration": metadata.get("narration"),
-        },
+        metadata={"artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
+                  "provider": metadata.get("provider"),
+                  "provider_job_id": metadata.get("provider_job_id")},
     )
     await engine.session.flush()
-    engine._log(  # noqa: SLF001
-        execution,
-        "info",
-        f"Final scene video assembled as artifact {artifact.id}.",
-        node_key=node.node_key,
-    )
-    return {
-        "artifact_id": str(artifact.id),
-        "size_bytes": artifact.size_bytes,
-        "sha256": artifact.sha256,
-        "duration_seconds": metadata.get("duration_seconds"),
-        "narration": metadata.get("narration"),
-    }
-
+    engine._log(execution, "info",
+        f"AI provider final video stored as artifact {artifact.id}; no local assembly performed.",
+        node_key=node.node_key)
+    return {"artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256, "provider": metadata.get("provider"),
+            "production_path": "ai_provider_composition"}
