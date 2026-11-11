@@ -46,6 +46,13 @@ class BrandCreate(BaseModel):
         return stripped
 
 
+class BrandPlatformLinksUpdate(BaseModel):
+    """Replace the platforms whose verified knowledge may inform this brand."""
+
+    model_config = ConfigDict(extra="forbid")
+    platform_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
+
+
 class BrandUpdate(BaseModel):
     """Partial brand update.
 
