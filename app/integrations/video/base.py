@@ -145,6 +145,7 @@ class SceneVideoProvider(ABC):
 
     provider_id: str = ""
     display_name: str = ""
+    model_id: str | None = None
     supports_cancellation: bool = False
     supports_lipsync: bool = False
     requires_network: bool = False
