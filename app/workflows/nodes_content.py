@@ -657,10 +657,14 @@ async def _generate_scenario(
                     if isinstance(fact, dict)
                 ]
             compact_knowledge.append(item)
-        if compact_knowledge:
-            platform_knowledge_context = json.dumps(
+        while compact_knowledge:
+            encoded_knowledge = json.dumps(
                 compact_knowledge, ensure_ascii=False, separators=(",", ":")
-            )[:11000]
+            )
+            if len(encoded_knowledge) <= 11000:
+                platform_knowledge_context = encoded_knowledge
+                break
+            compact_knowledge.pop()
     request = ScenarioRequest(
         topic=project.topic,
         target_duration_seconds=int(
