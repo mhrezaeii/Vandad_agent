@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import company_scope, get_provider_registry
 from app.integrations.providers import ProviderRegistry, UnknownProviderError
-from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderRead, ProviderUsageRead
+from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderRead, ProviderUsageRead, SceneVideoProviderRead
 from app.services.provider_budget_service import ProviderBudgetService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
@@ -95,6 +95,25 @@ async def list_provider_usage(
             scope.company_id, provider_id=provider_id, limit=bounded_limit
         )
         return [ProviderUsageRead.model_validate(row) for row in rows]
+
+
+@router.get("/scene-video", response_model=list[SceneVideoProviderRead])
+async def list_scene_video_providers(request: Request) -> list[SceneVideoProviderRead]:
+    registry = getattr(request.app.state, "scene_video_registry", None)
+    if registry is None:
+        return []
+    return [
+        SceneVideoProviderRead(
+            provider_id=provider.provider_id,
+            display_name=provider.display_name,
+            requires_network=provider.requires_network,
+            supports_lipsync=provider.supports_lipsync,
+            supports_reference_image=provider.supports_reference_image,
+            supports_cancellation=provider.supports_cancellation,
+            daily_quota=provider.quota_limit_per_day(),
+        )
+        for provider in registry.list_providers()
+    ]
 
 
 @router.get("/{provider_id}", response_model=ProviderRead)
