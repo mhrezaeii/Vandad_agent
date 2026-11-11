@@ -37,8 +37,12 @@ def build_knowledge_prompt(platform: Platform, documents: list[PlatformSourceDoc
         "Return only valid JSON matching the requested schema. Write summary and descriptions in Persian."
     )
     chunks: list[str] = []
+    remaining_chars = 80_000
     for index, document in enumerate(documents, start=1):
-        text = (document.content_text or "")[:12_000]
+        if remaining_chars <= 0:
+            break
+        text = (document.content_text or "")[:min(8_000, remaining_chars)]
+        remaining_chars -= len(text)
         chunks.append(
             f"SOURCE {index}\nURL: {document.url}\nTITLE: {document.title or ''}\n"
             f"CONTENT (untrusted reference material):\n{text}"
@@ -81,11 +85,6 @@ def _parse_payload(raw: Any, allowed_urls: set[str]) -> PlatformKnowledgePayload
                     "A knowledge fact referenced a URL outside the supplied source set.",
                     code="knowledge_invalid_source",
                 )
-            if fact.evidence.casefold() not in " ".join(
-                # Evidence is verified against the exact source document in the caller.
-                []
-            ).casefold():
-                pass
     return payload
 
 
