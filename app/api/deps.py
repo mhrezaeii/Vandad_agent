@@ -7,12 +7,14 @@ lifespan; tests can attach their own instances.
 
 from __future__ import annotations
 
+import hmac
 import uuid
 from collections.abc import AsyncIterator
 
 from fastapi import Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.queue import WorkflowQueue
 from app.core.redis import RedisConnectionManager
 from app.integrations.providers import ProviderExecutor, ProviderRegistry, RetryPolicy
@@ -22,6 +24,8 @@ from app.security.authorization import (
     authorize_company_access,
 )
 from app.security.crypto import MasterKeyBox
+from app.services.agent_service import AgentService
+from app.services.agent_task_service import AgentTaskService
 from app.services.connection_service import ConnectionService
 from app.services.connection_validation_service import ConnectionValidationService
 from app.services.platform_service import PlatformService
@@ -36,6 +40,30 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     async with session_factory() as session:
         try:
             yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def get_agent_service(request: Request) -> AsyncIterator[AgentService]:
+    """Provide an agent service using the app's approved catalog."""
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        try:
+            yield AgentService(session, request.app.state.agent_registry)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def get_agent_task_service(request: Request) -> AsyncIterator[AgentTaskService]:
+    """Provide a task service bound to the company agent catalog."""
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        try:
+            yield AgentTaskService(session, request.app.state.agent_registry)
             await session.commit()
         except Exception:
             await session.rollback()
@@ -111,7 +139,47 @@ def get_master_key_box(request: Request) -> MasterKeyBox:
 
 
 def get_principal(request: Request) -> Principal:
-    return request.app.state.principal
+    """Resolve the dev bootstrap identity or a verified production proxy identity."""
+    settings = request.app.state.settings
+    if not settings.requires_proxy_auth:
+        return request.app.state.principal
+
+    configured_secret = settings.auth_proxy_shared_secret
+    supplied_secret = request.headers.get("X-Auth-Proxy-Secret", "")
+    if configured_secret is None or not configured_secret.get_secret_value() or not hmac.compare_digest(
+        supplied_secret, configured_secret.get_secret_value()
+    ):
+        raise UnauthorizedError()
+
+    subject = request.headers.get(settings.auth_proxy_user_header, "").strip()
+    raw_companies = request.headers.get(settings.auth_proxy_company_ids_header, "")
+    raw_roles = request.headers.get(settings.auth_proxy_roles_header, "")
+    if not subject or len(subject) > 255 or not raw_companies:
+        raise UnauthorizedError("The identity proxy did not provide a valid user and company scope.")
+
+    try:
+        company_ids = frozenset(str(uuid.UUID(item.strip())) for item in raw_companies.split(",") if item.strip())
+    except ValueError as exc:
+        raise UnauthorizedError("The identity proxy provided an invalid company claim.") from exc
+    if not company_ids:
+        raise UnauthorizedError("The identity proxy did not provide a company membership.")
+
+    allowed_roles = {"owner", "admin", "operator", "viewer"}
+    roles = frozenset(
+        role.strip().lower()
+        for role in raw_roles.split(",")
+        if role.strip().lower() in allowed_roles
+    )
+    if not roles:
+        raise ForbiddenError("The authenticated user has no recognized platform role.")
+    return Principal(subject=subject, company_ids=company_ids, roles=roles)
+
+
+def require_company_admin(request: Request) -> Principal:
+    principal = get_principal(request)
+    if not principal.roles.intersection({"owner", "admin"}):
+        raise ForbiddenError("Company owner or administrator role is required.")
+    return principal
 
 
 def get_workflow_queue(request: Request) -> WorkflowQueue:
@@ -154,13 +222,12 @@ async def get_workflow_execution_service(request: Request) -> AsyncIterator[Work
 async def company_scope(request: Request) -> CompanyScope:
     """Resolve and authorize the acting company for the request.
 
-    The company context arrives via the ``X-Company-ID`` header. Requests
-    without it resolve to the default company. Authorization is enforced by
-    ``authorize_company_access`` — the single decision point. The acting
-    principal always comes from ``app.state`` (never from request parameters,
-    so it can never be spoofed or accidentally treated as a request body).
+    The company context arrives via ``X-Company-ID``. In staging/production,
+    a verified identity-proxy principal supplies memberships and roles; a
+    single-company user may omit the header. Local development resolves the
+    default company and uses the configured bootstrap principal.
     """
-    acting_principal: Principal = request.app.state.principal
+    acting_principal: Principal = get_principal(request)
     raw_company_id = request.headers.get("X-Company-ID")
 
     if raw_company_id:
@@ -174,7 +241,21 @@ async def company_scope(request: Request) -> CompanyScope:
                 details=[{"field": "X-Company-ID", "value": raw_company_id}],
             ) from exc
     else:
-        company_id = await _resolve_default_company_id(request)
+        if request.app.state.settings.requires_proxy_auth:
+            if len(acting_principal.company_ids) != 1:
+                from app.core.exceptions import UnprocessableEntityError
+
+                raise UnprocessableEntityError(
+                    "X-Company-ID is required when the user belongs to multiple companies."
+                )
+            company_id = uuid.UUID(next(iter(acting_principal.company_ids)))
+        else:
+            company_id = await _resolve_default_company_id(request)
+
+    if request.method.upper() not in {"GET", "HEAD", "OPTIONS"} and not acting_principal.roles.intersection(
+        {"owner", "admin", "operator"}
+    ):
+        raise ForbiddenError("An operator role is required for this action.")
 
     return authorize_company_access(acting_principal, company_id)
 

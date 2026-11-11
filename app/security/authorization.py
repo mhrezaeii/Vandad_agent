@@ -1,17 +1,15 @@
 """Company-level authorization boundary.
 
-Phase 2 has no user authentication yet. Instead of silently treating every
-caller as an administrator, this module defines the explicit seam:
+Production requests use a trusted OIDC/auth proxy identity. The API verifies
+a shared proxy secret before accepting user, company-membership and role
+headers. The proxy must strip client-supplied identity headers before injecting
+its own. Local development retains the explicit bootstrap principal.
 
-- ``Principal``: the acting identity, carrying the set of company IDs it may
-  operate for.
-- ``authorize_company_access``: the single decision point used by services and
-  dependencies; raises ``ForbiddenError`` on denial.
+- ``Principal``: the acting identity, company memberships and roles.
+- ``authorize_company_access``: the single company-scope decision point.
+- ``require_company_admin``: protects owner/admin-only control-plane actions.
 
-Principals are built from settings (``PLATFORM_BOOTSTRAP_COMPANY_IDS``).
-The wildcard ``"*"`` is honored only outside production — ``create_app``
-refuses to start in production with a wildcard principal configured, so the
-default-deny posture cannot be accidentally relaxed.
+The wildcard bootstrap principal is honored only outside production.
 """
 
 from __future__ import annotations
@@ -25,10 +23,11 @@ from app.core.exceptions import ForbiddenError
 
 @dataclass(frozen=True)
 class Principal:
-    """Acting identity. ``company_ids`` may contain the wildcard '*'."""
+    """Acting identity, memberships and roles. Wildcard is development-only."""
 
     subject: str
     company_ids: frozenset[str] = field(default_factory=frozenset)
+    roles: frozenset[str] = field(default_factory=frozenset)
 
     def is_wildcard(self) -> bool:
         return "*" in self.company_ids
@@ -63,11 +62,19 @@ def build_principal_from_settings(settings: Settings) -> Principal:
     """Build the bootstrap principal. Production never accepts the wildcard."""
     raw = settings.bootstrap_principal_company_ids.strip()
     if raw == "*":
-        if settings.is_production:
+        if settings.requires_proxy_auth:
             raise ForbiddenError(
-                "bootstrap_principal_company_ids='*' is not allowed in production; "
+                "bootstrap_principal_company_ids='*' is not allowed in staging/production; "
                 "configure explicit company IDs."
             )
-        return Principal(subject="bootstrap", company_ids=frozenset({"*"}))
+        return Principal(
+            subject="bootstrap",
+            company_ids=frozenset({"*"}),
+            roles=frozenset({"owner", "admin", "operator", "viewer"}),
+        )
     ids = frozenset(part.strip() for part in raw.split(",") if part.strip())
-    return Principal(subject="bootstrap", company_ids=ids)
+    return Principal(
+        subject="bootstrap",
+        company_ids=ids,
+        roles=frozenset({"owner", "admin", "operator", "viewer"}),
+    )

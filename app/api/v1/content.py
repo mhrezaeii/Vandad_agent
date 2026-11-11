@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import company_scope
@@ -14,6 +14,7 @@ from app.core.exceptions import NotFoundError
 from app.schemas.content import (
     BrandCharacterRead,
     BrandCreate,
+    BrandPlatformLinksUpdate,
     BrandUpdate,
     CharacterCreateRequest,
     CharacterStatusRequest,
@@ -110,6 +111,41 @@ async def update_brand(
     return ContentBrandRead.model_validate(brand)
 
 
+@router.put("/brands/{brand_id}/platforms")
+async def set_brand_platforms(
+    brand_id: uuid.UUID,
+    payload: BrandPlatformLinksUpdate,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> dict:
+    """Replace the verified platform sources linked to a content brand."""
+    platform_ids = await service.set_brand_platforms(
+        brand_id, company_id=scope.company_id, platform_ids=payload.platform_ids
+    )
+    return {"brand_id": str(brand_id), "platform_ids": [str(value) for value in platform_ids]}
+
+
+@router.get("/brands/{brand_id}/platforms")
+async def list_brand_platforms(
+    brand_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> list[dict]:
+    """List the tenant-owned platforms linked to a content brand."""
+    platforms = await service.list_brand_platforms(
+        brand_id, company_id=scope.company_id
+    )
+    return [
+        {
+            "id": str(platform.id),
+            "name": platform.name,
+            "base_url": platform.base_url,
+            "platform_type": platform.platform_type,
+        }
+        for platform in platforms
+    ]
+
+
 @router.get("/brands/{brand_id}/character", response_model=BrandCharacterRead)
 async def get_character(
     brand_id: uuid.UUID,
@@ -177,6 +213,19 @@ async def create_project(
         scope=scope, brand_id=payload.brand_id, topic=payload.topic
     )
     return ContentProjectRead.model_validate(project)
+
+
+@router.get("/projects", response_model=list[ContentProjectRead])
+async def list_projects(
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[ContentProjectRead]:
+    projects = await service.list_projects(
+        company_id=scope.company_id, limit=limit, offset=offset
+    )
+    return [ContentProjectRead.model_validate(project) for project in projects]
 
 
 @router.get("/projects/{project_id}", response_model=ContentProjectRead)

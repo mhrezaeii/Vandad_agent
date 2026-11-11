@@ -7,7 +7,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.agents import build_default_agent_registry
 from app.api import api_router
 from app.api.deps import build_provider_executor
 from app.core.config import Settings, get_settings
@@ -33,7 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Startup never aborts on a dependency failure: the readiness endpoint is
     the authority on dependency state, and containers orchestrate retries.
     """
-    settings = get_settings()
+    settings = getattr(app.state, "configured_settings", None) or get_settings()
 
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     master_key_box = MasterKeyBox.from_settings(settings)
     logger.info("credential master keys loaded (active version %d)", master_key_box.active_key_version)
 
+    agent_registry = build_default_agent_registry()
     provider_registry = build_default_registry()
     provider_executor = build_provider_executor(settings)
     scene_video_registry = build_video_registry_from_settings(settings)
@@ -80,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis_manager = redis_manager
     app.state.settings = settings
     app.state.master_key_box = master_key_box
+    app.state.agent_registry = agent_registry
     app.state.provider_registry = provider_registry
     app.state.provider_executor = provider_executor
     app.state.scene_video_registry = scene_video_registry
@@ -107,7 +111,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None if resolved.is_production else "/redoc",
         openapi_url=None if resolved.is_production else "/openapi.json",
     )
+    app.state.configured_settings = resolved
+    app.state.settings = resolved
     app.add_middleware(CorrelationIdMiddleware)
+    cors_origins = [
+        origin.strip()
+        for origin in resolved.cors_allowed_origins.split(",")
+        if origin.strip()
+    ]
+    if "*" in cors_origins:
+        raise ValueError("cors_allowed_origins must use explicit origins when credentials are enabled.")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Accept", "Content-Type", "X-Company-ID", "Last-Event-ID"],
+        expose_headers=["X-Request-ID"],
+    )
     register_exception_handlers(app)
     app.include_router(api_router, prefix=resolved.api_prefix)
     return app

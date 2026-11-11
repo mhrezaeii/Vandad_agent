@@ -1,8 +1,13 @@
 """SQLAlchemy ORM models. Importing this package registers every table on
 ``app.database.base.Base.metadata`` (required by Alembic)."""
 
+from app.models.agent_task import AgentTask, AgentTaskRun
+from app.models.agent_task_event import AgentTaskEvent
+from app.models.agent_task_outbox import AgentTaskOutbox
 from app.models.audit_event import ActorType, AuditEvent
+from app.models.brand_platform_link import BrandPlatformLink
 from app.models.company import Company, CompanyStatus
+from app.models.company_agent import CompanyAgent
 from app.models.connection_event import ConnectionEvent
 from app.models.content import (
     BrandCharacter,
@@ -20,7 +25,9 @@ from app.models.credential_version import CredentialVersion, CredentialVersionSt
 from app.models.mixins import TimestampMixin
 from app.models.platform import IntegrationType, Platform, PlatformStatus, PlatformType
 from app.models.platform_connection import ConnectionStatus, PlatformConnection
+from app.models.platform_knowledge_snapshot import PlatformKnowledgeSnapshot
 from app.models.platform_source_document import PlatformSourceDocument
+from app.models.provider_budget import CompanyProviderBudget, ProviderUsageRecord
 from app.models.workflow import Workflow
 from app.models.workflow import WorkflowStatus as WorkflowDefinitionStatus
 from app.models.workflow_artifact import ArtifactKind, WorkflowArtifact
@@ -52,8 +59,16 @@ __all__ = [
     "ActorType",
     "ArtifactKind",
     "AuditEvent",
+    "AgentTask",
+    "AgentTaskRun",
+    "AgentTaskOutbox",
+    "AgentTaskEvent",
+    "CompanyProviderBudget",
+    "ProviderUsageRecord",
     "BrandCharacter",
+    "BrandPlatformLink",
     "Company",
+    "CompanyAgent",
     "CompanyStatus",
     "ContentBrand",
     "ContentBrandStatus",
@@ -71,6 +86,7 @@ __all__ = [
     "Platform",
     "PlatformConnection",
     "PlatformSourceDocument",
+    "PlatformKnowledgeSnapshot",
     "PlatformStatus",
     "ProjectStatus",
     "PlatformType",
@@ -97,4 +113,3 @@ __all__ = [
     "WorkflowVersion",
     "WorkflowVersionStatus",
 ]
-

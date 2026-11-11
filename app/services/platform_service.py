@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.slug import slugify
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.models import Platform
 from app.repositories import CompanyRepository, PlatformRepository
 from app.schemas.platform import PlatformCreate, PlatformUpdate
@@ -26,8 +26,10 @@ class PlatformService:
         self.companies = CompanyRepository(session)
         self.audit = AuditService(session)
 
-    async def create_platform(self, data: PlatformCreate) -> Platform:
-        company = await self._resolve_company(data.company_id)
+    async def create_platform(self, data: PlatformCreate, *, company_id: uuid.UUID) -> Platform:
+        if data.company_id is not None and data.company_id != company_id:
+            raise ForbiddenError("A platform cannot be created for another company.")
+        company = await self._resolve_company(company_id)
         slug = data.slug or slugify(data.name)
 
         if await self.platforms.get_by_slug(company.id, slug) is not None:
@@ -68,16 +70,16 @@ class PlatformService:
         )
         return platform
 
-    async def get_platform(self, platform_id: uuid.UUID) -> Platform:
+    async def get_platform(self, platform_id: uuid.UUID, *, company_id: uuid.UUID) -> Platform:
         platform = await self.platforms.get(platform_id)
-        if platform is None:
+        if platform is None or platform.company_id != company_id:
             raise self._not_found(platform_id)
         return platform
 
     async def list_platforms(
         self,
         *,
-        company_id: uuid.UUID | None = None,
+        company_id: uuid.UUID,
         status: str | None = None,
         platform_type: str | None = None,
         limit: int = 20,
@@ -87,16 +89,15 @@ class PlatformService:
             company_id=company_id, status=status, platform_type=platform_type, limit=limit, offset=offset
         )
 
-    async def update_platform(self, platform_id: uuid.UUID, data: PlatformUpdate) -> Platform:
-        platform = await self.get_platform(platform_id)
+    async def update_platform(
+        self, platform_id: uuid.UUID, data: PlatformUpdate, *, company_id: uuid.UUID
+    ) -> Platform:
+        platform = await self.get_platform(platform_id, company_id=company_id)
         changes = data.model_dump(exclude_unset=True, exclude_none=False)
 
-        if "company_id" in changes and changes["company_id"] != platform.company_id:
-            new_company = await self.companies.get(changes["company_id"])
-            if new_company is None:
-                raise NotFoundError(
-                    "Company not found.", details=[{"field": "company_id", "value": str(changes["company_id"])}]
-                )
+        if "company_id" in changes and changes["company_id"] != company_id:
+            raise ForbiddenError("A platform cannot be moved to another company.")
+        changes.pop("company_id", None)
 
         if "slug" in changes and changes["slug"] != platform.slug:
             target_company_id = changes.get("company_id", platform.company_id)
@@ -136,8 +137,8 @@ class PlatformService:
         )
         return platform
 
-    async def delete_platform(self, platform_id: uuid.UUID) -> None:
-        platform = await self.get_platform(platform_id)
+    async def delete_platform(self, platform_id: uuid.UUID, *, company_id: uuid.UUID) -> None:
+        platform = await self.get_platform(platform_id, company_id=company_id)
         try:
             await self.platforms.delete(platform)
         except IntegrityError as exc:
@@ -154,15 +155,13 @@ class PlatformService:
             metadata={"name": platform.name, "slug": platform.slug},
         )
 
-    async def _resolve_company(self, company_id: uuid.UUID | None):
-        if company_id is not None:
-            company = await self.companies.get(company_id)
-            if company is None:
-                raise NotFoundError(
-                    "Company not found.", details=[{"field": "company_id", "value": str(company_id)}]
-                )
-            return company
-        return await self.companies.get_or_create_default()
+    async def _resolve_company(self, company_id: uuid.UUID):
+        company = await self.companies.get(company_id)
+        if company is None:
+            raise NotFoundError(
+                "Company not found.", details=[{"field": "company_id", "value": str(company_id)}]
+            )
+        return company
 
     @staticmethod
     def _not_found(platform_id: uuid.UUID) -> NotFoundError:

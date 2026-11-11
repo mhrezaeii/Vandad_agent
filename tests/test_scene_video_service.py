@@ -9,6 +9,8 @@ from sqlalchemy import select
 from app.core.exceptions import ConflictError
 from app.integrations.video import (
     MockSceneVideoProvider,
+    SceneGenerationStatus,
+    SceneJobState,
     SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     build_scene_video_registry,
@@ -16,6 +18,7 @@ from app.integrations.video import (
 from app.models import (
     ContentProject,
     ProviderQuotaUsage,
+    ProviderUsageRecord,
     SceneVideoJob,
     SceneVideoJobStatus,
     WorkflowExecution,
@@ -193,6 +196,55 @@ async def test_poll_and_retrieve_completed_scenes(
     assert all(job.status == SceneVideoJobStatus.DOWNLOADED.value for job in jobs)
     assert all(job.artifact_id is not None for job in jobs)
     assert all(job.cost_metadata["size_bytes"] > 0 for job in jobs)
+
+
+async def test_completed_scene_jobs_settle_provider_usd_cost(
+    db_session, content_service, company_and_platform
+):
+    from decimal import Decimal
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    reservation = ProviderUsageRecord(
+        company_id=company.id,
+        provider_id="mock",
+        operation="content.scene.generate_video",
+        status="reserved",
+        idempotency_key=f"scene-cost-{project.id}",
+        reserved_amount_usd=Decimal("5.00"),
+        usage_payload={},
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    project.cost_metadata = {
+        "provider_id": "mock",
+        "budget_reservation_id": str(reservation.id),
+        "status": "reserved",
+    }
+
+    provider = MockSceneVideoProvider(poll_steps=1)
+    async def completed_with_cost(job_id):
+        return SceneGenerationStatus(
+            job_id=job_id,
+            state=SceneJobState.COMPLETED.value,
+            progress=1.0,
+            raw={"cost_usd": "0.10", "currency": "USD"},
+        )
+    provider.get_generation_status = completed_with_cost
+    service = _service(db_session, provider)
+
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    await service.submit_pending(project)
+    await db_session.flush()
+    summary = await service.poll_jobs(project)
+    await db_session.commit()
+    await db_session.refresh(reservation)
+
+    assert summary["all_terminal"] is True
+    assert reservation.status == "settled"
+    assert reservation.actual_cost_usd == Decimal("0.30")
+    assert project.cost_metadata["status"] == "settled"
+    assert project.cost_metadata["actual_cost_usd"] == "0.30"
 
 
 async def test_submission_failure_can_be_retried(

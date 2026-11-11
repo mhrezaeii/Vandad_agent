@@ -59,20 +59,26 @@ def _is_sensitive_key(key: str) -> bool:
     return any(hint in lowered for hint in SENSITIVE_KEY_HINTS)
 
 
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return redact_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
 def redact_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return a copy of *value* with sensitive keys replaced by a redaction marker."""
+    """Return a recursively redacted copy of mappings, nested lists and text."""
     if not value:
         return {}
     redacted: dict[str, Any] = {}
     for key, item in value.items():
         if _is_sensitive_key(str(key)):
             redacted[key] = REDACTED_VALUE
-        elif isinstance(item, Mapping):
-            redacted[key] = redact_mapping(item)
-        elif isinstance(item, (list, tuple)):
-            redacted[key] = [redact_mapping(entry) if isinstance(entry, Mapping) else entry for entry in item]
         else:
-            redacted[key] = item
+            redacted[key] = _redact_value(item)
     return redacted
 
 

@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.security.secret_value import SecretValue
 from app.services.credential_service import CredentialService
+from app.services.provider_budget_service import ProviderBudgetService
 from tests.test_worker_hardening import _keybox
 
 
@@ -51,6 +52,15 @@ async def _connection(
     )
     db_session.add(connection)
     await db_session.flush()
+    if provider == "heygen":
+        from decimal import Decimal
+
+        await ProviderBudgetService(db_session).set_budget(
+            company_id,
+            "heygen",
+            monthly_limit_usd=Decimal("50.00"),
+            per_operation_limit_usd=Decimal("10.00"),
+        )
     if with_credential:
         credential = await CredentialService(db_session, _keybox()).create_credential(
             platform_id=platform.id,

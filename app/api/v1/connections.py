@@ -17,6 +17,7 @@ from app.api.deps import (
     get_connection_service,
     get_connection_validation_service,
     pagination_params,
+    require_company_admin,
 )
 from app.core.exceptions import ConflictError, ForbiddenError, UnprocessableEntityError
 from app.models import CredentialStorageType, CredentialType
@@ -72,6 +73,7 @@ async def _resolve_company(
 async def create_connection(
     payload: ConnectionCreate,
     scope: Annotated[CompanyScope, Depends(company_scope)],
+    _admin: Annotated[object, Depends(require_company_admin)],
     service: Annotated[ConnectionService, Depends(get_connection_service)],
 ) -> ConnectionRead:
     company_id = await _resolve_company(payload.company_id, scope)
@@ -154,6 +156,7 @@ async def update_connection(
     connection_id: uuid.UUID,
     payload: ConnectionUpdate,
     scope: Annotated[CompanyScope, Depends(company_scope)],
+    _admin: Annotated[object, Depends(require_company_admin)],
     service: Annotated[ConnectionService, Depends(get_connection_service)],
 ) -> ConnectionRead:
     updates = payload.model_dump(exclude_unset=True)
@@ -179,6 +182,7 @@ async def update_connection(
 async def delete_connection(
     connection_id: uuid.UUID,
     scope: Annotated[CompanyScope, Depends(company_scope)],
+    _admin: Annotated[object, Depends(require_company_admin)],
     service: Annotated[ConnectionService, Depends(get_connection_service)],
 ) -> Response:
     await service.delete_connection(connection_id, company_id=scope.company_id)
@@ -189,6 +193,7 @@ async def delete_connection(
 async def activate_connection(
     connection_id: uuid.UUID,
     scope: Annotated[CompanyScope, Depends(company_scope)],
+    _admin: Annotated[object, Depends(require_company_admin)],
     validation: Annotated[ConnectionValidationService, Depends(get_connection_validation_service)],
 ) -> ConnectionTestResult:
     """Activate = validate + connect.
@@ -214,6 +219,7 @@ async def activate_connection(
 async def deactivate_connection(
     connection_id: uuid.UUID,
     scope: Annotated[CompanyScope, Depends(company_scope)],
+    _admin: Annotated[object, Depends(require_company_admin)],
     service: Annotated[ConnectionService, Depends(get_connection_service)],
 ) -> ConnectionRead:
     connection = await service.deactivate(connection_id, company_id=scope.company_id)

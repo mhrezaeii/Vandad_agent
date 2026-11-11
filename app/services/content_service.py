@@ -14,6 +14,8 @@ Orchestrates the video pipeline on top of the existing engine:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -34,10 +36,12 @@ from app.integrations.providers import (
 from app.integrations.providers.base import ProviderError, ProviderExecutionContext
 from app.models import (
     BrandCharacter,
+    BrandPlatformLink,
     CharacterStatus,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
+    Platform,
     PlatformConnection,
     ProjectStatus,
     Workflow,
@@ -49,6 +53,7 @@ from app.security.authorization import CompanyScope
 from app.security.crypto import MasterKeyBox
 from app.services.audit_service import AuditService
 from app.services.credential_service import CredentialService
+from app.services.provider_budget_service import ProviderBudgetService
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.services.workflow_service import WorkflowService
 
@@ -530,6 +535,60 @@ class ContentService:
             )
         return brand
 
+    async def set_brand_platforms(
+        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, platform_ids: list[uuid.UUID]
+    ) -> list[uuid.UUID]:
+        """Replace a brand's linked platforms, enforcing same-company ownership."""
+        brand = await self.get_brand(brand_id, company_id=company_id)
+        unique_ids = list(dict.fromkeys(platform_ids))
+        platforms = list((await self.session.scalars(
+            select(Platform).where(
+                Platform.company_id == company_id,
+                Platform.id.in_(unique_ids),
+            )
+        )).all()) if unique_ids else []
+        if len(platforms) != len(unique_ids):
+            raise NotFoundError("One or more platforms were not found for this company.")
+        existing = list((await self.session.scalars(
+            select(BrandPlatformLink).where(
+                BrandPlatformLink.company_id == company_id,
+                BrandPlatformLink.brand_id == brand.id,
+            )
+        )).all())
+        for link in existing:
+            await self.session.delete(link)
+        for platform_id in unique_ids:
+            self.session.add(BrandPlatformLink(
+                brand_id=brand.id, platform_id=platform_id, company_id=company_id
+            ))
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.brand_platforms_updated",
+            action="link_platforms",
+            company_id=company_id,
+            resource_type=BRAND_RESOURCE,
+            resource_id=brand.id,
+            metadata={"platform_ids": [str(value) for value in unique_ids]},
+        )
+        await self.session.flush()
+        return unique_ids
+
+    async def list_brand_platforms(
+        self, brand_id: uuid.UUID, *, company_id: uuid.UUID
+    ) -> list[Platform]:
+        """List only platforms linked to a brand within the active tenant."""
+        brand = await self.get_brand(brand_id, company_id=company_id)
+        return list((await self.session.scalars(
+            select(Platform)
+            .join(BrandPlatformLink, BrandPlatformLink.platform_id == Platform.id)
+            .where(
+                BrandPlatformLink.company_id == company_id,
+                BrandPlatformLink.brand_id == brand.id,
+                Platform.company_id == company_id,
+            )
+            .order_by(Platform.name.asc())
+        )).all())
+
     async def list_brands(
         self, *, company_id: uuid.UUID, include_archived: bool = False
     ) -> list[ContentBrand]:
@@ -727,6 +786,7 @@ class ContentService:
             brand_id=brand.id,
             topic=topic,
             status=ProjectStatus.DRAFT.value,
+            video_mode="avatar",
         )
         self.session.add(project)
         await self.session.flush()
@@ -830,6 +890,10 @@ class ContentService:
                 "The brand character is not active in HeyGen; create and activate it first.",
                 details=[{"status": character.status}],
             )
+        await ProviderBudgetService(self.session).assert_budget_enabled(
+            scope.company_id, "heygen"
+        )
+        project.cost_metadata = {"provider_id": "heygen", "status": "budget_check_pending"}
         await self.ensure_workflow(
             VIDEO_WORKFLOW_NAME, VIDEO_WORKFLOW_GRAPH, company_id=scope.company_id,
             connection_id=connection_id,
@@ -1016,6 +1080,15 @@ class ContentService:
 
         options = dict(project.scene_options or {})
         selected_provider = provider_id or options.get("provider_id") or project.scene_video_provider
+        if not selected_provider:
+            from app.core.config import get_settings
+
+            selected_provider = get_settings().scene_video_provider
+        if selected_provider == "mock":
+            from app.core.config import get_settings
+
+            if get_settings().is_production:
+                raise ConflictError("The mock scene-video provider is forbidden in production.")
         if selected_provider and self.scene_video_registry is not None:
             if not self.scene_video_registry.has(selected_provider):
                 raise UnprocessableEntityError(
@@ -1027,25 +1100,50 @@ class ContentService:
             project.scene_options = options
             project.scene_video_provider = selected_provider
 
-        await self.ensure_workflow(
-            SCENE_VIDEO_WORKFLOW_NAME,
-            SCENE_VIDEO_WORKFLOW_GRAPH,
-            company_id=scope.company_id,
-            connection_id=None,
-        )
-        workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
-        execution, _created = await self._execution_service.execute_workflow(
-            workflow.id,
-            scope=scope,
-            input_metadata={
-                "project_id": str(project.id),
+        reservation = None
+        if selected_provider != "mock":
+            reservation = await ProviderBudgetService(self.session).reserve(
+                scope.company_id,
+                selected_provider,
+                "content.scene.generate_video",
+                idempotency_key=f"scene-video:{project.id}",
+                require_budget=True,
+            )
+            project.cost_metadata = {
                 "provider_id": selected_provider,
-                "narration_artifact_id": options.get("narration_artifact_id"),
-            },
-            idempotency_key=f"scene-video:{project.id}",
-            trigger_type=WorkflowTriggerType.API,
-            trigger_reference=str(project.id),
-        )
+                "budget_reservation_id": str(reservation.id) if reservation else None,
+                "status": "reserved",
+            }
+            await self.session.commit()
+        else:
+            project.cost_metadata = {"provider_id": "mock", "status": "not_billable"}
+
+        try:
+            await self.ensure_workflow(
+                SCENE_VIDEO_WORKFLOW_NAME,
+                SCENE_VIDEO_WORKFLOW_GRAPH,
+                company_id=scope.company_id,
+                connection_id=None,
+            )
+            workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
+            execution, _created = await self._execution_service.execute_workflow(
+                workflow.id,
+                scope=scope,
+                input_metadata={
+                    "project_id": str(project.id),
+                    "provider_id": selected_provider,
+                    "narration_artifact_id": options.get("narration_artifact_id"),
+                },
+                idempotency_key=f"scene-video:{project.id}",
+                trigger_type=WorkflowTriggerType.API,
+                trigger_reference=str(project.id),
+            )
+        except Exception:
+            if reservation is not None:
+                await ProviderBudgetService(self.session).settle(
+                    reservation, error_code="scene_video_dispatch_failed"
+                )
+            raise
         project.status = ProjectStatus.VIDEO_GENERATION_PENDING.value
         project.video_workflow_execution_id = execution.id
         project.error_message = None
@@ -1183,6 +1281,18 @@ class ContentService:
             "llm_usage": project.llm_usage,
         }
 
+    async def list_projects(
+        self, *, company_id: uuid.UUID, limit: int = 50, offset: int = 0
+    ) -> list[ContentProject]:
+        rows = await self.session.scalars(
+            select(ContentProject)
+            .where(ContentProject.company_id == company_id)
+            .order_by(ContentProject.updated_at.desc(), ContentProject.id.desc())
+            .limit(max(1, min(limit, 100)))
+            .offset(max(0, offset))
+        )
+        return list(rows.all())
+
     async def list_videos(self, *, company_id: uuid.UUID) -> list[ContentProject]:
         return list(
             (
@@ -1315,12 +1425,48 @@ class ContentService:
             timeout_seconds=60.0,
             operation=operation,
         )
+        billable_operations = {"create_photo_avatar", "train_photo_avatar", "submit_video"}
+        budget_service = ProviderBudgetService(self.session)
+        reservation = None
+        if operation in billable_operations:
+            budget_key = hashlib.sha256(
+                f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode()
+            ).hexdigest()
+            reservation = await budget_service.reserve(
+                company_id,
+                adapter.provider_id,
+                f"heygen.{operation}",
+                idempotency_key=f"heygen:{budget_key}",
+                require_budget=True,
+            )
+            await self.session.commit()
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
-            raise outcome.error or ProviderError(
+            error = outcome.error or ProviderError(
                 "The HeyGen operation failed.", code="heygen_failure"
             )
-        return outcome.result.metadata or {}
+            if reservation is not None:
+                failed_result = getattr(outcome, "result", None)
+                failure_usage = {"attempts": outcome.attempts}
+                failed_latency = getattr(failed_result, "latency_ms", None)
+                if failed_latency is not None:
+                    failure_usage["latency_ms"] = failed_latency
+                await budget_service.settle(
+                    reservation, error_code=error.code, usage=failure_usage
+                )
+            raise error
+        metadata = outcome.result.metadata or {}
+        if reservation is not None:
+            usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
+            await budget_service.settle(
+                reservation,
+                usage={
+                    **usage,
+                    "latency_ms": outcome.result.latency_ms,
+                    "attempts": outcome.attempts,
+                },
+            )
+        return metadata
 
     @staticmethod
     def _now_iso() -> str:

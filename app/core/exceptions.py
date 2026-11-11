@@ -35,6 +35,12 @@ class NotFoundError(AppError):
     default_message = "The requested resource was not found."
 
 
+class UnauthorizedError(AppError):
+    status_code = 401
+    code = "unauthorized"
+    default_message = "Authentication is required."
+
+
 class ForbiddenError(AppError):
     status_code = 403
     code = "forbidden"

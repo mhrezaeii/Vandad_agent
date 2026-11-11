@@ -160,3 +160,14 @@ def test_storyboard_prompt_requires_brand_character_product_demo_and_cta():
     assert "Same glasses" in user
     assert "Team chat, CRM" in user
     assert "problem → presenter" in user
+
+
+
+def test_storyboard_prompt_includes_verified_platform_knowledge_without_inventing_facts():
+    request = ScenarioRequest(
+        topic="معرفی خدمات",
+        platform_knowledge_context='{"summary":"خدمات مدیریت پروژه","unknowns":["قیمت مشخص نیست"]}',
+    )
+    system, user = build_scenario_prompt(request)
+    assert "قیمت مشخص نیست" in user
+    assert "از اطلاعات دانش پلتفرم فقط به‌عنوان مرجع استفاده کن" in system

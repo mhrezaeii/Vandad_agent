@@ -1,0 +1,55 @@
+"""Canonical built-in agent definitions.
+
+Definitions are code-owned: tenants can enable an approved agent, but cannot
+invent capabilities or grant tools by editing database configuration.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDefinition:
+    key: str
+    name: str
+    description: str
+    capabilities: tuple[str, ...]
+    maturity: str
+    dispatch_ready: bool = False
+    requires_approval: bool = False
+
+
+BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
+    AgentDefinition(
+        key="monitoring",
+        name="Monitoring Agent",
+        description="کشف پلتفرم‌ها، رصد تغییرات و آماده‌سازی دانش مستند به منبع.",
+        capabilities=("platform.monitor", "platform.discover", "platform.change.detect", "platform.knowledge.extract"),
+        maturity="partial",
+        dispatch_ready=True,
+    ),
+    AgentDefinition(
+        key="browser_identity",
+        name="Browser & Identity Agent",
+        description="تعامل کنترل‌شده با پنل‌ها و حساب‌های مجاز از طریق مرورگر.",
+        capabilities=("browser.navigate", "browser.capture", "browser.authorized_action"),
+        maturity="partial",
+    ),
+    AgentDefinition(
+        key="content",
+        name="Content Agent",
+        description="تولید سناریوی تبلیغاتی مبتنی بر دانش مستند محصول و برند.",
+        capabilities=("content.scenario.generate",),
+        maturity="partial",
+        dispatch_ready=True,
+    ),
+    AgentDefinition(
+        key="video",
+        name="Video Production Agent",
+        description="تولید صحنه، مدیریت کاراکتر و مونتاژ خروجی ویدیویی.",
+        capabilities=("video.avatar.generate", "video.scene.generate"),
+        maturity="partial",
+        dispatch_ready=True,
+        requires_approval=True,
+    ),
+)

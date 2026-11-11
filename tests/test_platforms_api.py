@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AuditEvent, Company, CredentialReference
 
 
-async def _create_platform(client, payload: dict) -> dict:
-    response = await client.post("/api/v1/platforms", json=payload)
+async def _create_platform(client, payload: dict, *, headers: dict | None = None) -> dict:
+    response = await client.post("/api/v1/platforms", json=payload, headers=headers)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -41,14 +41,19 @@ async def test_create_platform_with_explicit_company(client, db_session: AsyncSe
     await db_session.commit()
 
     payload = {**platform_payload, "company_id": str(company.id), "slug": "acme-platform"}
-    body = await _create_platform(client, payload)
+    body = await _create_platform(client, payload, headers={"X-Company-ID": str(company.id)})
     assert body["company_id"] == str(company.id)
     assert body["slug"] == "acme-platform"
 
 
 async def test_create_platform_unknown_company_returns_404(client, platform_payload):
-    payload = {**platform_payload, "company_id": str(uuid.uuid4())}
-    response = await client.post("/api/v1/platforms", json=payload)
+    unknown_company_id = uuid.uuid4()
+    payload = {**platform_payload, "company_id": str(unknown_company_id)}
+    response = await client.post(
+        "/api/v1/platforms",
+        json=payload,
+        headers={"X-Company-ID": str(unknown_company_id)},
+    )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
 
@@ -70,8 +75,8 @@ async def test_same_slug_allowed_across_companies(client, db_session: AsyncSessi
 
     payload_a = {**platform_payload, "company_id": str(company_a.id), "slug": "shared-slug"}
     payload_b = {**platform_payload, "company_id": str(company_b.id), "slug": "shared-slug"}
-    await _create_platform(client, payload_a)
-    body_b = await _create_platform(client, payload_b)
+    await _create_platform(client, payload_a, headers={"X-Company-ID": str(company_a.id)})
+    body_b = await _create_platform(client, payload_b, headers={"X-Company-ID": str(company_b.id)})
     assert body_b["slug"] == "shared-slug"
 
 
@@ -80,6 +85,53 @@ async def test_get_platform(client, platform_payload):
     response = await client.get(f"/api/v1/platforms/{created['id']}")
     assert response.status_code == 200
     assert response.json()["id"] == created["id"]
+
+
+async def test_platform_routes_are_company_scoped(client, db_session: AsyncSession, platform_payload):
+    company_a = Company(name="Tenant A", slug="tenant-a-platforms")
+    company_b = Company(name="Tenant B", slug="tenant-b-platforms")
+    db_session.add_all([company_a, company_b])
+    await db_session.commit()
+
+    created = await _create_platform(
+        client,
+        {**platform_payload, "company_id": str(company_a.id)},
+        headers={"X-Company-ID": str(company_a.id)},
+    )
+    foreign_headers = {"X-Company-ID": str(company_b.id)}
+
+    get_foreign = await client.get(f"/api/v1/platforms/{created['id']}", headers=foreign_headers)
+    assert get_foreign.status_code == 404
+
+    list_foreign = await client.get("/api/v1/platforms", headers=foreign_headers)
+    assert list_foreign.status_code == 200
+    assert all(item["company_id"] == str(company_b.id) for item in list_foreign.json()["items"])
+
+    update_foreign = await client.patch(
+        f"/api/v1/platforms/{created['id']}",
+        json={"description": "tenant breach"},
+        headers=foreign_headers,
+    )
+    assert update_foreign.status_code == 404
+
+    delete_foreign = await client.delete(
+        f"/api/v1/platforms/{created['id']}", headers=foreign_headers
+    )
+    assert delete_foreign.status_code == 404
+
+
+async def test_platform_cannot_be_created_for_another_company(client, db_session: AsyncSession, platform_payload):
+    company_a = Company(name="Creator Tenant", slug="creator-tenant")
+    company_b = Company(name="Target Tenant", slug="target-tenant")
+    db_session.add_all([company_a, company_b])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/platforms",
+        json={**platform_payload, "company_id": str(company_b.id)},
+        headers={"X-Company-ID": str(company_a.id)},
+    )
+    assert response.status_code == 403
 
 
 async def test_get_missing_platform_returns_404(client):

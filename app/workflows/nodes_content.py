@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 
 from app.core.exceptions import NotFoundError
 from app.integrations.providers.base import (
@@ -36,9 +37,11 @@ from app.integrations.providers.base import (
 from app.models import (
     ArtifactKind,
     BrandCharacter,
+    BrandPlatformLink,
     CharacterStatus,
     ContentBrand,
     ContentProject,
+    PlatformKnowledgeSnapshot,
     ProjectStatus,
     WorkflowExecution,
     WorkflowNode,
@@ -608,6 +611,60 @@ async def _generate_scenario(
 
     cta_config = brand.cta_config or {}
     options = project.scene_options or {}
+    linked_platform_ids = list((await engine.session.scalars(
+        select(BrandPlatformLink.platform_id).where(
+            BrandPlatformLink.company_id == execution.company_id,
+            BrandPlatformLink.brand_id == brand.id,
+        )
+    )).all())
+    platform_knowledge_context = None
+    if linked_platform_ids:
+        snapshots = list((await engine.session.scalars(
+            select(PlatformKnowledgeSnapshot)
+            .where(
+                PlatformKnowledgeSnapshot.company_id == execution.company_id,
+                PlatformKnowledgeSnapshot.platform_id.in_(linked_platform_ids),
+            )
+            .order_by(PlatformKnowledgeSnapshot.extracted_at.desc())
+        )).all())
+        latest_by_platform = {}
+        for snapshot in snapshots:
+            latest_by_platform.setdefault(str(snapshot.platform_id), snapshot)
+        compact_knowledge = []
+        fact_groups = {
+            "products_and_services": 3,
+            "capabilities": 5,
+            "workflows": 3,
+            "target_audiences": 3,
+            "differentiators": 3,
+        }
+        for platform_id, snapshot in latest_by_platform.items():
+            knowledge = snapshot.knowledge_json or {}
+            item = {
+                "platform_id": platform_id,
+                "summary": str(knowledge.get("summary") or "")[:1000],
+                "unknowns": [str(value)[:180] for value in (knowledge.get("unknowns") or [])[:6]],
+            }
+            for group, limit in fact_groups.items():
+                item[group] = [
+                    {
+                        "name": str(fact.get("name") or "")[:100],
+                        "description": str(fact.get("description") or "")[:240],
+                        "evidence": str(fact.get("evidence") or "")[:160],
+                        "source_url": str(fact.get("source_url") or "")[:500],
+                    }
+                    for fact in (knowledge.get(group) or [])[:limit]
+                    if isinstance(fact, dict)
+                ]
+            compact_knowledge.append(item)
+        while compact_knowledge:
+            encoded_knowledge = json.dumps(
+                compact_knowledge, ensure_ascii=False, separators=(",", ":")
+            )
+            if len(encoded_knowledge) <= 11000:
+                platform_knowledge_context = encoded_knowledge
+                break
+            compact_knowledge.pop()
     request = ScenarioRequest(
         topic=project.topic,
         target_duration_seconds=int(
@@ -636,6 +693,7 @@ async def _generate_scenario(
         cta_text=params.get("cta_text") or cta_config.get("text"),
         hashtags=list(cta_config.get("hashtags") or []),
         language=brand.language,
+        platform_knowledge_context=platform_knowledge_context,
     )
 
     service = ScenarioService(

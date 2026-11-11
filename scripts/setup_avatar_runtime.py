@@ -5,6 +5,7 @@ The setup is idempotent. Normal rendering never downloads anything.
 Requires Python 3.11 for the isolated Wav2Lip environment.
 """
 from __future__ import annotations
+
 import argparse
 import os
 import shutil
@@ -178,7 +179,10 @@ def find_python311() -> str:
             continue
         command = [candidate, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"]
         if Path(candidate).stem.lower() == "py":
-            command = [candidate, "-3.11", "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"]
+            command = [
+                candidate, "-3.11", "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode == 0 and result.stdout.strip() == "3.11":
             return candidate

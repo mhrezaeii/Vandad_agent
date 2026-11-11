@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # "*" grants all companies and is ONLY valid outside production; production
     # requires an explicit list (fail-secure default deny).
     bootstrap_principal_company_ids: str = "*"
+    # Production identity is supplied by a trusted OIDC/auth proxy. The proxy
+    # must strip client-supplied X-Auth-* headers and inject these claims itself.
+    auth_proxy_shared_secret: SecretStr | None = None
+    auth_proxy_user_header: str = "X-Auth-Request-User"
+    auth_proxy_company_ids_header: str = "X-Auth-Request-Company-IDs"
+    auth_proxy_roles_header: str = "X-Auth-Request-Roles"
+    cors_allowed_origins: str = "http://localhost:3000"
 
     # --- Artifact storage (see app.storage) --------------------------------------
     # Root directory for generated workflow artifacts (mounted volume in Docker).
@@ -152,6 +159,14 @@ class Settings(BaseSettings):
             raise ValueError("credential_master_keys must be a JSON object of version -> key")
         return value
 
+    @field_validator("auth_proxy_shared_secret")
+    @classmethod
+    def _validate_auth_proxy_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        secret = value.get_secret_value() if value is not None else ""
+        if secret and len(secret) < 32:
+            raise ValueError("auth_proxy_shared_secret must contain at least 32 characters")
+        return value
+
     @field_validator("bootstrap_principal_company_ids")
     @classmethod
     def _validate_bootstrap_companies(cls, value: str) -> str:
@@ -169,6 +184,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def requires_proxy_auth(self) -> bool:
+        return self.environment in {"staging", "production"}
 
 
 @lru_cache

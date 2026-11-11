@@ -65,6 +65,13 @@ from app.security.crypto import MasterKeyBox  # noqa: E402
 
 TABLES = (
     "audit_events",
+    "provider_usage_records",
+    "company_provider_budgets",
+    "agent_task_events",
+    "agent_task_outbox",
+    "agent_task_runs",
+    "agent_tasks",
+    "company_agents",
     "connection_events",
     "credential_versions",
     "credential_references",
@@ -183,12 +190,19 @@ def app(clean_database, engine, session_factory, redis_manager, tmp_path):
     application.state.session_factory = session_factory
     application.state.redis_manager = redis_manager
     application.state.master_key_box = MasterKeyBox.from_settings(get_settings())
+    from app.agents import build_default_agent_registry  # noqa: PLC0415
+
+    application.state.agent_registry = build_default_agent_registry()
     application.state.provider_registry = build_default_registry()
     application.state.provider_executor = build_provider_executor(get_settings())
     from app.integrations.video import build_scene_video_registry  # noqa: PLC0415
 
     application.state.scene_video_registry = build_scene_video_registry()
-    application.state.principal = Principal(subject="test-runner", company_ids=frozenset({"*"}))
+    application.state.principal = Principal(
+        subject="test-runner",
+        company_ids=frozenset({"*"}),
+        roles=frozenset({"owner", "admin", "operator", "viewer"}),
+    )
     from app.core.queue import WorkflowQueue  # noqa: PLC0415
     from app.storage.local import LocalArtifactStorage  # noqa: PLC0415
 

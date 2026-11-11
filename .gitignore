@@ -24,3 +24,22 @@ venv/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local media/model runtimes and generated outputs
+runtime/
+outputs/
+data/
+*.mp4
+*.avi
+*.wav
+*.mp3
+*.onnx
+*.pth
+*.pt
+*.part
+
+# Next.js frontend
+node_modules/
+web/.next/
+web/out/
+web/.env.local
