@@ -5,7 +5,10 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
+import pytest
+
 from app.agents.runtime import AgentExecutionContext, ContentAgentHandler
+from app.core.exceptions import NotFoundError
 from app.models import (
     BrandPlatformLink,
     ContentBrand,
@@ -157,3 +160,54 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
         assert persisted.status == ProjectStatus.SCRIPT_READY.value
         assert persisted.video_title == "معرفی ونداد"
         assert persisted.llm_usage["model"] == "test-model"
+
+
+
+async def test_content_agent_rejects_project_owned_by_another_company(
+    db_session, session_factory, company_and_platform
+):
+    from app.models import Company
+
+    company, _ = company_and_platform
+    foreign_company = Company(
+        name="Foreign Content Tenant",
+        slug=f"foreign-content-{uuid.uuid4().hex[:8]}",
+    )
+    db_session.add(foreign_company)
+    await db_session.flush()
+    brand = ContentBrand(
+        company_id=foreign_company.id,
+        name=f"foreign-brand-{uuid.uuid4().hex[:8]}",
+        display_name="Foreign Brand",
+        language="fa-IR",
+        tone="neutral",
+        status="active",
+    )
+    db_session.add(brand)
+    await db_session.flush()
+    project = ContentProject(
+        company_id=foreign_company.id,
+        brand_id=brand.id,
+        topic="Must remain private to its owner",
+        status=ProjectStatus.DRAFT.value,
+    )
+    db_session.add(project)
+    await db_session.commit()
+
+    context = AgentExecutionContext(
+        company_id=company.id,
+        task_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        worker_id="content-tenant-isolation-test",
+        payload={
+            "project_id": str(project.id),
+            "connection_id": str(uuid.uuid4()),
+        },
+        session_factory=session_factory,
+        provider_registry=object(),
+        provider_executor=object(),
+        master_key_box=object(),
+    )
+
+    with pytest.raises(NotFoundError, match="Content project not found for this company"):
+        await ContentAgentHandler().execute("content.scenario.generate", context)
