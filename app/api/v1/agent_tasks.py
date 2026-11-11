@@ -22,6 +22,7 @@ from app.schemas.agent_task import (
     AgentTaskRunRead,
 )
 from app.security.authorization import CompanyScope
+from app.security.redaction import redact_mapping
 from app.services.agent_task_service import AgentTaskService
 
 router = APIRouter(prefix="/agent-tasks", tags=["agent-tasks"])
@@ -36,8 +37,8 @@ def _task_read(task, registry: AgentRegistry) -> AgentTaskRead:
         title=task.title,
         status=task.status,
         priority=task.priority,
-        input_payload=task.input_payload,
-        result_payload=task.result_payload,
+        input_payload=redact_mapping(task.input_payload),
+        result_payload=redact_mapping(task.result_payload) if task.result_payload is not None else None,
         idempotency_key=task.idempotency_key,
         requested_by=task.requested_by,
         cancel_requested=task.cancel_requested,
@@ -138,7 +139,11 @@ async def stream_agent_task_events(
     session_factory = request.app.state.session_factory
 
     async def event_stream():
-        cursor = after
+        try:
+            header_cursor = max(0, int(request.headers.get("last-event-id", "0")))
+        except (TypeError, ValueError):
+            header_cursor = 0
+        cursor = max(after, header_cursor)
         while not await request.is_disconnected():
             async with session_factory() as session:
                 task = await session.scalar(
