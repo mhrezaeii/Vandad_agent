@@ -890,6 +890,10 @@ class ContentService:
                 "The brand character is not active in HeyGen; create and activate it first.",
                 details=[{"status": character.status}],
             )
+        await ProviderBudgetService(self.session).assert_budget_enabled(
+            scope.company_id, "heygen"
+        )
+        project.cost_metadata = {"provider_id": "heygen", "status": "budget_check_pending"}
         await self.ensure_workflow(
             VIDEO_WORKFLOW_NAME, VIDEO_WORKFLOW_GRAPH, company_id=scope.company_id,
             connection_id=connection_id,
