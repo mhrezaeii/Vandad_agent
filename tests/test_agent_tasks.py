@@ -6,7 +6,7 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from app.agents import AgentRegistry
+from app.agents import AgentRegistry, build_default_agent_registry
 from app.agents.definitions import AgentDefinition
 from app.core.exceptions import ConflictError
 from app.models import AgentTask, AgentTaskOutbox, Company, CompanyAgent
@@ -99,7 +99,7 @@ async def test_progress_events_are_redacted_and_allowlisted(client, db_session):
     assert created.status_code == 202, created.text
     task_id = uuid.UUID(created.json()["id"])
     task = await db_session.get(AgentTask, task_id)
-    service = AgentTaskService(db_session, client.app.state.agent_registry)
+    service = AgentTaskService(db_session, build_default_agent_registry())
     await service._record_event(
         task,
         "progress",
