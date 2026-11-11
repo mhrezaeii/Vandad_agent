@@ -1114,6 +1114,7 @@ class ContentService:
                 "budget_reservation_id": str(reservation.id) if reservation else None,
                 "status": "reserved",
             }
+            await self.session.commit()
         else:
             project.cost_metadata = {"provider_id": "mock", "status": "not_billable"}
 
