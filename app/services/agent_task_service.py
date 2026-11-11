@@ -295,9 +295,11 @@ class AgentTaskService:
 
     async def complete_run(
         self, company_id: uuid.UUID, task_id: uuid.UUID, run_id: uuid.UUID,
-        *, result_payload: dict[str, Any],
+        *, result_payload: dict[str, Any], worker_id: str | None = None,
     ) -> AgentTask:
-        task, run = await self._lock_task_and_run(company_id, task_id, run_id)
+        task, run = await self._lock_task_and_run(
+            company_id, task_id, run_id, expected_worker_id=worker_id
+        )
         now = datetime.now(UTC)
         if task.cancel_requested:
             run.status = "cancelled"
@@ -324,9 +326,15 @@ class AgentTaskService:
 
     async def fail_run(
         self, company_id: uuid.UUID, task_id: uuid.UUID, run_id: uuid.UUID,
-        *, error_code: str, error_message: str,
+        *, error_code: str, error_message: str, worker_id: str | None = None,
+        heartbeat_before: datetime | None = None,
     ) -> AgentTask:
-        task, run = await self._lock_task_and_run(company_id, task_id, run_id)
+        task, run = await self._lock_task_and_run(
+            company_id, task_id, run_id, expected_worker_id=worker_id
+        )
+        if heartbeat_before is not None and run.heartbeat_at is not None:
+            if run.heartbeat_at >= heartbeat_before:
+                raise ConflictError("The agent run heartbeat is no longer stale.")
         now = datetime.now(UTC)
         run.status = "cancelled" if task.cancel_requested else "failed"
         task.status = AgentTaskStatus.CANCELLED.value if task.cancel_requested else AgentTaskStatus.FAILED.value
@@ -350,7 +358,8 @@ class AgentTaskService:
         return task
 
     async def _lock_task_and_run(
-        self, company_id: uuid.UUID, task_id: uuid.UUID, run_id: uuid.UUID
+        self, company_id: uuid.UUID, task_id: uuid.UUID, run_id: uuid.UUID,
+        *, expected_worker_id: str | None = None,
     ) -> tuple[AgentTask, AgentTaskRun]:
         task = await self.session.scalar(
             select(AgentTask).where(
@@ -370,4 +379,6 @@ class AgentTaskService:
             raise NotFoundError("Agent task run not found.")
         if task.status != AgentTaskStatus.RUNNING.value or run.status != "running":
             raise ConflictError("Only the active run can change task execution state.")
+        if expected_worker_id is not None and run.worker_id != expected_worker_id:
+            raise ConflictError("Agent run ownership has changed.")
         return task, run
