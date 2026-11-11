@@ -4,9 +4,9 @@ download, retry, quota exhaustion and cancellation. No real provider calls."""
 from __future__ import annotations
 
 import pytest
-from app.core.exceptions import ConflictError
 from sqlalchemy import select
 
+from app.core.exceptions import ConflictError
 from app.integrations.video import (
     MockSceneVideoProvider,
     SceneVideoPermanentError,
