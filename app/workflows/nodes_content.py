@@ -532,7 +532,10 @@ async def _render_video(
         uuid.UUID(str(project.raw_artifact_id)), company_id=execution.company_id
     )
     if artifact.kind != ArtifactKind.VIDEO.value or not artifact.content_type.startswith("video/"):
-        raise ProviderPermanentError("The AI provider artifact is not a supported video.", code="invalid_video_artifact")
+        raise ProviderPermanentError(
+            "The AI provider artifact is not a supported video.",
+            code="invalid_video_artifact",
+        )
 
     # The AI provider owns subtitles, branding, audio, editing and composition.
     # Register its output directly; do not copy, transcode or re-render it.
