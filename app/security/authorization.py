@@ -29,6 +29,7 @@ class Principal:
 
     subject: str
     company_ids: frozenset[str] = field(default_factory=frozenset)
+    roles: frozenset[str] = field(default_factory=frozenset)
 
     def is_wildcard(self) -> bool:
         return "*" in self.company_ids
@@ -68,6 +69,14 @@ def build_principal_from_settings(settings: Settings) -> Principal:
                 "bootstrap_principal_company_ids='*' is not allowed in production; "
                 "configure explicit company IDs."
             )
-        return Principal(subject="bootstrap", company_ids=frozenset({"*"}))
+        return Principal(
+            subject="bootstrap",
+            company_ids=frozenset({"*"}),
+            roles=frozenset({"owner", "admin", "operator", "viewer"}),
+        )
     ids = frozenset(part.strip() for part in raw.split(",") if part.strip())
-    return Principal(subject="bootstrap", company_ids=ids)
+    return Principal(
+        subject="bootstrap",
+        company_ids=ids,
+        roles=frozenset({"owner", "admin", "operator", "viewer"}),
+    )
