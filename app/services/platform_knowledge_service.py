@@ -134,6 +134,16 @@ class PlatformKnowledgeService:
         connection = await self.session.get(PlatformConnection, connection_id)
         if connection is None or connection.company_id != platform.company_id:
             raise NotFoundError("LLM connection not found.")
+        if connection.provider != "llm_openai":
+            raise PlatformKnowledgeExtractionError(
+                "The selected connection must use the llm_openai provider.",
+                code="knowledge_connection_provider_invalid",
+            )
+        if connection.status not in {"connected", "degraded"}:
+            raise PlatformKnowledgeExtractionError(
+                "The selected LLM connection must be validated before extraction.",
+                code="knowledge_connection_not_ready",
+            )
         system, user = build_knowledge_prompt(platform, documents)
         credential = credential_type = secret_reference = None
         if connection.credential_reference_id is not None:
