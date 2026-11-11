@@ -98,8 +98,8 @@ The orchestrator selects provider capabilities for generation, speech, lip-sync,
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
 | Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
 | Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, per-task aggregate spend ceilings across agent handlers and child workflows, LLM usage settlement and paid video reservations; unknown costs remain reserved; CI verification pending |
-| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day request/error/latency metrics derived from the usage ledger; live health probes remain |
-| Deterministic provider/model routing and fallback | Partial | Explicit connection/model selection exists; ordered fallback and cross-provider capability negotiation remain |
+| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day request/error/latency metrics plus a tenant-scoped live connection health-probe endpoint; real vendor probes still require configured credentials |
+| Deterministic provider/model routing and fallback | Partial | Ordered scene-video provider fallback now filters by composition, lip-sync and reference-image capability; configured video model catalog exposes known flags; LLM fallback and unknown model constraints remain |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
 | Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
 | AI-native video generation and composition | Implemented foundation | Provider-side composition is capability-gated; real credentialed output validation remains |
@@ -141,13 +141,13 @@ The orchestrator selects provider capabilities for generation, speech, lip-sync,
 
 - [x] Add an optional per-agent-task spend ceiling and atomically aggregate reservations across child provider operations and workflows by locking the parent task row; implementation added, CI verification pending.
 - [x] Propagate task identity into Monitoring knowledge extraction, Content scenario generation, scene-video project reservations and avatar workflow provider reservations; CI verification pending.
-- [ ] Normalize provider/model capabilities and constraints.
+- [x] Add a configured scene-video model capability catalog for known flags; unknown language, aspect-ratio and duration constraints remain explicitly unset until verified from provider contracts.
 - [x] Add company/provider monthly budgets and per-operation reservations; unknown cost remains reserved rather than being reported as free.
 - [x] Record LLM provider-reported usage, latency, attempts and actual cost when explicitly supplied.
 - [x] Require a configured company budget before dispatching paid video-agent operations.
 - [x] Add tenant-scoped rolling provider request/error/latency telemetry and admin-only manual spend reconciliation.
-- [ ] Add explicit ordered fallback/capability routing and live provider health probes.
-- [ ] Add provider/model capability constraints for language, modality, duration, aspect ratio and lip-sync.
+- [x] Add deterministic ordered scene-video fallback with composition/lip-sync/reference-image capability filtering, plus a tenant-scoped live connection health-probe API; broader LLM fallback remains.
+- [ ] Populate verified model constraints for language, modality, duration and aspect ratio; do not infer undocumented provider limits.
 - Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
 
 Paid autonomous execution remains gated until CI and end-to-end tests verify the task ceiling/context propagation and the remaining ordered routing, capability and live-probe controls are implemented.
