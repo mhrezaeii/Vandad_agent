@@ -38,7 +38,7 @@ BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
         key="content",
         name="Content Agent",
         description="تحلیل دانش برند، پیشنهاد محتوا و تولید سناریو و متن.",
-        capabilities=("content.strategy.generate", "content.scenario.generate", "content.copy.generate"),
+        capabilities=("content.scenario.generate",),
         maturity="partial",
         dispatch_ready=True,
     ),
