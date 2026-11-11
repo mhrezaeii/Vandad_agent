@@ -37,6 +37,7 @@ class ContentScenarioInput(_CapabilityInput):
 class VideoSceneInput(_CapabilityInput):
     project_id: uuid.UUID
     provider_id: str | None = Field(default=None, min_length=1, max_length=80)
+    provider_fallbacks: list[str] = Field(default_factory=list, max_length=5)
 
 
 class VideoAvatarInput(_CapabilityInput):
