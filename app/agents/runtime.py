@@ -250,12 +250,27 @@ class VideoProductionAgentHandler:
             project = await session.get(ContentProject, project_id)
             if project is None or project.company_id != context.company_id:
                 raise NotFoundError("Content project not found for this company.")
-            if project.status != "approved":
-                raise ConflictError("Human approval is required before video generation.")
             if capability == "video.scene.generate" and project.video_mode != "scene":
                 raise ConflictError("The requested scene route does not match this project mode.")
             if capability == "video.avatar.generate" and project.video_mode != "avatar":
                 raise ConflictError("The requested avatar route does not match this project mode.")
+
+            # A worker may die after the workflow outbox commit but before the
+            # agent-task acknowledgement. Return the existing execution instead
+            # of submitting a second paid render on recovery.
+            if project.video_workflow_execution_id is not None and project.status in {
+                "video_generating", "video_generation_pending", "video_generated", "completed"
+            }:
+                return {
+                    "capability": capability,
+                    "project_id": str(project.id),
+                    "project_status": project.status,
+                    "workflow_execution_id": str(project.video_workflow_execution_id),
+                    "replayed": True,
+                }
+
+            if project.status != "approved":
+                raise ConflictError("Human approval is required before video generation.")
 
             if capability == "video.scene.generate":
                 provider_id = str(
