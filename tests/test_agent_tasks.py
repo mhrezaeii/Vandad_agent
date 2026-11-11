@@ -61,6 +61,12 @@ async def test_task_creation_requires_active_agent_and_is_idempotent(client):
     )
     assert changed.status_code == 409
 
+    changed_ceiling = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(spend_ceiling_usd="5.00"),
+    )
+    assert changed_ceiling.status_code == 409
+
 
 async def test_task_spend_ceiling_is_validated_and_persisted(client):
     await _activate_agent(client)
