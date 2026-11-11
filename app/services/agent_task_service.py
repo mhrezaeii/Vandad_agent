@@ -25,7 +25,7 @@ from app.models import (
     CompanyAgent,
 )
 from app.models.agent_task import AgentTaskStatus
-from app.security.redaction import redact_mapping
+from app.security.redaction import redact_mapping, redact_text
 from app.services.audit_service import AuditService
 
 
@@ -469,10 +469,11 @@ class AgentTaskService:
             run.status = "cancelled"
             task.status = AgentTaskStatus.CANCELLED.value
         else:
+            safe_result = redact_mapping(result_payload)
             run.status = "completed"
-            run.result_payload = result_payload
+            run.result_payload = safe_result
             task.status = AgentTaskStatus.COMPLETED.value
-            task.result_payload = result_payload
+            task.result_payload = safe_result
         run.completed_at = now
         task.completed_at = now
         await self.session.flush()
@@ -507,17 +508,19 @@ class AgentTaskService:
         now = datetime.now(UTC)
         run.status = "cancelled" if task.cancel_requested else "failed"
         task.status = AgentTaskStatus.CANCELLED.value if task.cancel_requested else AgentTaskStatus.FAILED.value
-        run.error_code = error_code
-        run.error_message = error_message
-        task.error_code = error_code
-        task.error_message = error_message
+        safe_error_message = redact_text(error_message)[:2000]
+        safe_error_code = error_code[:100]
+        run.error_code = safe_error_code
+        run.error_message = safe_error_message
+        task.error_code = safe_error_code
+        task.error_message = safe_error_message
         run.completed_at = now
         task.completed_at = now
         await self.session.flush()
         await self._record_event(
             task,
             "run.failed" if run.status == "failed" else "task.cancelled",
-            {"run_id": str(run.id), "status": task.status, "error_code": error_code},
+            {"run_id": str(run.id), "status": task.status, "error_code": safe_error_code},
         )
         self.audit.record(
             event_type="agent.task.run_failed" if run.status == "failed" else "agent.task.cancelled",
@@ -527,7 +530,7 @@ class AgentTaskService:
             company_id=company_id,
             resource_type="agent_task",
             resource_id=task.id,
-            metadata={"run_id": str(run.id), "error_code": error_code, "status": task.status},
+            metadata={"run_id": str(run.id), "error_code": safe_error_code, "status": task.status},
         )
         return task
 
