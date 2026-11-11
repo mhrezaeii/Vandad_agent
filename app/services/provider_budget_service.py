@@ -98,7 +98,10 @@ class ProviderBudgetService:
             ).with_for_update()
         )
         if existing is not None:
-            raise ConflictError("This provider operation already has a usage reservation; duplicate paid execution is blocked.")
+            raise ConflictError(
+                "This provider operation already has a usage reservation; "
+                "duplicate paid execution is blocked."
+            )
         if budget is None:
             if require_budget:
                 raise ConflictError("A company provider budget is required before this paid operation.")
