@@ -190,6 +190,7 @@ class ScenarioService:
         request: ScenarioRequest,
         timeout_seconds: float = 120.0,
         operation: str = "execute",
+        idempotency_key: str | None = None,
     ) -> tuple[Scenario, dict[str, Any]]:
         """Return the validated scenario plus sanitized LLM metadata."""
         system, user = build_scenario_prompt(request)
@@ -200,6 +201,7 @@ class ScenarioService:
             user=user,
             timeout_seconds=timeout_seconds,
             operation=operation,
+            idempotency_key=idempotency_key,
         )
         scenario = parse_scenario_content(metadata.get("content"), request)
         return scenario, metadata
@@ -213,6 +215,7 @@ class ScenarioService:
         user: str,
         timeout_seconds: float,
         operation: str,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         if self._llm_call is not None:
             raw = await self._llm_call(system=system, user=user)
@@ -257,7 +260,7 @@ class ScenarioService:
             timeout_seconds=timeout_seconds,
             operation=operation,
         )
-        budget_key = hashlib.sha256(
+        budget_key = idempotency_key or hashlib.sha256(
             f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode("utf-8")
         ).hexdigest()
         budget_service = ProviderBudgetService(self.session)
