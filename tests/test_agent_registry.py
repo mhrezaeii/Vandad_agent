@@ -19,7 +19,7 @@ def test_default_catalog_has_unique_keys_and_capabilities():
     }
     assert registry.find_by_capability("content.scenario.generate")[0].key == "content"
     assert registry.find_by_capability("missing.capability") == ()
-    assert all(item.dispatch_ready is False for item in definitions)
+    assert {item.key for item in definitions if item.dispatch_ready} == {"monitoring"}
 
 
 def test_registry_rejects_duplicate_keys():
@@ -41,7 +41,7 @@ async def test_company_agent_provision_is_idempotent_and_disabled_by_default(cli
     first_body = first.json()
     assert first_body["agent_key"] == "monitoring"
     assert first_body["status"] == "disabled"
-    assert first_body["definition"]["dispatch_ready"] is False
+    assert first_body["definition"]["dispatch_ready"] is True
 
     second = await client.put("/api/v1/agents/monitoring")
     assert second.status_code == 200, second.text
