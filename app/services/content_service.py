@@ -1075,6 +1075,7 @@ class ContentService:
         scope: CompanyScope,
         provider_id: str | None = None,
         task_id: uuid.UUID | None = None,
+        provider_fallbacks: list[str] | None = None,
     ) -> ContentProject:
         """Start per-scene generation, polling, download and assembly."""
         project = await self.get_project(project_id, company_id=scope.company_id)
@@ -1108,7 +1109,7 @@ class ContentService:
                 and bool(scene.get("dialogue") or scene.get("narration"))
                 for scene in scenario_scenes
             )
-            fallback_ids = options.get("provider_fallbacks", [])
+            fallback_ids = provider_fallbacks if provider_fallbacks is not None else options.get("provider_fallbacks", [])
             ordered_ids = [selected_provider]
             if isinstance(fallback_ids, list):
                 ordered_ids.extend(
