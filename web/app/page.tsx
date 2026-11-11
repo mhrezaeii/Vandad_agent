@@ -8,7 +8,7 @@ type AgentDefinition = { key: string; name: string; description: string; capabil
 type CompanyAgent = { agent_key: string; status: string; definition: AgentDefinition };
 type Task = { id: string; agent_key: string; capability: string; title: string; status: string; created_at: string; attempt_count: number; max_attempts: number; error_message?: string | null };
 type Provider = { provider_id: string; display_name: string; description: string; capabilities: string[] };
-type ProviderHealth = { provider_id: string; calls_30d: number; errors_30d: number; success_rate: number | null; average_latency_ms: number | null; last_call_at: string };
+type ProviderHealth = { provider_id: string; calls_30d: number; errors_30d: number; pending_30d: number; success_rate: number | null; average_latency_ms: number | null; last_call_at: string };
 type SceneProvider = { provider_id: string; display_name: string; requires_network: boolean; supports_lipsync: boolean; supports_reference_image: boolean; supports_cancellation: boolean; daily_quota: number | null };
 type Budget = { provider_id: string; monthly_limit_usd: string; per_operation_limit_usd: string; enabled: boolean };
 type EventItem = { id: string; sequence: number; event_type: string; payload: Record<string, unknown>; created_at: string };
@@ -554,7 +554,7 @@ export default function HomePage() {
                 {sceneProviders.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · lip-sync: {provider.supports_lipsync ? "yes" : "no"} · reference image: {provider.supports_reference_image ? "yes" : "no"}</p></div><Status value="active" /></div>)}
               </div>
               <div className="section-head section"><h2>سلامت Provider · ۳۰ روز</h2><span className="muted small">{providerHealth.length} ارائه‌دهنده</span></div>
-              <div className="list">{providerHealth.map((item) => <div className="row-item" key={item.provider_id}><div><strong dir="ltr">{item.provider_id}</strong><p>{item.calls_30d} درخواست · {item.errors_30d} خطا · موفقیت: {item.success_rate == null ? "—" : Math.round(item.success_rate * 100) + "%"} · میانگین تأخیر: {item.average_latency_ms == null ? "—" : Math.round(item.average_latency_ms) + " ms"}</p></div><Status value={item.errors_30d ? "unknown" : "settled"} /></div>)}{!providerHealth.length && <div className="empty">پس از اولین عملیات Provider، شاخص‌های سلامت ثبت‌شده نمایش داده می‌شوند.</div>}</div>
+              <div className="list">{providerHealth.map((item) => <div className="row-item" key={item.provider_id}><div><strong dir="ltr">{item.provider_id}</strong><p>{item.calls_30d} درخواست · {item.errors_30d} خطا · {item.pending_30d} در انتظار تعیین تکلیف · موفقیت: {item.success_rate == null ? "—" : Math.round(item.success_rate * 100) + "%"} · میانگین تأخیر: {item.average_latency_ms == null ? "—" : Math.round(item.average_latency_ms) + " ms"}</p></div><Status value={item.errors_30d ? "unknown" : "settled"} /></div>)}{!providerHealth.length && <div className="empty">پس از اولین عملیات Provider، شاخص‌های سلامت ثبت‌شده نمایش داده می‌شوند.</div>}</div>
               <div className="section-head section"><h2>Usage Ledger</h2><span className="muted small">{usage.length} رکورد اخیر</span></div>
               <div className="list">{usage.slice(0, 10).map((item, index) => {
                 const recordId = String(item.id || index);
