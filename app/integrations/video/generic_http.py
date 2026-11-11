@@ -341,7 +341,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
             raise SceneVideoTransientError(
                 "The provider could not be reached.", code="provider_unreachable"
             ) from exc
-        if response.status_code in (200, 201):
+        if response.status_code in (200, 201, 202):
             try:
                 return response.json()
             except ValueError as exc:
