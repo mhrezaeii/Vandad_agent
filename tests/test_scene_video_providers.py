@@ -12,6 +12,7 @@ from app.integrations.video import (
     GenericHttpSceneVideoProvider,
     MockSceneVideoProvider,
     SceneJobState,
+    SceneVideoCompositionRequest,
     SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
@@ -95,11 +96,12 @@ async def test_default_validation_rejects_non_video_bytes():
 
 
 # ---------------------------------------------------------- generic HTTP
-def _http_provider(handler) -> GenericHttpSceneVideoProvider:
+def _http_provider(handler, *, compose_path: str | None = None) -> GenericHttpSceneVideoProvider:
     config = GenericHttpConfig(
         base_url="https://video.example.test",
         generate_path="/v1/videos",
         status_path="/v1/videos/{job_id}",
+        compose_path=compose_path,
         api_key="test-secret",
         download_allowed_hosts=("cdn.example.test",),
     )
@@ -109,6 +111,49 @@ def _http_provider(handler) -> GenericHttpSceneVideoProvider:
             transport=httpx.MockTransport(handler), timeout=timeout
         ),
     )
+
+
+
+async def test_generic_http_composes_final_video_when_capability_is_configured():
+    received = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received
+        received = __import__("json").loads(request.content)
+        return httpx.Response(202, json={"id": "compose-1"})
+
+    provider = _http_provider(handler, compose_path="/v1/compose")
+    assert provider.supports_composition is True
+    request = SceneVideoCompositionRequest(
+        project_id="project-1",
+        storyboard={"title": "Campaign"},
+        scene_video_urls=("https://cdn.example.test/1.mp4", "https://cdn.example.test/2.mp4"),
+        width=1080,
+        height=1920,
+        idempotency_key="compose-idem",
+    )
+    job_id = await provider.compose_video(request)
+
+    assert job_id == "compose-1"
+    assert received["output"]["aspect_ratio"] == "9:16"
+    assert received["scene_video_urls"] == list(request.scene_video_urls)
+    assert received["idempotency_key"] == "compose-idem"
+
+
+async def test_generic_http_without_compose_path_fails_closed():
+    provider = _http_provider(lambda _request: httpx.Response(404), compose_path=None)
+    assert provider.supports_composition is False
+    request = SceneVideoCompositionRequest(
+        project_id="project-1",
+        storyboard={},
+        scene_video_urls=("https://cdn.example.test/1.mp4",),
+        width=1080,
+        height=1920,
+    )
+    with pytest.raises(SceneVideoPermanentError, match="no composition endpoint"):
+        await provider.compose_video(request)
+
+
 
 
 async def test_generic_http_submits_with_bearer_auth_and_polls():
