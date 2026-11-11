@@ -168,12 +168,34 @@ class ProviderBudgetService:
         await self.session.flush()
         return record
 
+    async def _lock_task_budget_scope(self, record: ProviderUsageRecord) -> None:
+        """Serialize settlement/reconciliation with reservations for the parent task."""
+        if record.task_id is None:
+            return
+        task = await self.session.scalar(
+            select(AgentTask).where(
+                AgentTask.id == record.task_id,
+                AgentTask.company_id == record.company_id,
+            ).with_for_update()
+        )
+        if task is None:
+            raise ConflictError("The agent task budget context is unavailable.")
+
     async def settle(
         self, record: ProviderUsageRecord | None, *,
         usage: dict[str, Any] | None = None, error_code: str | None = None,
     ) -> ProviderUsageRecord | None:
         if record is None:
             return None
+        await self._lock_task_budget_scope(record)
+        record = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.id == record.id,
+                ProviderUsageRecord.company_id == record.company_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise ConflictError("The provider usage reservation is no longer available.")
         now = datetime.now(UTC)
         if error_code:
             # A provider error may occur after the vendor accepted/billed the
@@ -206,6 +228,15 @@ class ProviderBudgetService:
         self, company_id: uuid.UUID, record_id: uuid.UUID, *,
         actual_cost_usd: Decimal, note: str, reconciled_by: str,
     ) -> ProviderUsageRecord:
+        record = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.id == record_id,
+                ProviderUsageRecord.company_id == company_id,
+            )
+        )
+        if record is None:
+            raise NotFoundError("Provider usage record not found.")
+        await self._lock_task_budget_scope(record)
         record = await self.session.scalar(
             select(ProviderUsageRecord).where(
                 ProviderUsageRecord.id == record_id,
