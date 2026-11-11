@@ -17,6 +17,7 @@ from app.schemas.agent_task import (
 from app.security.authorization import CompanyScope
 from app.services.agent_task_service import AgentTaskService
 
+
 router = APIRouter(prefix="/agent-tasks", tags=["agent-tasks"])
 
 
