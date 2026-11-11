@@ -51,6 +51,7 @@ class ScenarioRequest(BaseModel):
     character_name: str | None = Field(default=None, max_length=150)
     character_description: str | None = Field(default=None, max_length=2000)
     product_context: str | None = Field(default=None, max_length=3000)
+    platform_knowledge_context: str | None = Field(default=None, max_length=12000)
 
     @field_validator("topic")
     @classmethod
