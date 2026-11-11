@@ -73,12 +73,18 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
         self._client_factory = client_factory
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
-        duration = int(round(request.duration_seconds))
-        if not 2 <= duration <= 30:
+        raw_duration = request.duration_seconds
+        if (
+            isinstance(raw_duration, bool)
+            or not isinstance(raw_duration, (int, float))
+            or not float(raw_duration).is_integer()
+            or not 2 <= raw_duration <= 30
+        ):
             raise SceneVideoPermanentError(
                 "APIMaster Wan 3.0 requires an integer duration from 2 to 30 seconds.",
                 code="provider_invalid_duration",
             )
+        duration = int(raw_duration)
         if not request.prompt.strip() or len(request.prompt) > 5000:
             raise SceneVideoPermanentError(
                 "APIMaster requires a prompt containing 1 to 5000 characters.",

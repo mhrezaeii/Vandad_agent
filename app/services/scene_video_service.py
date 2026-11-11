@@ -25,6 +25,7 @@ from app.integrations.video import (
     SceneJobState,
     SceneVideoProvider,
     SceneVideoProviderRegistry,
+    SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
@@ -221,6 +222,7 @@ class SceneVideoService:
 
         submitted = 0
         first_transient: Exception | None = None
+        first_permanent: SceneVideoPermanentError | None = None
         scenario_scenes = (project.scenario or {}).get("scenes", [])
         presenter_indexes = {
             int(scene.get("index", -1))
@@ -278,7 +280,16 @@ class SceneVideoService:
                 await self.session.flush()
                 first_transient = first_transient or exc
                 continue
-            except Exception as exc:  # permanent / unexpected: fail this scene
+            except SceneVideoPermanentError as exc:
+                job.status = SceneVideoJobStatus.FAILED.value
+                job.error_code = exc.code
+                job.error_message = exc.message
+                await self.session.flush()
+                # Scenes are independent: preserve this failure but continue
+                # submitting the remaining scenes in the same storyboard.
+                first_permanent = first_permanent or exc
+                continue
+            except Exception as exc:  # unexpected provider failure
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = getattr(exc, "code", "provider_error")
                 job.error_message = getattr(exc, "message", str(exc))
@@ -309,6 +320,8 @@ class SceneVideoService:
         await self.session.flush()
         if first_transient is not None:
             raise first_transient
+        if first_permanent is not None:
+            raise first_permanent
         return {
             "submitted": submitted,
             "total": len(jobs),
