@@ -163,7 +163,7 @@ class ContentAgentHandler:
                 company_id=context.company_id,
                 project_id=project_id,
                 connection_id=connection_id,
-                timeout_seconds=min(float(context.payload.get("timeout_seconds", 180)), 180.0),
+                timeout_seconds=max(1.0, min(float(context.payload.get("timeout_seconds", 180)), 180.0)),
             )
             await session.commit()
             return {"capability": capability, **result}
