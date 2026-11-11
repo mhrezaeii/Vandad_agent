@@ -272,6 +272,9 @@ class ScenarioService:
             model=str(context.configuration.get("model") or "") or None,
             require_budget=True,
         )
+        # Persist the spend ceiling before crossing the provider boundary. If
+        # this process dies mid-request, the reservation remains visible.
+        await self.session.commit()
         outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
