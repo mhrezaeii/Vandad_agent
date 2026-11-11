@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -147,7 +147,7 @@ async def stream_agent_task_events(
                     )
                 )
                 if task is None:
-                    yield "event: error\\ndata: {\"code\":\"not_found\"}\\n\\n"
+                    yield "event: error\ndata: {\"code\":\"not_found\"}\n\n"
                     return
                 events = list((await session.scalars(
                     select(AgentTaskEvent).where(
@@ -167,11 +167,11 @@ async def stream_agent_task_events(
                     "payload": event.payload,
                     "created_at": event.created_at.astimezone(UTC).isoformat(),
                 }
-                yield f"id: {cursor}\\nevent: {event.event_type}\\ndata: {json.dumps(payload, ensure_ascii=False)}\\n\\n"
+                yield f"id: {cursor}\nevent: {event.event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
             if terminal and not events:
                 return
             if not events:
-                yield ": keep-alive\\n\\n"
+                yield ": keep-alive\n\n"
                 await asyncio.sleep(1)
 
     return StreamingResponse(
