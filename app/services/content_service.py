@@ -1115,6 +1115,8 @@ class ContentService:
                     str(item) for item in fallback_ids
                     if isinstance(item, str) and item and item not in ordered_ids
                 )
+            from app.integrations.video import SceneVideoProviderRegistryError
+
             try:
                 selected = self.scene_video_registry.resolve_ordered(
                     ordered_ids,
@@ -1122,7 +1124,7 @@ class ContentService:
                     require_lipsync=requires_lipsync,
                     require_reference_image=bool(options.get("requires_reference_image", False)),
                 )
-            except Exception as exc:
+            except SceneVideoProviderRegistryError as exc:
                 raise UnprocessableEntityError(
                     "No configured scene-video provider satisfies the required production capabilities.",
                     details=[{"field": "provider_id", "value": selected_provider}],
