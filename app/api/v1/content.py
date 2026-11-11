@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import company_scope
@@ -213,6 +213,19 @@ async def create_project(
         scope=scope, brand_id=payload.brand_id, topic=payload.topic
     )
     return ContentProjectRead.model_validate(project)
+
+
+@router.get("/projects", response_model=list[ContentProjectRead])
+async def list_projects(
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[ContentProjectRead]:
+    projects = await service.list_projects(
+        company_id=scope.company_id, limit=limit, offset=offset
+    )
+    return [ContentProjectRead.model_validate(project) for project in projects]
 
 
 @router.get("/projects/{project_id}", response_model=ContentProjectRead)
