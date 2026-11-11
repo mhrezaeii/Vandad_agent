@@ -181,6 +181,19 @@ async def stream_agent_task_events(
     )
 
 
+@router.post("/{task_id}/approve", response_model=AgentTaskRead)
+async def approve_agent_task(
+    task_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[AgentTaskService, Depends(get_agent_task_service)],
+) -> AgentTaskRead:
+    task = await service.approve_task(
+        scope.company_id, task_id, approved_by=scope.principal.subject
+    )
+    await service.session.refresh(task)
+    return _task_read(task, service.registry)
+
+
 @router.post("/{task_id}/cancel", response_model=AgentTaskRead)
 async def cancel_agent_task(
     task_id: uuid.UUID,
