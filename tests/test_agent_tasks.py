@@ -8,7 +8,7 @@ import pytest
 from app.agents import AgentRegistry
 from app.agents.definitions import AgentDefinition
 from app.core.exceptions import ConflictError
-from app.models import Company, CompanyAgent
+from app.models import AgentTaskOutbox, Company, CompanyAgent
 from app.services.agent_task_service import AgentTaskService
 
 
@@ -56,6 +56,54 @@ async def test_task_creation_requires_active_agent_and_is_idempotent(client):
         json=_task_payload(title="A different request"),
     )
     assert changed.status_code == 409
+
+
+async def test_task_progress_events_are_persisted_and_company_scoped(client):
+    await _activate_agent(client)
+    created = await client.post("/api/v1/agent-tasks", json=_task_payload())
+    task_id = created.json()["id"]
+
+    initial = await client.get(f"/api/v1/agent-tasks/{task_id}/events")
+    assert initial.status_code == 200
+    assert [event["event_type"] for event in initial.json()] == ["task.created"]
+
+    cancelled = await client.post(f"/api/v1/agent-tasks/{task_id}/cancel")
+    assert cancelled.status_code == 200
+    history = await client.get(f"/api/v1/agent-tasks/{task_id}/events")
+    assert [event["event_type"] for event in history.json()] == [
+        "task.created",
+        "task.cancel_requested",
+    ]
+
+
+async def test_video_task_requires_approval_before_outbox_dispatch(client, db_session):
+    await _activate_agent(client, "video")
+    payload = _task_payload(
+        agent_key="video",
+        capability="video.scene.generate",
+        title="Generate approved scene video",
+        input_payload={"project_id": str(uuid.uuid4())},
+        idempotency_key=f"video-{uuid.uuid4()}",
+    )
+    created = await client.post("/api/v1/agent-tasks", json=payload)
+    assert created.status_code == 202, created.text
+    body = created.json()
+    assert body["status"] == "awaiting_approval"
+
+    outbox_before = await db_session.scalar(
+        select(AgentTaskOutbox).where(AgentTaskOutbox.task_id == uuid.UUID(body["id"]))
+    )
+    assert outbox_before is None
+
+    approved = await client.post(f"/api/v1/agent-tasks/{body['id']}/approve")
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "queued"
+
+    outbox_after = await db_session.scalar(
+        select(AgentTaskOutbox).where(AgentTaskOutbox.task_id == uuid.UUID(body["id"]))
+    )
+    assert outbox_after is not None
+    assert outbox_after.status == "pending"
 
 
 async def test_task_rejects_unregistered_capability(client):
