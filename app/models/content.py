@@ -38,6 +38,7 @@ class ContentBrand(Base, TimestampMixin):
     __tablename__ = "content_brands"
     __table_args__ = (
         UniqueConstraint("company_id", "name", name="uq_content_brands_company_name"),
+        UniqueConstraint("id", "company_id", name="uq_content_brands_id_company"),
         CheckConstraint("status IN ('active', 'archived')", name="status_valid"),
     )
 
