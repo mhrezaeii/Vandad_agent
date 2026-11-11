@@ -349,7 +349,9 @@ class SceneVideoService:
             status = await provider.get_generation_status(job.provider_job_id)
             job.provider_status = status.state
             job.progress = status.progress
-            reported_cost = parse_reported_cost(status.raw or {})
+            raw_usage = (status.raw or {}).get("usage")
+            reported_cost = parse_reported_cost(raw_usage) if isinstance(raw_usage, dict) else None
+            reported_cost = reported_cost or parse_reported_cost(status.raw or {})
             if reported_cost is not None:
                 job.cost_metadata = {
                     **(job.cost_metadata or {}),
@@ -480,6 +482,7 @@ class SceneVideoService:
             job.artifact_id = artifact.id
             job.status = SceneVideoJobStatus.DOWNLOADED.value
             job.cost_metadata = {
+                **(job.cost_metadata or {}),
                 "provider": provider.provider_id,
                 "provider_job_id": job.provider_job_id,
                 "size_bytes": artifact.size_bytes,
