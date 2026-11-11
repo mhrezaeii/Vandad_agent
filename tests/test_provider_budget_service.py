@@ -72,6 +72,38 @@ async def test_unknown_provider_cost_remains_reserved(db_session):
     assert reservation.reserved_amount_usd == Decimal("1.000000")
 
 
+async def test_ambiguous_provider_failure_keeps_reservation_and_safe_telemetry(db_session):
+    company = Company(name="Failed Usage", slug=f"failed-usage-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        company.id,
+        "llm_openai",
+        monthly_limit_usd=Decimal("3.00"),
+        per_operation_limit_usd=Decimal("1.00"),
+    )
+    reservation = await service.reserve(
+        company.id,
+        "llm_openai",
+        "scenario",
+        idempotency_key=f"failed-{uuid.uuid4()}",
+        require_budget=True,
+    )
+    await service.settle(
+        reservation,
+        error_code="provider_timeout",
+        usage={"latency_ms": 245, "attempts": 3, "api_key": "never-store"},
+    )
+    assert reservation.status == "unknown"
+    assert reservation.reserved_amount_usd == Decimal("1.000000")
+    assert reservation.usage_payload == {
+        "latency_ms": 245,
+        "attempts": 3,
+        "provider_error_code": "provider_timeout",
+    }
+
+
 async def test_budget_rejects_spend_above_monthly_limit(db_session):
     company = Company(name="Budget Limit", slug=f"budget-limit-{uuid.uuid4().hex[:8]}")
     db_session.add(company)
