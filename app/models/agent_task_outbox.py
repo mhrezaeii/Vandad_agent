@@ -4,7 +4,18 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +26,8 @@ from app.models.mixins import TimestampMixin
 class AgentTaskOutbox(Base, TimestampMixin):
     __tablename__ = "agent_task_outbox"
     __table_args__ = (
+        CheckConstraint("status IN ('pending', 'processing', 'delivered')", name="status_valid"),
+        CheckConstraint("attempt_number >= 1 AND delivery_attempts >= 0", name="attempts_valid"),
         ForeignKeyConstraint(
             ["task_id", "company_id"],
             ["agent_tasks.id", "agent_tasks.company_id"],
@@ -32,7 +45,9 @@ class AgentTaskOutbox(Base, TimestampMixin):
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

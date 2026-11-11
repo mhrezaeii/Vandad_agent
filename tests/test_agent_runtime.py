@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.agents import build_default_agent_registry
-from app.agents.runtime import AgentDispatcher, AgentExecutionContext, MonitoringAgentHandler
+from app.agents.runtime import AgentDispatcher, AgentExecutionContext
 from app.core.exceptions import ConflictError
 from app.models import AgentTask, AgentTaskOutbox, CompanyAgent
 from app.services.agent_task_service import AgentTaskService

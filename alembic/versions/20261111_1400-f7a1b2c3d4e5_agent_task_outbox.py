@@ -33,6 +33,14 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.CheckConstraint(
+            "status IN ('pending', 'processing', 'delivered')",
+            name=op.f("ck_agent_task_outbox_status_valid"),
+        ),
+        sa.CheckConstraint(
+            "attempt_number >= 1 AND delivery_attempts >= 0",
+            name=op.f("ck_agent_task_outbox_attempts_valid"),
+        ),
         sa.ForeignKeyConstraint(
             ["task_id", "company_id"], ["agent_tasks.id", "agent_tasks.company_id"],
             ondelete="CASCADE", name="fk_agent_task_outbox_task_company",

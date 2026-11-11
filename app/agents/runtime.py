@@ -1,9 +1,9 @@
 """Agent execution contracts, handler registry and dispatcher."""
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
-import uuid
 
 from app.agents import AgentRegistry
 from app.core.exceptions import ConflictError, NotFoundError

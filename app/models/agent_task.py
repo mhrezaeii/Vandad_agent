@@ -28,7 +28,6 @@ from app.database.base import Base
 from app.models.mixins import TimestampMixin
 
 
-
 class AgentTaskStatus(enum.StrEnum):
     PENDING = "pending"
     QUEUED = "queued"
