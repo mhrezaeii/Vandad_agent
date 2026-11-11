@@ -75,3 +75,15 @@ class AgentTaskRunRead(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class AgentTaskEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    task_id: uuid.UUID
+    company_id: uuid.UUID
+    sequence: int
+    event_type: str
+    payload: dict[str, Any]
+    created_at: datetime
