@@ -88,7 +88,9 @@ class ContentScenarioService:
             )
         )).all())
         if not platform_ids:
-            raise ConflictError(\n                "Link at least one monitored platform to this brand before generating a scenario."\n            )
+            raise ConflictError(
+                "Link at least one monitored platform to this brand before generating a scenario."
+            )
 
         snapshots = list((await self.session.scalars(
             select(PlatformKnowledgeSnapshot)
@@ -102,7 +104,9 @@ class ContentScenarioService:
         for snapshot in snapshots:
             latest_by_platform.setdefault(str(snapshot.platform_id), snapshot)
         if not latest_by_platform:
-            raise ConflictError(\n                "No verified platform knowledge snapshot exists for the linked brand platforms."\n            )
+            raise ConflictError(
+                "No verified platform knowledge snapshot exists for the linked brand platforms."
+            )
 
         knowledge_context = self._build_knowledge_context(latest_by_platform.values())
         cta_config = brand.cta_config or {}
@@ -196,7 +200,9 @@ class ContentScenarioService:
             if len(encoded) <= 11000:
                 return encoded
             compact.pop()
-        raise ConflictError(\n            "Linked platform knowledge could not be compacted into a usable context."\n        )
+        raise ConflictError(
+            "Linked platform knowledge could not be compacted into a usable context."
+        )
 
     @staticmethod
     def _result(project: ContentProject, *, replayed: bool) -> dict[str, Any]:
