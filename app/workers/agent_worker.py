@@ -16,12 +16,16 @@ from app.agents.runtime import (
     AgentExecutionContext,
     ContentAgentHandler,
     MonitoringAgentHandler,
+    VideoProductionAgentHandler,
 )
 from app.api.deps import build_provider_executor
 from app.core.config import get_settings
+from app.core.queue import WorkflowQueue
+from app.core.redis import RedisConnectionManager
 from app.core.exceptions import ConflictError
 from app.database.session import create_engine, create_session_factory
 from app.integrations.providers import build_default_registry
+from app.integrations.video.factory import build_video_registry_from_settings
 from app.models import AgentTask, AgentTaskOutbox, AgentTaskRun
 from app.security.crypto import MasterKeyBox
 from app.services.agent_task_service import AgentTaskService
@@ -42,9 +46,17 @@ class AgentTaskWorker:
         self.agent_registry = build_default_agent_registry()
         self.provider_registry = build_default_registry()
         self.provider_executor = build_provider_executor(self.settings)
+        self.scene_video_registry = build_video_registry_from_settings(self.settings)
+        self.redis_manager = RedisConnectionManager(
+            self.settings.redis_url,
+            socket_timeout=self.settings.redis_socket_timeout,
+            socket_connect_timeout=self.settings.redis_socket_connect_timeout,
+            max_connections=self.settings.redis_max_connections,
+        )
+        self.workflow_queue = None
         self.master_key_box = MasterKeyBox.from_settings(self.settings)
         self.dispatcher = AgentDispatcher(
-            self.agent_registry, [MonitoringAgentHandler(), ContentAgentHandler()]
+            self.agent_registry, [MonitoringAgentHandler(), ContentAgentHandler(), VideoProductionAgentHandler()]
         )
         self.stopping = asyncio.Event()
         self.inflight: set[asyncio.Task] = set()
@@ -57,6 +69,12 @@ class AgentTaskWorker:
                 loop.add_signal_handler(sig, self.stopping.set)
             except NotImplementedError:
                 signal.signal(sig, lambda *_: self.stopping.set())
+        try:
+            await self.redis_manager.initialize()
+            if self.redis_manager.client is not None:
+                self.workflow_queue = WorkflowQueue(self.redis_manager.client)
+        except Exception as exc:
+            logger.warning("workflow queue unavailable for video agent dispatch: %s", type(exc).__name__)
         logger.info("agent worker %s started (concurrency=%d)", self.worker_id, self.concurrency)
         consumers = [asyncio.create_task(self._consume(index)) for index in range(self.concurrency)]
         recovery = asyncio.create_task(self._recover_stale_runs())
@@ -78,6 +96,7 @@ class AgentTaskWorker:
                 for task in pending:
                     task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
+        await self.redis_manager.close()
         await self.engine.dispose()
         logger.info("agent worker %s stopped", self.worker_id)
 
@@ -231,6 +250,8 @@ class AgentTaskWorker:
                 master_key_box=self.master_key_box,
                 cancel_event=cancel_event,
                 progress_callback=persist_progress,
+                workflow_queue=self.workflow_queue,
+                scene_video_registry=self.scene_video_registry,
             )
             result = await self.dispatcher.dispatch(agent_key, capability, context)
             context.raise_if_cancelled()
