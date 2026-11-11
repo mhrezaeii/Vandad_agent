@@ -16,9 +16,9 @@ from app.integrations.video import (
     SceneJobState,
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
+    SceneVideoProviderRegistryError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
-    SceneVideoProviderRegistryError,
     SceneVideoTransientError,
     build_scene_video_registry,
 )
