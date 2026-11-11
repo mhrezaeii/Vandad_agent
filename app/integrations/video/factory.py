@@ -22,6 +22,7 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             generate_path=getattr(settings, "scene_video_http_generate_path", "/v1/videos"),
             status_path=getattr(settings, "scene_video_http_status_path", "/v1/videos/{job_id}"),
             retrieve_path=getattr(settings, "scene_video_http_retrieve_path", None),
+            compose_path=getattr(settings, "scene_video_http_compose_path", None),
             api_key=getattr(settings, "scene_video_http_api_key", None),
             auth_header=getattr(settings, "scene_video_http_auth_header", "Authorization"),
             auth_scheme=getattr(settings, "scene_video_http_auth_scheme", "Bearer"),
