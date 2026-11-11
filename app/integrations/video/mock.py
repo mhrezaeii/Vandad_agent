@@ -18,8 +18,8 @@ from app.integrations.video.base import (
     InMemorySceneVideoProvider,
     SceneGenerationStatus,
     SceneJobState,
-    SceneVideoPermanentError,
     SceneVideoCompositionRequest,
+    SceneVideoPermanentError,
     SceneVideoRequest,
 )
 
