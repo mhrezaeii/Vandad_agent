@@ -76,7 +76,7 @@ export default function HomePage() {
       api<Budget[]>("/providers/budgets"),
       api<Record<string, unknown>[]>("/providers/usage?limit=50"),
       api<Brand[]>("/content/brands"),
-      api<Platform[]>("/platforms"),
+      api<{ items: Platform[] }>("/platforms"),
     ] as const);
     const [catalogResult, agentsResult, tasksResult, providersResult, sceneProvidersResult, budgetsResult, usageResult, brandsResult, platformsResult] = results;
     if (catalogResult.status === "fulfilled") setCatalog(catalogResult.value.items || []);
@@ -87,7 +87,7 @@ export default function HomePage() {
     if (budgetsResult.status === "fulfilled") setBudgets(budgetsResult.value || []);
     if (usageResult.status === "fulfilled") setUsage(usageResult.value || []);
     if (brandsResult.status === "fulfilled") setBrands(brandsResult.value || []);
-    if (platformsResult.status === "fulfilled") setPlatforms(platformsResult.value || []);
+    if (platformsResult.status === "fulfilled") setPlatforms(platformsResult.value.items || []);
     const failures = results.filter((item) => item.status === "rejected");
     if (failures.length === results.length) setError("ارتباط با API برقرار نشد. آدرس Backend و دسترسی شرکت را بررسی کنید.");
     else if (failures.length) setNotice("بخشی از اطلاعات در دسترس نبود؛ سایر بخش‌ها بارگذاری شدند.");
