@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.exceptions import ConflictError
-from app.models import Company
+from app.models import Company, ProviderUsageRecord
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 
 
@@ -213,3 +213,52 @@ async def test_unknown_usage_can_be_audited_and_reconciled(db_session):
     assert reconciled.actual_cost_usd == Decimal("3.75")
     assert reconciled.reserved_amount_usd == Decimal("0")
     assert reconciled.usage_payload["operator_reconciled"] is True
+
+
+
+async def test_provider_telemetry_is_company_scoped_and_aggregates_latency(db_session):
+    owner = Company(name="Telemetry Owner", slug=f"telemetry-owner-{uuid.uuid4().hex[:8]}")
+    stranger = Company(name="Telemetry Stranger", slug=f"telemetry-stranger-{uuid.uuid4().hex[:8]}")
+    db_session.add_all([owner, stranger])
+    await db_session.flush()
+    db_session.add_all([
+        ProviderUsageRecord(
+            company_id=owner.id,
+            provider_id="llm_openai",
+            operation="scenario",
+            status="settled",
+            idempotency_key=f"telemetry-ok-{uuid.uuid4()}",
+            reserved_amount_usd=Decimal("0"),
+            actual_cost_usd=Decimal("0.25"),
+            usage_payload={"latency_ms": 120, "attempts": 1},
+        ),
+        ProviderUsageRecord(
+            company_id=owner.id,
+            provider_id="llm_openai",
+            operation="scenario",
+            status="unknown",
+            idempotency_key=f"telemetry-error-{uuid.uuid4()}",
+            reserved_amount_usd=Decimal("1.00"),
+            usage_payload={"latency_ms": 300, "attempts": 2},
+            error_code="provider_timeout",
+        ),
+        ProviderUsageRecord(
+            company_id=stranger.id,
+            provider_id="llm_openai",
+            operation="scenario",
+            status="settled",
+            idempotency_key=f"telemetry-foreign-{uuid.uuid4()}",
+            reserved_amount_usd=Decimal("0"),
+            actual_cost_usd=Decimal("0.10"),
+            usage_payload={"latency_ms": 10},
+        ),
+    ])
+    await db_session.flush()
+
+    metrics = await ProviderBudgetService(db_session).telemetry(owner.id)
+    assert len(metrics) == 1
+    assert metrics[0]["provider_id"] == "llm_openai"
+    assert metrics[0]["calls_30d"] == 2
+    assert metrics[0]["errors_30d"] == 1
+    assert metrics[0]["success_rate"] == 0.5
+    assert metrics[0]["average_latency_ms"] == 210.0
