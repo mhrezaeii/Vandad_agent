@@ -183,6 +183,10 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == "production"
 
+    @property
+    def requires_proxy_auth(self) -> bool:
+        return self.environment in {"staging", "production"}
+
 
 @lru_cache
 def get_settings() -> Settings:
