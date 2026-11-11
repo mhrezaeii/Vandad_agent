@@ -195,7 +195,7 @@ class ProviderBudgetService:
         record.usage_payload = {
             **(record.usage_payload or {}),
             "operator_reconciled": True,
-            "reconciliation_note": note[:500],
+            "reconciliation_note": redact_text(note)[:500],
         }
         await self.session.flush()
         self.audit.record(
@@ -209,7 +209,7 @@ class ProviderBudgetService:
             metadata={
                 "provider_id": record.provider_id,
                 "actual_cost_usd": str(actual_cost_usd),
-                "note": note[:500],
+                "note": redact_text(note)[:500],
             },
         )
         return record
