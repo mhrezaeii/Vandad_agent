@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
-from app.models import ActorType, CompanyProviderBudget, ProviderUsageRecord
+from app.models import ActorType, AgentTask, CompanyProviderBudget, ProviderUsageRecord
 from app.security.redaction import redact_text
 from app.services.audit_service import AuditService
 
@@ -69,7 +69,19 @@ class ProviderBudgetService:
     async def reserve(
         self, company_id: uuid.UUID, provider_id: str, operation: str, *,
         idempotency_key: str, model: str | None = None, require_budget: bool = False,
+        task_id: uuid.UUID | None = None,
     ) -> ProviderUsageRecord | None:
+        task = None
+        if task_id is not None:
+            task = await self.session.scalar(
+                select(AgentTask).where(
+                    AgentTask.id == task_id,
+                    AgentTask.company_id == company_id,
+                ).with_for_update()
+            )
+            if task is None:
+                raise ConflictError("The agent task budget context is unavailable.")
+
         existing = await self.session.scalar(
             select(ProviderUsageRecord).where(
                 ProviderUsageRecord.company_id == company_id,
@@ -124,6 +136,20 @@ class ProviderBudgetService:
             for row in rows
         )
         ceiling = budget.per_operation_limit_usd
+        if task is not None and task.spend_ceiling_usd is not None:
+            task_rows = list((await self.session.scalars(
+                select(ProviderUsageRecord).where(
+                    ProviderUsageRecord.company_id == company_id,
+                    ProviderUsageRecord.task_id == task_id,
+                    ProviderUsageRecord.status.in_(("reserved", "settled", "unknown")),
+                )
+            )).all())
+            task_committed = sum(
+                (row.actual_cost_usd if row.actual_cost_usd is not None else row.reserved_amount_usd)
+                for row in task_rows
+            )
+            if task_committed + ceiling > task.spend_ceiling_usd:
+                raise ConflictError("The provider operation exceeds the remaining agent task spend ceiling.")
         if ceiling <= 0 or committed + ceiling > budget.monthly_limit_usd:
             raise ConflictError("The provider operation exceeds the remaining monthly budget.")
 
@@ -134,6 +160,7 @@ class ProviderBudgetService:
             model=model,
             status="reserved",
             idempotency_key=idempotency_key,
+            task_id=task_id,
             reserved_amount_usd=ceiling,
             usage_payload={"budget_reservation": "per_operation_ceiling_usd"},
         )
