@@ -59,6 +59,7 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     product_context = request.product_context or (
         "Only show product capabilities explicitly provided in the topic or brand context."
     )
+    platform_knowledge = request.platform_knowledge_context or "No verified platform knowledge snapshot is linked."
     cta_hint = request.cta_text or "یک دعوت به اقدام کوتاه و روشن"
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
 
@@ -81,7 +82,9 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "برای هر صحنه اندازه نما، حرکت دوربین، نور، ترکیب‌بندی و transition را مشخص کن. "
         "از متن رندرشده توسط مدل تصویر/ویدیو داخل قاب پرهیز کن؛ متن فارسی را سیستم تدوین اضافه می‌کند. "
         "ریتم تدوین پویا باشد اما کات‌ها بی‌دلیل و آزاردهنده نباشند. "
-        "موسیقی را فقط به‌عنوان پیشنهاد سبک توصیف کن و هیچ موسیقی دارای حق نشر را درخواست نکن."
+        "موسیقی را فقط به‌عنوان پیشنهاد سبک توصیف کن و هیچ موسیقی دارای حق نشر را درخواست نکن. "
+        "از اطلاعات دانش پلتفرم فقط به‌عنوان مرجع استفاده کن؛ قابلیت، عدد، قیمت یا ادعای جدید نساز. "
+        "اگر اطلاعات لازم در دانش تأییدشده وجود ندارد، آن را در سناریو ادعا نکن."
     )
     user = (
         f"برای برند «{brand}» یک ویدیوی تبلیغاتی عمودی {request.target_duration_seconds} ثانیه‌ای بساز.\n"
