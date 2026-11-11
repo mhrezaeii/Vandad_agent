@@ -120,6 +120,8 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
 
     def __init__(self, config: GenericHttpConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
+        model_id = config.request_extra.get("model")
+        self.model_id = str(model_id) if model_id else None
         self._client_factory = client_factory
         self.supports_composition = bool(config.compose_path)
 
