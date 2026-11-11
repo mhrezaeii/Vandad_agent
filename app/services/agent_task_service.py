@@ -18,6 +18,7 @@ from app.core.exceptions import ConflictError, NotFoundError, UnprocessableEntit
 from app.models import ActorType, AgentTask, AgentTaskEvent, AgentTaskOutbox, AgentTaskRun, CompanyAgent
 from app.models.agent_task import AgentTaskStatus
 from app.services.audit_service import AuditService
+from app.security.redaction import redact_mapping
 
 
 class AgentTaskService:
@@ -29,18 +30,51 @@ class AgentTaskService:
     async def _record_event(
         self, task: AgentTask, event_type: str, payload: dict[str, Any] | None = None
     ) -> AgentTaskEvent:
+        allowed_events = {
+            "task.created", "task.cancel_requested", "task.approved", "task.requeued",
+            "run.started", "run.completed", "run.failed", "task.cancelled", "progress",
+        }
+        if event_type not in allowed_events:
+            raise ValueError("Unsupported agent task event type.")
+
+        # Lock the parent task before allocating the next sequence. This makes
+        # concurrent lifecycle and progress writers serialize per task.
+        locked_task_id = await self.session.scalar(
+            select(AgentTask.id).where(
+                AgentTask.id == task.id, AgentTask.company_id == task.company_id
+            ).with_for_update()
+        )
+        if locked_task_id is None:
+            raise NotFoundError("Agent task not found while recording an event.")
+
         current = await self.session.scalar(
             select(func.coalesce(func.max(AgentTaskEvent.sequence), 0)).where(
                 AgentTaskEvent.task_id == task.id,
                 AgentTaskEvent.company_id == task.company_id,
             )
         )
+        safe_source = redact_mapping(payload or {})
+        allowed_fields = {
+            "status", "agent_key", "capability", "cancel_requested", "run_id",
+            "attempt", "error_code", "stage", "project_id", "workflow_execution_id",
+            "provider_id", "cost_status", "snapshot_id", "available_after_seconds",
+        }
+        safe_payload: dict[str, Any] = {}
+        for key, value in safe_source.items():
+            if key not in allowed_fields:
+                continue
+            if isinstance(value, str):
+                safe_payload[key] = value[:300]
+            elif isinstance(value, bool) or value is None or isinstance(value, int):
+                safe_payload[key] = value
+            elif isinstance(value, float) and value == value and abs(value) != float("inf"):
+                safe_payload[key] = value
         event = AgentTaskEvent(
             task_id=task.id,
             company_id=task.company_id,
             sequence=int(current or 0) + 1,
             event_type=event_type,
-            payload=payload or {},
+            payload=safe_payload,
         )
         self.session.add(event)
         await self.session.flush()
@@ -360,7 +394,7 @@ class AgentTaskService:
             company_id=company_id,
             attempt_number=attempt,
             status="running",
-            input_snapshot=dict(task.input_payload),
+            input_snapshot=redact_mapping(task.input_payload),
             worker_id=worker_id,
             started_at=now,
             heartbeat_at=now,
