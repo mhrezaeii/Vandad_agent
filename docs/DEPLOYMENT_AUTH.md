@@ -31,7 +31,7 @@ If a user belongs to multiple companies, the browser must send \`X-Company-ID\` 
 3. Inject the four trusted headers above only after successful authentication.
 4. Inject \`X-Auth-Proxy-Secret\` server-side. Never expose the secret to browser JavaScript, HTML, source maps or frontend environment variables.
 5. Restrict direct network access to the API so callers cannot bypass the proxy.
-6. Use HTTPS between browser and proxy; prefer private networking or TLS between proxy and API.
+6. Use HTTPS between browser and proxy; prefer private networking or TLS between proxy and API. Set the proxy session cookie to `HttpOnly`, `Secure` and `SameSite=Lax` (or stricter where deployment topology allows).
 7. Do not pass user-controlled company IDs or roles through unchanged. Resolve them from the identity provider or a trusted membership service.
 
 The frontend sends same-site session cookies with API and SSE requests. Keep the UI and API on the same site where possible. If cross-origin deployment is required, configure exact CORS origins and credential support; never use wildcard origins with credentials.
