@@ -146,7 +146,7 @@ def get_principal(request: Request) -> Principal:
 
     configured_secret = settings.auth_proxy_shared_secret
     supplied_secret = request.headers.get("X-Auth-Proxy-Secret", "")
-    if configured_secret is None or not hmac.compare_digest(
+    if configured_secret is None or not configured_secret.get_secret_value() or not hmac.compare_digest(
         supplied_secret, configured_secret.get_secret_value()
     ):
         raise UnauthorizedError()
