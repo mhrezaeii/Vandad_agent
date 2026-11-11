@@ -2,6 +2,7 @@
 ``app.database.base.Base.metadata`` (required by Alembic)."""
 
 from app.models.audit_event import ActorType, AuditEvent
+from app.models.agent_task import AgentTask, AgentTaskRun
 from app.models.brand_platform_link import BrandPlatformLink
 from app.models.company import Company, CompanyStatus
 from app.models.company_agent import CompanyAgent
@@ -55,6 +56,8 @@ __all__ = [
     "ActorType",
     "ArtifactKind",
     "AuditEvent",
+    "AgentTask",
+    "AgentTaskRun",
     "BrandCharacter",
     "BrandPlatformLink",
     "Company",

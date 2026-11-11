@@ -65,6 +65,8 @@ from app.security.crypto import MasterKeyBox  # noqa: E402
 
 TABLES = (
     "audit_events",
+    "agent_task_runs",
+    "agent_tasks",
     "company_agents",
     "connection_events",
     "credential_versions",

@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.agents import router as agents_router
+from app.api.v1.agent_tasks import router as agent_tasks_router
 from app.api.v1.artifacts import artifact_router as artifacts_router
 from app.api.v1.artifacts import router as execution_artifacts_router
 from app.api.v1.connections import router as connections_router
@@ -17,6 +18,7 @@ from app.api.v1.workflows import router as workflows_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(agents_router)
+api_v1_router.include_router(agent_tasks_router)
 api_v1_router.include_router(health_router, prefix="/health")
 api_v1_router.include_router(platforms_router)
 api_v1_router.include_router(platform_discovery_router)
