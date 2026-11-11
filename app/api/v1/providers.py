@@ -7,9 +7,22 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.deps import company_scope, get_principal, get_provider_registry, require_company_admin
+from app.api.deps import (
+    company_scope,
+    get_principal,
+    get_provider_registry,
+    require_company_admin,
+)
 from app.integrations.providers import ProviderRegistry, UnknownProviderError
-from app.schemas.provider import ProviderBudgetRead, ProviderBudgetUpsert, ProviderHealthRead, ProviderRead, ProviderUsageRead, ProviderUsageReconcile, SceneVideoProviderRead
+from app.schemas.provider import (
+    ProviderBudgetRead,
+    ProviderBudgetUpsert,
+    ProviderHealthRead,
+    ProviderRead,
+    ProviderUsageRead,
+    ProviderUsageReconcile,
+    SceneVideoProviderRead,
+)
 from app.services.provider_budget_service import ProviderBudgetService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
