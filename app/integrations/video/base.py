@@ -124,6 +124,19 @@ def _looks_like_video(data: bytes) -> bool:
     return data[0:1] == b"\x00" and b"mdat" in data[:4096]
 
 
+@dataclass(frozen=True)
+class SceneVideoCompositionRequest:
+    """AI-native composition request for a complete storyboard video."""
+
+    project_id: str
+    storyboard: dict[str, Any]
+    scene_video_urls: tuple[str, ...]
+    width: int
+    height: int
+    brand_context: dict[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
+
+
 class SceneVideoProvider(ABC):
     """Abstract scene-video provider.
 
@@ -143,6 +156,17 @@ class SceneVideoProvider(ABC):
         """Submit one scene and return the provider job id."""
 
     @abstractmethod
+    async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
+        """Submit AI-provider editing/composition and return its persisted job id.
+
+        Providers that only generate isolated clips must fail closed rather than
+        silently falling back to local FFmpeg composition.
+        """
+        raise SceneVideoPermanentError(
+            "This AI provider does not support storyboard video composition.",
+            code="provider_composition_unsupported",
+        )
+
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         """Return the normalised status for a previously submitted job."""
 
