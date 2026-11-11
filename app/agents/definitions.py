@@ -48,5 +48,6 @@ BUILTIN_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
         description="تولید صحنه، مدیریت کاراکتر و مونتاژ خروجی ویدیویی.",
         capabilities=("video.avatar.manage", "video.scene.generate", "video.assemble"),
         maturity="partial",
+        dispatch_ready=True,
     ),
 )
