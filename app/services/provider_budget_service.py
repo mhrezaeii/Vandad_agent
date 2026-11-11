@@ -154,6 +154,21 @@ class ProviderBudgetService:
         await self.session.flush()
         return record
 
+    async def assert_budget_enabled(
+        self, company_id: uuid.UUID, provider_id: str
+    ) -> CompanyProviderBudget:
+        budget = await self.session.scalar(
+            select(CompanyProviderBudget).where(
+                CompanyProviderBudget.company_id == company_id,
+                CompanyProviderBudget.provider_id == provider_id,
+            )
+        )
+        if budget is None or not budget.enabled:
+            raise ConflictError(
+                "A company provider budget must be configured and enabled before this paid operation."
+            )
+        return budget
+
     async def set_budget(
         self, company_id: uuid.UUID, provider_id: str, *,
         monthly_limit_usd: Decimal, per_operation_limit_usd: Decimal, enabled: bool = True,
