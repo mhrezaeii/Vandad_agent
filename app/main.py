@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agents import build_default_agent_registry
+
 from app.api import api_router
 from app.api.deps import build_provider_executor
 from app.core.config import Settings, get_settings
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     master_key_box = MasterKeyBox.from_settings(settings)
     logger.info("credential master keys loaded (active version %d)", master_key_box.active_key_version)
 
+    agent_registry = build_default_agent_registry()
     provider_registry = build_default_registry()
     provider_executor = build_provider_executor(settings)
     scene_video_registry = build_video_registry_from_settings(settings)
@@ -80,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis_manager = redis_manager
     app.state.settings = settings
     app.state.master_key_box = master_key_box
+    app.state.agent_registry = agent_registry
     app.state.provider_registry = provider_registry
     app.state.provider_executor = provider_executor
     app.state.scene_video_registry = scene_video_registry
