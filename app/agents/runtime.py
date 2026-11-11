@@ -274,7 +274,7 @@ class VideoProductionAgentHandler:
             # agent-task acknowledgement. Return the existing execution instead
             # of submitting a second paid render on recovery.
             if project.video_workflow_execution_id is not None and project.status in {
-                "video_generating", "video_generation_pending", "video_generated", "completed"
+                "video_generating", "video_generation_pending", "video_generated", "assembling", "completed"
             }:
                 return {
                     "capability": capability,
