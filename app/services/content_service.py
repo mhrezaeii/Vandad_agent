@@ -1430,7 +1430,7 @@ class ContentService:
         reservation = None
         if operation in billable_operations:
             budget_key = hashlib.sha256(
-                f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode("utf-8")
+                f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode()
             ).hexdigest()
             reservation = await budget_service.reserve(
                 company_id,
