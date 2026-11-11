@@ -22,10 +22,11 @@ FastAPI API / authentication / company scope
         |       +--> Agent Task API
         |                 |
         |                 v
-        |           Orchestrator / Dispatcher  [NOT IMPLEMENTED]
+        |           Agent Task Dispatcher [IMPLEMENTED]
         |                 |
-        |                 +--> Agent Handlers [NOT IMPLEMENTED]
-        |                 +--> Tool/Capability Router [NOT IMPLEMENTED]
+        |                 +--> Monitoring Handler [IMPLEMENTED]
+        |                 +--> Content Scenario Handler [IMPLEMENTED]
+        |                 +--> Tool/Capability Router [NEXT]
         |                 +--> Approval Policies [PARTIAL]
         |
         +--> Workflow API / Workflow Engine
@@ -60,7 +61,7 @@ These are two different levels of abstraction:
 - An **agent task** is a company-scoped request to accomplish a capability-oriented outcome. It has an idempotency key, priority, attempt budget, cancellation state and run history.
 - An agent task may eventually invoke one or more workflows/tools, but it must not be silently treated as a workflow execution without an explicit orchestration contract.
 
-Current state: task creation and lifecycle persistence exist on the stacked agent-task branch, but dispatch is intentionally disabled. There is no real agent-task consumer, handler registry, planner or dispatcher in that branch. Keep `dispatch_ready=False` until an agent has an actual handler and the full execution path is covered by tests.
+Current state on `feature/monitoring-to-knowledge-pipeline`: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owned dispatcher, Monitoring and Content scenario handlers exist. Only agents with real registered handlers and verified end-to-end coverage may be dispatch-ready. Worker reliability hardening is being validated on the production-hardening branch.
 
 ### Provider adapters
 
@@ -94,10 +95,11 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 | Platform connections and credential boundary | Implemented foundation | Secrets must remain outside ordinary model/config output |
 | Platform discovery and knowledge extraction | Implemented foundation / stacked PRs | Validate source provenance and refresh behavior |
 | Brand and content workflows | Implemented foundation | Vandefence is the initial seeded brand, not a hard-coded tenant limit |
-| Workflow graph runtime and worker | Implemented | This is the only verified background execution path in main |
-| Agent catalog and company enablement | Stacked PR | Definitions are code-owned; company rows only enable approved agents |
-| Agent task/run persistence | Stacked PR | Does not dispatch work yet |
-| Agent orchestrator and handler execution | Not implemented | Highest backend architecture gap |
+| Workflow graph runtime and worker | Implemented | Redis-backed workflow execution |
+| Agent catalog and company enablement | Implemented on feature stack | Definitions are code-owned; company rows only enable approved agents |
+| Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
+| Agent dispatcher and dedicated worker | Implemented on feature stack | Monitoring and Content scenario handlers; reliability hardening under validation |
+| Provider budgets, cost ledger and deterministic routing | Not implemented | Required before enabling paid autonomous operations |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
 | Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
 | Talking-avatar local renderer | Utility script exists | Local runtime/model assets are not source-controlled |
@@ -120,17 +122,20 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 
 ## Next implementation sequence
 
-### P0 — Complete the backend runtime contract
+### P0 — Backend runtime contract
 
-- Review and merge the existing platform-knowledge, brand-context, agent-registry and task/run work in dependency order, after CI and diff review.
-- Define an explicit agent handler protocol: validated input, capability, tenant scope, cancellation context, progress/event reporting, normalized result and error.
-- Add a durable dispatch mechanism from task creation to the worker. Do not rely on an in-process background task.
-- Implement atomic task claiming and run creation so two workers cannot execute the same attempt.
-- Add lease/heartbeat recovery, bounded concurrency, retry/backoff, cancellation and graceful shutdown.
-- Connect agent handlers to the existing provider executor/workflow engine through an explicit orchestration interface.
-- Keep all built-in agents non-dispatch-ready until their handlers are real and tested.
+- [x] PostgreSQL transactional outbox and dedicated agent worker.
+- [x] Code-owned handler registry and explicit capability dispatch.
+- [x] Atomic task/run lifecycle transitions and bounded retries.
+- [x] Worker ownership fencing on heartbeat and terminal transitions.
+- [x] Cooperative cancellation checks at handler safe boundaries.
+- [x] Stale-run recovery with heartbeat recheck and bounded retry.
+- [x] Bounded graceful shutdown and persisted error redaction.
+- [ ] Failure-injection and full CI validation before merge/deployment.
+- [ ] Progress/event streaming and explicit Tool/Capability Router contract.
+- [ ] Tenant-isolated end-to-end tests for every dispatch-ready agent.
 
-### P1 — Provider and cost control
+### P1 — Provider and cost control (not complete)
 
 - Normalize provider/model capabilities and constraints.
 - Add provider health/latency/error telemetry and actual usage/cost recording.
@@ -138,16 +143,19 @@ A future Video Production Agent can orchestrate both, but each pipeline retains 
 - Add company budgets, per-task spend ceilings and approval gates for costly operations.
 - Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
 
+Paid autonomous execution remains gated until these controls are implemented and verified.
+
 ### P2 — Product workflows
 
-- Complete a single end-to-end Monitoring task.
-- Complete a single end-to-end Content task that uses brand/platform knowledge and approval.
-- Complete a Video task that chooses talking-avatar vs scene-video based on requested output.
-- Add integration tests using mock providers and a small set of opt-in live smoke tests.
+- [x] Monitoring task dispatch and public discovery / knowledge extraction handler.
+- [x] Content scenario generation handler.
+- [ ] Human approval lifecycle before external publishing or paid media generation.
+- [ ] Video Production Agent routing between talking-avatar and scene-video.
+- [ ] Mock-provider integration coverage and opt-in live smoke tests with spend ceilings.
 
-### P3 — Web UI
+### P3 — Web UI (not started)
 
-Create a separate frontend application (recommended: React/Next.js + TypeScript) consuming the stable API. The UI should be Persian-first with RTL support, responsive layouts and an accessible component system.
+Create a separate frontend application (recommended: React/Next.js + TypeScript) consuming the stable API. The UI should be Persian-first with RTL support, responsive layouts and an accessible component system. Start after the P0/P1 API contracts and approval/video lifecycle stabilize.
 
 Initial screens:
 - Overview: task activity, recent runs, provider health and spend.
