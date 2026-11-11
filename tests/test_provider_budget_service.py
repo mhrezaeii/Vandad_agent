@@ -228,6 +228,17 @@ def test_cost_parser_only_accepts_usd_denominated_values():
 
 
 
+async def test_scene_video_model_capability_catalog_is_exposed(client):
+    response = await client.get("/api/v1/providers/scene-video/models")
+    assert response.status_code == 200, response.text
+    models = response.json()
+    mock = next(item for item in models if item["provider_id"] == "mock")
+    assert mock["model_id"] == "mock-fixture"
+    assert mock["supports_composition"] is True
+    assert mock["supported_languages"] is None
+    assert mock["max_duration_seconds"] is None
+
+
 async def test_budget_api_is_company_scoped(client, db_session):
     owner = Company(name="Budget API Owner", slug=f"budget-api-owner-{uuid.uuid4().hex[:8]}")
     stranger = Company(name="Budget API Stranger", slug=f"budget-api-stranger-{uuid.uuid4().hex[:8]}")
