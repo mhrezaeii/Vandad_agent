@@ -34,11 +34,14 @@ from app.integrations.providers import (
 from app.integrations.providers.base import ProviderError, ProviderExecutionContext
 from app.models import (
     BrandCharacter,
+    BrandPlatformLink,
     CharacterStatus,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
+    Platform,
     PlatformConnection,
+    PlatformKnowledgeSnapshot,
     ProjectStatus,
     Workflow,
     WorkflowDefinitionStatus,
@@ -529,6 +532,60 @@ class ContentService:
                 "Brand not found.", details=[{"field": "brand_id", "value": str(brand_id)}]
             )
         return brand
+
+    async def set_brand_platforms(
+        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, platform_ids: list[uuid.UUID]
+    ) -> list[uuid.UUID]:
+        """Replace a brand's linked platforms, enforcing same-company ownership."""
+        brand = await self.get_brand(brand_id, company_id=company_id)
+        unique_ids = list(dict.fromkeys(platform_ids))
+        platforms = list((await self.session.scalars(
+            select(Platform).where(
+                Platform.company_id == company_id,
+                Platform.id.in_(unique_ids),
+            )
+        )).all()) if unique_ids else []
+        if len(platforms) != len(unique_ids):
+            raise NotFoundError("One or more platforms were not found for this company.")
+        existing = list((await self.session.scalars(
+            select(BrandPlatformLink).where(
+                BrandPlatformLink.company_id == company_id,
+                BrandPlatformLink.brand_id == brand.id,
+            )
+        )).all())
+        for link in existing:
+            await self.session.delete(link)
+        for platform_id in unique_ids:
+            self.session.add(BrandPlatformLink(
+                brand_id=brand.id, platform_id=platform_id, company_id=company_id
+            ))
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.brand_platforms_updated",
+            action="link_platforms",
+            company_id=company_id,
+            resource_type=BRAND_RESOURCE,
+            resource_id=brand.id,
+            metadata={"platform_ids": [str(value) for value in unique_ids]},
+        )
+        await self.session.flush()
+        return unique_ids
+
+    async def list_brand_platforms(
+        self, brand_id: uuid.UUID, *, company_id: uuid.UUID
+    ) -> list[Platform]:
+        """List only platforms linked to a brand within the active tenant."""
+        brand = await self.get_brand(brand_id, company_id=company_id)
+        return list((await self.session.scalars(
+            select(Platform)
+            .join(BrandPlatformLink, BrandPlatformLink.platform_id == Platform.id)
+            .where(
+                BrandPlatformLink.company_id == company_id,
+                BrandPlatformLink.brand_id == brand.id,
+                Platform.company_id == company_id,
+            )
+            .order_by(Platform.name.asc())
+        )).all())
 
     async def list_brands(
         self, *, company_id: uuid.UUID, include_archived: bool = False
