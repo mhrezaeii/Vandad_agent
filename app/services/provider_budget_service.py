@@ -232,12 +232,15 @@ class ProviderBudgetService:
                 "provider_id": row.provider_id,
                 "calls_30d": 0,
                 "errors_30d": 0,
+                "pending_30d": 0,
                 "latency_samples": [],
                 "last_call_at": row.created_at,
             })
             item["calls_30d"] += 1
             if row.error_code:
                 item["errors_30d"] += 1
+            elif row.status == "reserved":
+                item["pending_30d"] += 1
             latency = (row.usage_payload or {}).get("latency_ms")
             if isinstance(latency, (int, float)) and not isinstance(latency, bool):
                 item["latency_samples"].append(float(latency))
@@ -245,11 +248,17 @@ class ProviderBudgetService:
         for item in grouped.values():
             calls = item["calls_30d"]
             samples = item.pop("latency_samples")
+            completed_calls = calls - item["pending_30d"]
             result.append({
                 "provider_id": item["provider_id"],
                 "calls_30d": calls,
                 "errors_30d": item["errors_30d"],
-                "success_rate": round((calls - item["errors_30d"]) / calls, 4) if calls else None,
+                "pending_30d": item["pending_30d"],
+                "success_rate": (
+                    round((completed_calls - item["errors_30d"]) / completed_calls, 4)
+                    if completed_calls > 0
+                    else None
+                ),
                 "average_latency_ms": round(sum(samples) / len(samples), 2) if samples else None,
                 "last_call_at": item["last_call_at"],
             })
