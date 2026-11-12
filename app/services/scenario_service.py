@@ -85,34 +85,34 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "اگر اطلاعات لازم در دانش تأییدشده وجود ندارد، آن را در سناریو ادعا نکن."
     )
     user = (
-        f"برای برند «{brand}» یک ویدیوی تبلیغاتی عمودی {request.target_duration_seconds} ثانیه‌ای بساز.\\n"
-        f"لحن برند: {tone}\\nموضوع: {request.topic}\\n"
-        f"تعداد صحنه: دقیقاً {scene_count}\\n"
-        f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\\n"
-        f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\\n"
-        f"CTA: {cta_hint}\\nهشتگ‌ها: {hashtags_hint}\\n\\n"
-        "ساختار JSON الزامی:\\n"
-        "{\\n"
-        '  "title": "عنوان فارسی",\\n'
-        '  "opening_hook": "قلاب کوتاه فارسی",\\n'
-        '  "visual_style": "consistent cinematic visual style in English",\\n'
-        '  "scenes": [\\n'
-        "    {\\n"
-        '      "index": 0,\\n'
-        '      "scene_type": "problem|product_demo|b_roll|motion_graphic|cta",\\n'
-        '      "narration": "متن گویندگی فارسی",\\n'
-        '      "visual_prompt": "Detailed English cinematic visual prompt",\\n'
-        '      "camera_direction": "English camera framing and movement",\\n'
-        '      "transition": "cut|dissolve|whip|match_cut|fade",\\n'
-        '      "duration_seconds": 5,\\n'
-        '      "on_screen_text": "متن کوتاه فارسی یا null",\\n'
-        '      "subtitle_text": "زیرنویس فارسی"\\n'
-        "    }\\n"
-        "  ],\\n"
-        '  "cta": "دعوت به اقدام فارسی",\\n'
-        '  "caption": "کپشن فارسی",\\n'
-        '  "hashtags": ["#هشتگ"]\\n'
-        "}\\n\\n"
+        f"برای برند «{brand}» یک ویدیوی تبلیغاتی عمودی {request.target_duration_seconds} ثانیه‌ای بساز.\n"
+        f"لحن برند: {tone}\nموضوع: {request.topic}\n"
+        f"تعداد صحنه: دقیقاً {scene_count}\n"
+        f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\n"
+        f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
+        f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
+        "ساختار JSON الزامی:\n"
+        "{\n"
+        '  "title": "عنوان فارسی",\n'
+        '  "opening_hook": "قلاب کوتاه فارسی",\n'
+        '  "visual_style": "consistent cinematic visual style in English",\n'
+        '  "scenes": [\n'
+        "    {\n"
+        '      "index": 0,\n'
+        '      "scene_type": "problem|product_demo|b_roll|motion_graphic|cta",\n'
+        '      "narration": "متن گویندگی فارسی",\n'
+        '      "visual_prompt": "Detailed English cinematic visual prompt",\n'
+        '      "camera_direction": "English camera framing and movement",\n'
+        '      "transition": "cut|dissolve|whip|match_cut|fade",\n'
+        '      "duration_seconds": 5,\n'
+        '      "on_screen_text": "متن کوتاه فارسی یا null",\n'
+        '      "subtitle_text": "زیرنویس فارسی"\n'
+        "    }\n"
+        "  ],\n"
+        '  "cta": "دعوت به اقدام فارسی",\n'
+        '  "caption": "کپشن فارسی",\n'
+        '  "hashtags": ["#هشتگ"]\n'
+        "}\n\n"
         "ترتیب روایی پیشنهادی: problem → product_demo و b_roll یا motion_graphic → cta. "
         "حداقل یک صحنه محصول و یک صحنه CTA لازم است. "
         "مجموع زمان صحنه‌ها باید دقیقاً با مدت هدف هماهنگ شود."
