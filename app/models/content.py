@@ -96,7 +96,10 @@ class CharacterStatus(enum.StrEnum):
 
 
 class BrandCharacter(Base, TimestampMixin):
-    """One persistent provider character per brand (never recreated per video)."""
+    """Legacy character row retained only for existing database compatibility.
+
+No active API, workflow or provider creates or updates these records.
+"""
 
     __tablename__ = "brand_characters"
     __table_args__ = (
@@ -187,8 +190,8 @@ class ContentProject(Base, TimestampMixin):
     # Script (LLM output) — Persian.
     script_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     script_segments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
-    # Non-avatar scene pipeline: "avatar" keeps the legacy HeyGen path;
-    # "scene" uses per-scene provider clips assembled with FFmpeg.
+    # Active production uses "scene" and provider-side AI composition;
+    # "avatar" is a legacy persisted value retained for old records.
     video_mode: Mapped[str] = mapped_column(
         String(32), nullable=False, default="scene", server_default="scene"
     )
