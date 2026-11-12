@@ -56,7 +56,7 @@ async def test_mock_provider_quality_review_is_explicitly_fixture_only():
         )
     )
     assert result.accepted is True
-    assert "not assessed" in result.summary
+    assert "no visual/audio quality is assessed" in result.summary
 
 
 async def test_mock_provider_polls_to_completion_and_downloads():

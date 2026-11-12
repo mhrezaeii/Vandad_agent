@@ -133,6 +133,18 @@ async def test_script_generation_persists_llm_output(
     db_session, content_service, workflow_factory, company_and_platform
 ):
     company, _platform = company_and_platform
+    from app.models import CompanyProviderBudget
+
+    db_session.add(
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="llm_openai",
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("1.00"),
+            enabled=True,
+        )
+    )
+    await db_session.commit()
     brand, _character = await _brand_with_character(db_session, content_service, company.id)
     project = await content_service.create_project(
         scope=_scope(company.id), brand_id=brand.id,
