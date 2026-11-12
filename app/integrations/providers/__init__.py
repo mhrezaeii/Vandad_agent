@@ -18,7 +18,6 @@ from app.integrations.providers.base import (
 from app.integrations.providers.diagnostic import DiagnosticProvider
 from app.integrations.providers.browser_playwright import BrowserPlaywrightProvider
 from app.integrations.providers.execution import ExecutionOutcome, ProviderExecutor, RetryPolicy
-from app.integrations.providers.heygen import HeyGenProvider
 from app.integrations.providers.http_endpoint import HttpEndpointProvider
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 from app.integrations.providers.registry import (
@@ -36,14 +35,12 @@ def build_default_registry() -> ProviderRegistry:
     registry.register(BrowserPlaywrightProvider())
     registry.register(HttpEndpointProvider())
     registry.register(LlmOpenAiProvider())
-    registry.register(HeyGenProvider())
     return registry
 
 
 __all__ = [
     "DuplicateProviderError",
     "ExecutionOutcome",
-    "HeyGenProvider",
     "HttpEndpointProvider",
     "LlmOpenAiProvider",
     "InvalidCredentialError",

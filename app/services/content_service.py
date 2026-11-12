@@ -1,23 +1,12 @@
-"""Content production service: brands, characters, projects, workflows.
+"""Content production service for AI-native scenario and video workflows.
 
-Orchestrates the video pipeline on top of the existing engine:
-
-- ``ensure_default_brands``    — idempotent seeding of the five default brands
-- ``ensure_vandefence_brand``  — idempotent first-brand bootstrap (compat)
-- ``ensure_workflow``          — idempotent workflow definitions bound to the
-  operator-selected provider connections
-- ``generate_script``          — starts the script workflow execution
-- ``approve_script``           — operator gate (script_ready -> approved)
-- ``generate_video``           — starts the video workflow execution; the paid
-  HeyGen submission happens exactly once inside ``content.submit_video``
+The active production path is scenario generation, operator approval, AI-provider
+scene generation, provider-side composition, quality review and artifact delivery.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
-from datetime import UTC, datetime
 from math import gcd
 from typing import Any
 
@@ -34,16 +23,12 @@ from app.integrations.providers import (
     ProviderExecutor,
     ProviderRegistry,
 )
-from app.integrations.providers.base import ProviderError, ProviderExecutionContext
 from app.models import (
-    BrandCharacter,
     BrandPlatformLink,
-    CharacterStatus,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
     Platform,
-    PlatformConnection,
     ProjectStatus,
     Workflow,
     WorkflowDefinitionStatus,
@@ -53,17 +38,14 @@ from app.models import (
 from app.security.authorization import CompanyScope
 from app.security.crypto import MasterKeyBox
 from app.services.audit_service import AuditService
-from app.services.credential_service import CredentialService
 from app.services.provider_budget_service import ProviderBudgetService
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.services.workflow_service import WorkflowService
 
 BRAND_RESOURCE = "brand"
 PROJECT_RESOURCE = "project"
-CHARACTER_RESOURCE = "brand_character"
 
 SCRIPT_WORKFLOW_NAME = "vandefence.script.v1"
-VIDEO_WORKFLOW_NAME = "vandefence.video.v1"
 SCENE_SCRIPT_WORKFLOW_NAME = "vandad.scene.script.v1"
 SCENE_VIDEO_WORKFLOW_NAME = "vandad.scene.video.v1"
 
@@ -203,75 +185,6 @@ SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
         {"from_key": "record_script", "to_key": "finish"},
     ],
 }
-
-VIDEO_WORKFLOW_GRAPH: dict[str, Any] = {
-    "nodes": [
-        {"node_key": "start", "node_type": "trigger.manual", "name": "trigger"},
-        {
-            "node_key": "submit",
-            "node_type": "content.submit_video",
-            "name": "submit to heygen (idempotent)",
-            "configuration": {"connection_id": "__HEYGEN_CONNECTION__"},
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            "execution_settings": {
-                "timeout_seconds": 60,
-                "max_retries": 2,
-                "idempotent": False,
-            },
-        },
-        {
-            "node_key": "wait",
-            "node_type": "control.delay",
-            "name": "initial provider wait",
-            "configuration": {"seconds": 30},
-        },
-        {
-            "node_key": "poll",
-            "node_type": "content.poll_video",
-            "name": "poll heygen status",
-            "configuration": {"connection_id": "__HEYGEN_CONNECTION__"},
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            # Still-processing is a transient error: the engine retries with
-            # backoff (~60 x 30s = up to ~30 min), re-polling from the persisted
-            # provider_job_id. Never resubmits.
-            "execution_settings": {
-                "timeout_seconds": 30,
-                "max_retries": 60,
-                "backoff_seconds": 30,
-                "idempotent": True,
-            },
-        },
-        {
-            "node_key": "download",
-            "node_type": "content.download_video",
-            "name": "download raw video",
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            "execution_settings": {"timeout_seconds": 900, "max_retries": 2},
-        },
-        {
-            "node_key": "render",
-            "node_type": "content.render_video",
-            "name": "render branded video",
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            "execution_settings": {"timeout_seconds": 1800, "max_retries": 1},
-        },
-        {
-            "node_key": "finish",
-            "node_type": "control.complete",
-            "name": "done",
-            "configuration": {"outcome": "completed"},
-        },
-    ],
-    "edges": [
-        {"from_key": "start", "to_key": "submit"},
-        {"from_key": "submit", "to_key": "wait"},
-        {"from_key": "wait", "to_key": "poll"},
-        {"from_key": "poll", "to_key": "download"},
-        {"from_key": "download", "to_key": "render"},
-        {"from_key": "render", "to_key": "finish"},
-    ],
-}
-
 
 SCENE_SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
     "nodes": [
@@ -601,182 +514,6 @@ class ContentService:
         statement = statement.order_by(ContentBrand.name)
         return list((await self.session.execute(statement)).scalars().all())
 
-    # -------------------------------------------------------------- character
-    async def get_character(self, brand_id: uuid.UUID, *, company_id: uuid.UUID) -> BrandCharacter:
-        await self.get_brand(brand_id, company_id=company_id)
-        character = (
-            await self.session.execute(
-                select(BrandCharacter).where(BrandCharacter.brand_id == brand_id)
-            )
-        ).scalar_one_or_none()
-        if character is None:
-            brand = await self.get_brand(brand_id, company_id=company_id)
-            character = BrandCharacter(
-                brand_id=brand.id,
-                company_id=company_id,
-                provider="heygen",
-                status=CharacterStatus.NOT_CREATED.value,
-                language=brand.language,
-            )
-            self.session.add(character)
-            await self.session.flush()
-        return character
-
-    async def create_character(
-        self,
-        brand_id: uuid.UUID,
-        *,
-        company_id: uuid.UUID,
-        connection_id: uuid.UUID,
-        source_image_url: str | None,
-        voice_id: str | None = None,
-    ) -> BrandCharacter:
-        """Start the verified HeyGen photo-avatar creation flow.
-
-        Requires an explicit ``source_image_url`` asset the provider can fetch.
-        A persistent character is created ONCE per brand — never per video.
-        """
-        brand = await self.get_brand(brand_id, company_id=company_id)
-        character = await self.get_character(brand_id, company_id=company_id)
-        if character.status == CharacterStatus.ACTIVE.value:
-            raise ConflictError(
-                "An active character already exists for this brand.",
-                details=[{"character_id": str(character.id)}],
-            )
-        if character.status == CharacterStatus.CREATING.value:
-            raise ConflictError("Character creation is already in progress.")
-        # A character is created ONCE per brand. Only a never-created or failed
-        # character may start (or restart) the paid photo-avatar training flow.
-        if character.status not in (
-            CharacterStatus.NOT_CREATED.value,
-            CharacterStatus.FAILED.value,
-        ):
-            raise ConflictError(
-                "A character already exists for this brand; reactivate it instead "
-                "of creating a new paid avatar.",
-                details=[{"character_id": str(character.id), "status": character.status}],
-            )
-        if not source_image_url:
-            raise ConflictError(
-                "A source portrait image_url is required to create the character "
-                "(explicit asset fetched by the provider).",
-                details=[{"field": "source_image_url"}],
-            )
-
-        character.source_image_url = source_image_url
-        character.voice_id = voice_id or character.voice_id
-        character.status = CharacterStatus.CREATING.value
-        character.creation_metadata = {"requested_at": self._now_iso()}
-
-        try:
-            metadata = await self._heygen_operation(
-                connection_id=connection_id,
-                company_id=company_id,
-                operation="create_photo_avatar",
-                params={
-                    "name": f"{brand.name} character",
-                    "image_url": source_image_url,
-                    # Stable key: a retried creation request cannot start (and
-                    # bill) a second photo-avatar training job.
-                    "idempotency_key": f"vandad-avatar-{character.id}",
-                },
-            )
-        except ProviderError as exc:
-            character.status = CharacterStatus.FAILED.value
-            character.creation_metadata = {
-                **(character.creation_metadata or {}),
-                "last_error": exc.message,
-                "error_code": exc.code,
-            }
-            await self.session.flush()
-            raise
-
-        character.provider_avatar_id = metadata.get("provider_avatar_id")
-        character.provider_group_id = metadata.get("provider_group_id")
-        character.avatar_kind = "photo_avatar"
-        character.status = CharacterStatus.TRAINING.value
-        character.creation_metadata = {
-            **(character.creation_metadata or {}),
-            "created_at": self._now_iso(),
-            **metadata,
-        }
-        self.audit.record(
-            event_type="content.character_creation_started",
-            action="create",
-            company_id=company_id,
-            resource_type=CHARACTER_RESOURCE,
-            resource_id=character.id,
-            metadata={
-                "provider": "heygen",
-                "provider_avatar_id": character.provider_avatar_id,
-                "group_id": character.provider_group_id,
-            },
-        )
-        await self.session.flush()
-        return character
-
-    async def refresh_character(
-        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, connection_id: uuid.UUID
-    ) -> BrandCharacter:
-        """Poll photo-avatar training; persist the persistent avatar id on success."""
-        character = await self.get_character(brand_id, company_id=company_id)
-        if character.provider_avatar_id is None:
-            raise ConflictError("Character creation has not started.")
-        try:
-            metadata = await self._heygen_operation(
-                connection_id=connection_id,
-                company_id=company_id,
-                operation="photo_avatar_status",
-                params={"provider_avatar_id": character.provider_avatar_id},
-            )
-        except ProviderError as exc:
-            if exc.code != "still_training":
-                raise
-            # Training is asynchronous; a poll is not an error. Keep the
-            # persisted look id and report the in-progress status.
-            character.last_checked_at = datetime.now(UTC)
-            character.creation_metadata = {
-                **(character.creation_metadata or {}),
-                "last_checked_at": self._now_iso(),
-                "last_status": "training",
-            }
-            await self.session.flush()
-            return character
-        character.last_checked_at = datetime.now(UTC)
-        avatar_id = metadata.get("provider_avatar_id") or character.provider_avatar_id
-        character.provider_avatar_id = str(avatar_id)
-        character.avatar_kind = "photo_avatar"
-        character.status = CharacterStatus.ACTIVE.value
-        character.creation_metadata = {**(character.creation_metadata or {}), **metadata}
-        self.audit.record(
-            event_type="content.character_activated",
-            action="activate",
-            company_id=company_id,
-            resource_type=CHARACTER_RESOURCE,
-            resource_id=character.id,
-            metadata={"provider_avatar_id": str(avatar_id)},
-        )
-        await self.session.flush()
-        return character
-
-    async def set_character_status(
-        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, active: bool
-    ) -> BrandCharacter:
-        character = await self.get_character(brand_id, company_id=company_id)
-        if character.status == CharacterStatus.NOT_CREATED.value:
-            raise ConflictError("The character has not been created yet.")
-        character.status = CharacterStatus.ACTIVE.value if active else CharacterStatus.INACTIVE.value
-        self.audit.record(
-            event_type="content.character_status_changed",
-            action="activate" if active else "deactivate",
-            company_id=company_id,
-            resource_type=CHARACTER_RESOURCE,
-            resource_id=character.id,
-            metadata={"status": character.status},
-        )
-        await self.session.flush()
-        return character
-
     # ---------------------------------------------------------------- projects
     async def create_project(
         self, *, scope: CompanyScope, brand_id: uuid.UUID, topic: str
@@ -787,7 +524,7 @@ class ContentService:
             brand_id=brand.id,
             topic=topic,
             status=ProjectStatus.DRAFT.value,
-            video_mode="avatar",
+            video_mode="scene",
         )
         self.session.add(project)
         await self.session.flush()
@@ -871,65 +608,6 @@ class ContentService:
             resource_type=PROJECT_RESOURCE,
             resource_id=project.id,
             metadata={},
-        )
-        await self.session.flush()
-        await self.session.refresh(project)
-        return project
-
-    async def generate_video(
-        self,
-        project_id: uuid.UUID,
-        *,
-        scope: CompanyScope,
-        connection_id: uuid.UUID,
-        task_id: uuid.UUID | None = None,
-    ) -> ContentProject:
-        project = await self.get_project(project_id, company_id=scope.company_id)
-        if project.status != ProjectStatus.APPROVED.value:
-            raise ConflictError(
-                f"Only approved projects can generate video (status '{project.status}').",
-                details=[{"status": project.status}],
-            )
-        if project.provider_job_id:
-            raise ConflictError(
-                "This project already has a paid HeyGen submission.",
-                details=[{"provider_job_id": project.provider_job_id}],
-            )
-        character = await self.get_character(project.brand_id, company_id=scope.company_id)
-        if character.status != CharacterStatus.ACTIVE.value or not character.provider_avatar_id:
-            raise ConflictError(
-                "The brand character is not active in HeyGen; create and activate it first.",
-                details=[{"status": character.status}],
-            )
-        await ProviderBudgetService(self.session).assert_budget_enabled(
-            scope.company_id, "heygen"
-        )
-        project.cost_metadata = {"provider_id": "heygen", "status": "budget_check_pending"}
-        await self.ensure_workflow(
-            VIDEO_WORKFLOW_NAME, VIDEO_WORKFLOW_GRAPH, company_id=scope.company_id,
-            connection_id=connection_id,
-        )
-        workflow = await self._require_published(VIDEO_WORKFLOW_NAME, scope.company_id)
-        execution, _created = await self._execution_service.execute_workflow(
-            workflow.id,
-            scope=scope,
-            input_metadata={
-                "project_id": str(project.id),
-                "agent_task_id": str(task_id) if task_id else None,
-            },
-            idempotency_key=f"video:{project.id}",
-            trigger_type=WorkflowTriggerType.API,
-            trigger_reference=str(project.id),
-        )
-        project.status = ProjectStatus.VIDEO_GENERATING.value
-        project.video_workflow_execution_id = execution.id
-        self.audit.record(
-            event_type="content.video_generation_started",
-            action="generate_video",
-            company_id=scope.company_id,
-            resource_type=PROJECT_RESOURCE,
-            resource_id=project.id,
-            metadata={"execution_id": str(execution.id)},
         )
         await self.session.flush()
         await self.session.refresh(project)
@@ -1115,13 +793,6 @@ class ContentService:
             raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
-            requires_lipsync = any(
-                isinstance(scene, dict)
-                and scene.get("scene_type") == "presenter"
-                and scene.get("speaker") == "brand_character"
-                and bool(scene.get("dialogue") or scene.get("narration"))
-                for scene in scenario_scenes
-            )
             fallback_ids = (
                 provider_fallbacks
                 if provider_fallbacks is not None
@@ -1153,7 +824,6 @@ class ContentService:
                 selected = await self.scene_video_registry.resolve_ordered_healthy(
                     ordered_ids,
                     require_composition=True,
-                    require_lipsync=requires_lipsync,
                     require_reference_image=bool(options.get("requires_reference_image", False)),
                     require_quality_review=True,
                     required_durations=required_durations,
@@ -1456,97 +1126,7 @@ class ContentService:
             raise ConflictError(f"Required workflow '{name}' is not published for this company.")
         return workflow
 
-    # ----------------------------------------------------------- heygen helper
-    async def _heygen_operation(
-        self,
-        *,
-        connection_id: uuid.UUID,
-        company_id: uuid.UUID,
-        operation: str,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        adapter = self.registry.get("heygen")
-        connection = await self.session.get(PlatformConnection, connection_id)
-        if connection is None or connection.company_id != company_id:
-            raise NotFoundError(
-                "Connection not found.",
-                details=[{"field": "connection_id", "value": str(connection_id)}],
-            )
-        credential = None
-        credential_type = None
-        secret_reference = None
-        if connection.credential_reference_id is not None:
-            resolved = await CredentialService(self.session, self._keys).resolve_credential(
-                connection.credential_reference_id, company_id=company_id
-            )
-            credential, credential_type, secret_reference = (
-                resolved.payload,
-                resolved.credential_type,
-                resolved.secret_reference,
-            )
-        context = ProviderExecutionContext(
-            provider_id="heygen",
-            connection_id=connection.id,
-            company_id=company_id,
-            platform_id=connection.platform_id,
-            configuration={
-                **connection.configuration,
-                # Adapter operations read their arguments from ``params``; merge
-                # per-call arguments over any connection-level defaults.
-                "params": {**(connection.configuration or {}).get("params", {}), **params},
-            },
-            credential=credential,
-            credential_type=credential_type,
-            secret_reference=secret_reference,
-            timeout_seconds=60.0,
-            operation=operation,
-        )
-        billable_operations = {"create_photo_avatar", "train_photo_avatar", "submit_video"}
-        budget_service = ProviderBudgetService(self.session)
-        reservation = None
-        if operation in billable_operations:
-            budget_key = hashlib.sha256(
-                f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode()
-            ).hexdigest()
-            reservation = await budget_service.reserve(
-                company_id,
-                adapter.provider_id,
-                f"heygen.{operation}",
-                idempotency_key=f"heygen:{budget_key}",
-                require_budget=True,
-            )
-            await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
-        if not outcome.success:
-            error = outcome.error or ProviderError(
-                "The HeyGen operation failed.", code="heygen_failure"
-            )
-            if reservation is not None:
-                failed_result = getattr(outcome, "result", None)
-                failure_usage = {"attempts": outcome.attempts}
-                failed_latency = getattr(failed_result, "latency_ms", None)
-                if failed_latency is not None:
-                    failure_usage["latency_ms"] = failed_latency
-                await budget_service.settle(
-                    reservation, error_code=error.code, usage=failure_usage
-                )
-            raise error
-        metadata = outcome.result.metadata or {}
-        if reservation is not None:
-            usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
-            await budget_service.settle(
-                reservation,
-                usage={
-                    **usage,
-                    "latency_ms": outcome.result.latency_ms,
-                    "attempts": outcome.attempts,
-                },
-            )
-        return metadata
 
-    @staticmethod
-    def _now_iso() -> str:
-        return datetime.now(UTC).isoformat()
 
 
 def _system_principal():

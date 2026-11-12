@@ -1,4 +1,8 @@
-"""Content production domain: brands, persistent characters, video projects."""
+"""Content production domain: brands, scenario projects and video artifacts.
+
+The historical brand_characters table/model is retained for existing database
+compatibility only; no active API, workflow or provider manages those records.
+"""
 
 from __future__ import annotations
 
@@ -73,6 +77,7 @@ class ContentBrand(Base, TimestampMixin):
         server_default=ContentBrandStatus.ACTIVE.value,
     )
 
+    # Historical relationship retained for database compatibility only.
     characters: Mapped[list[BrandCharacter]] = relationship(
         back_populates="brand", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -91,7 +96,10 @@ class CharacterStatus(enum.StrEnum):
 
 
 class BrandCharacter(Base, TimestampMixin):
-    """One persistent provider character per brand (never recreated per video)."""
+    """Legacy character row retained only for existing database compatibility.
+
+No active API, workflow or provider creates or updates these records.
+"""
 
     __tablename__ = "brand_characters"
     __table_args__ = (
@@ -182,8 +190,8 @@ class ContentProject(Base, TimestampMixin):
     # Script (LLM output) — Persian.
     script_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     script_segments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
-    # Non-avatar scene pipeline: "avatar" keeps the legacy HeyGen path;
-    # "scene" uses per-scene provider clips assembled with FFmpeg.
+    # Active production uses "scene" and provider-side AI composition;
+    # "avatar" is a legacy persisted value retained for old records.
     video_mode: Mapped[str] = mapped_column(
         String(32), nullable=False, default="scene", server_default="scene"
     )
@@ -206,7 +214,7 @@ class ContentProject(Base, TimestampMixin):
         Uuid, ForeignKey("workflow_executions.id", ondelete="SET NULL"), nullable=True
     )
     # Paid generation protection: one persisted provider submission per project.
-    # NULL until HeyGen accepted a generation request.
+    # Legacy project-level submission metadata; active scene composition uses assembly_metadata.
     provider_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     provider_video_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

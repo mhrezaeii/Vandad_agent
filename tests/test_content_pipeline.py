@@ -1,5 +1,4 @@
-"""Content pipeline tests: script generation, idempotent paid submission,
-poll loop, download, tenant isolation, subtitles."""
+"""Content pipeline tests: script generation, tenant isolation and subtitles."""
 
 from __future__ import annotations
 
@@ -11,72 +10,19 @@ import httpx
 import pytest
 from sqlalchemy import select, text
 
-from app.core.exceptions import ConflictError, NotFoundError
-from app.integrations.providers.heygen import HeyGenProvider
+from app.core.exceptions import NotFoundError
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 from app.models import (
-    BrandCharacter,
-    CharacterStatus,
     Company,
-    ContentBrand,
-    Platform,  # noqa: E402
-    PlatformConnection,
     ProjectStatus,
 )
 from app.security.authorization import CompanyScope, Principal
 from app.services.content_service import (
     ContentService,
 )
-from app.services.provider_budget_service import ProviderBudgetService
 from app.services.subtitle_service import build_ass_for_script, build_segments
 from app.workflows.engine import WorkflowEngine
 from tests.test_worker_hardening import _keybox, _make_worker
-
-
-async def _heygen_connection(db_session, company_id, *, with_credential: bool = True) -> uuid.UUID:
-    result = await db_session.execute(select(Platform).where(Platform.company_id == company_id).limit(1))
-    platform = result.scalar_one()
-    connection = PlatformConnection(
-        company_id=company_id,
-        platform_id=platform.id,
-        name=f"heygen-{uuid.uuid4().hex[:6]}",
-        provider="heygen",
-        status="connected",
-        configuration={"url": "https://api.heygen.com"},
-    )
-    db_session.add(connection)
-    await db_session.flush()
-    if with_credential:
-        from app.models import CredentialStorageType
-        from app.security.secret_value import SecretValue
-        from app.services.credential_service import CredentialService
-        from tests.test_worker_hardening import _keybox
-
-        await CredentialService(db_session, _keybox()).create_credential(
-            platform_id=platform.id,
-            credential_type="api_key",
-            secret_reference=f"vault://heygen/{uuid.uuid4().hex[:8]}",
-            storage_type=CredentialStorageType.ENCRYPTED,
-            value=SecretValue("heygen-test-key"),
-        )
-        await db_session.flush()
-        connection.credential_reference_id = (
-            (await db_session.execute(
-                select(__import__("app").models.CredentialReference).where(
-                    __import__("app").models.CredentialReference.platform_id == platform.id
-                )
-            ))
-            .scalars()
-            .first()
-        ).id
-    await ProviderBudgetService(db_session).set_budget(
-        company_id,
-        "heygen",
-        monthly_limit_usd=Decimal("50.00"),
-        per_operation_limit_usd=Decimal("10.00"),
-    )
-    await db_session.commit()
-    return connection.id
 
 
 def _scope(company_id) -> CompanyScope:
@@ -91,21 +37,6 @@ def content_service(db_session, engine_pair, redis_manager):
     return ContentService(
         db_session, registry, executor, _keybox(), workflow_queue=WorkflowQueue(redis_manager.client)
     )
-
-
-async def _brand_with_character(
-    db_session, content_service, company_id, *, active=True
-) -> tuple[ContentBrand, BrandCharacter]:
-    brand = await content_service.ensure_vandefence_brand(company_id=company_id)
-    character = await content_service.get_character(brand.id, company_id=company_id)
-    character.provider = "heygen"
-    character.provider_avatar_id = "av-persian-77"
-    character.provider_group_id = "grp-77"
-    character.avatar_kind = "photo_avatar"
-    character.voice_id = "voice-fa-1"
-    character.status = CharacterStatus.ACTIVE.value if active else CharacterStatus.INACTIVE.value
-    await db_session.commit()
-    return brand, character
 
 
 async def _llm_connection(db_session, company_id) -> uuid.UUID:
@@ -145,7 +76,7 @@ async def test_script_generation_persists_llm_output(
         )
     )
     await db_session.commit()
-    brand, _character = await _brand_with_character(db_session, content_service, company.id)
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     project = await content_service.create_project(
         scope=_scope(company.id), brand_id=brand.id,
         topic="چرا پایش متمرکز امنیتی برای سازمان‌ها اهمیت دارد؟",
@@ -208,130 +139,9 @@ async def test_script_generation_persists_llm_output(
     await test_engine.dispose()
 
 
-async def test_approve_and_video_submission_is_idempotent(
-    db_session, content_service, workflow_factory, company_and_platform, monkeypatch
-):
-    """The paid HeyGen submission happens exactly once, even across retries."""
-    company, _platform = company_and_platform
-    brand, _character = await _brand_with_character(db_session, content_service, company.id)
-    project = await content_service.create_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="تست"
-    )
-    project.script_text = "اسکریپت تایید شده."
-    project.status = ProjectStatus.SCRIPT_READY.value
-    await db_session.commit()
-
-    await content_service.approve_script(project.id, scope=_scope(company.id))
-    await db_session.refresh(project)
-    assert project.status == ProjectStatus.APPROVED.value
-
-    submit_calls: list[int] = []
-
-    def heygen_handler(request: httpx.Request) -> httpx.Response:
-        if "/v3/videos" in str(request.url) and request.method == "POST":
-            submit_calls.append(1)
-            return httpx.Response(200, json={"video_id": "hg-paid-1"})
-        if "/v3/videos/hg-paid-1" in str(request.url):
-            return httpx.Response(200, json={"data": {
-                "status": "processing"}})
-        return httpx.Response(404, json={})
-
-    content_service.registry.replace(HeyGenProvider(client_factory=lambda t: httpx.AsyncClient(
-        transport=httpx.MockTransport(heygen_handler), timeout=t)))
-
-    heygen_conn = await _heygen_connection(db_session, company.id)
-    project = await content_service.generate_video(
-        project.id, scope=_scope(company.id), connection_id=heygen_conn
-    )
-    assert project.status == ProjectStatus.VIDEO_GENERATING.value
-    await db_session.commit()  # separate-session engine run below
-
-    # Worker engine run; the poll node raises still_processing (transient).
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: PLC0415
-    from sqlalchemy.pool import NullPool  # noqa: PLC0415
-
-    from tests.conftest import TEST_DATABASE_URL  # noqa: PLC0415
-
-    test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
-    session_factory = async_sessionmaker(bind=test_engine, expire_on_commit=False, autoflush=False)
-    async with session_factory() as session:
-        engine = WorkflowEngine(session, content_service.registry, content_service.executor,
-                                _keybox())
-        result = await engine.run_execution(
-            project.video_workflow_execution_id, company_id=company.id
-        )
-        await session.commit()
-    # First run: submit completed (persisted job id), wait node deferred.
-    if result.outcome != "waiting":
-        steps = list((await db_session.execute(
-            text("SELECT node_key, status, error_code, error_message FROM workflow_execution_steps")
-        )).all())
-        pytest.fail(f"first-run outcome={result.outcome} steps={steps}")
-    await db_session.refresh(project)
-    if project.provider_job_id != "hg-paid-1":
-        steps = list((await db_session.execute(
-            text("SELECT node_key, status, error_code, error_message FROM workflow_execution_steps")
-        )).all())
-        pytest.fail(f"provider_job_id={project.provider_job_id} steps={steps}")
-    assert project.provider_job_id == "hg-paid-1"
-    assert len(submit_calls) == 1  # exactly ONE paid submission
-
-    # Worker restart mid-wait: the run resumes, poll raises still_processing,
-    # and the submit node must NOT resubmit. A short execution deadline makes
-    # the poll retry loop end quickly (timed_out).
-    execution_row = await db_session.get(
-        __import__("app").models.WorkflowExecution, project.video_workflow_execution_id
-    )
-    execution_row.timeout_seconds = 2
-    await db_session.commit()
-    async with session_factory() as session:
-        engine = WorkflowEngine(session, content_service.registry, content_service.executor, _keybox())
-        result2 = await engine.run_execution(
-            project.video_workflow_execution_id, company_id=company.id
-        )
-        await session.commit()
-    assert result2.outcome in ("timed_out", "failed")
-    assert len(submit_calls) == 1  # still exactly one — no duplicate billing
-    await test_engine.dispose()
-
-
-async def test_video_generation_requires_active_character(
-    db_session, content_service, workflow_factory, company_and_platform
-):
-    company, _platform = company_and_platform
-    brand, _character = await _brand_with_character(
-        db_session, content_service, company.id, active=False
-    )
-    project = await content_service.create_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="تست"
-    )
-    project.script_text = "متن"
-    project.status = ProjectStatus.APPROVED.value
-    await db_session.commit()
-
-    with pytest.raises(ConflictError):
-        await content_service.generate_video(
-            project.id, scope=_scope(company.id), connection_id=uuid.uuid4()
-        )
-
-
-async def test_generate_video_requires_approval(
-    db_session, content_service, workflow_factory, company_and_platform
-):
-    company, _platform = company_and_platform
-    brand, _character = await _brand_with_character(db_session, content_service, company.id)
-    project = await content_service.create_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="تست"
-    )
-    with pytest.raises(ConflictError):
-        await content_service.generate_video(
-            project.id, scope=_scope(company.id), connection_id=uuid.uuid4()
-        )
-
-
 async def test_content_tenant_isolation(db_session, content_service, workflow_factory, company_and_platform):
     company, _platform = company_and_platform
-    brand, _character = await _brand_with_character(db_session, content_service, company.id)
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     project = await content_service.create_project(
         scope=_scope(company.id), brand_id=brand.id, topic="تست"
     )

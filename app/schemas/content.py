@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class BrandCtaConfig(BaseModel):
@@ -89,39 +89,6 @@ class ContentBrandRead(BaseModel):
     tone: str | None
     visual_config: dict[str, Any]
     status: str
-
-
-class BrandCharacterRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    brand_id: uuid.UUID
-    provider: str
-    provider_avatar_id: str | None
-    provider_group_id: str | None
-    avatar_kind: str | None
-    voice_id: str | None
-    language: str
-    status: str
-    creation_metadata: dict[str, Any]
-    last_checked_at: datetime | None
-
-
-class CharacterCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    connection_id: uuid.UUID = Field(description="HeyGen platform connection carrying the API key.")
-    source_image_url: HttpUrl | None = Field(
-        default=None,
-        description="Explicit portrait asset the provider fetches (required on creation).",
-    )
-    voice_id: str | None = Field(default=None, max_length=255)
-
-
-class CharacterStatusRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    active: bool = Field(description="Activate or deactivate the persistent character.")
 
 
 class ContentConnectionRequest(BaseModel):

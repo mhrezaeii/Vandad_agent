@@ -36,7 +36,6 @@ from app.integrations.video import (
 )
 from app.models import (
     ArtifactKind,
-    BrandCharacter,
     ContentProject,
     ProjectStatus,
     ProviderQuotaUsage,
@@ -59,22 +58,9 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
     """Translate structured storyboard direction into a provider-ready prompt."""
     lines = [
         f"SCENE TYPE: {scene.scene_type}",
-        f"SPEAKER: {scene.speaker}",
         f"VISUAL STYLE: {scenario.visual_style or 'consistent premium brand film'}",
     ]
-    if scene.scene_type == "presenter":
-        lines.append(
-            "PRESENTER IDENTITY: Keep the recurring brand character visually identical "
-            "to every other presenter scene."
-        )
-        if scenario.character_name:
-            lines.append(f"CHARACTER NAME: {scenario.character_name}")
-        if scenario.character_description:
-            lines.append(f"CHARACTER REFERENCE DESCRIPTION: {scenario.character_description}")
-        if scene.dialogue:
-            lines.append(f"SPOKEN DIALOGUE (Persian; do not render as on-screen text): {scene.dialogue}")
-        lines.append("Frame as a polished medium close-up with natural expression and direct eye contact.")
-    elif scene.scene_type == "product_demo":
+    if scene.scene_type == "product_demo":
         lines.append(
             "PRODUCT DEMO: Show a believable close-up or over-the-shoulder interaction with the product UI. "
             "Do not invent readable labels, metrics, customer data or product features."
@@ -110,19 +96,6 @@ class SceneVideoService:
         self.max_size_bytes = max_size_bytes
         self.audit = AuditService(session)
 
-    async def _character_reference_image(self, project: ContentProject) -> str | None:
-        """Return the tenant-owned source portrait for this brand, if configured."""
-        result = await self.session.execute(
-            select(BrandCharacter.source_image_url)
-            .where(
-                BrandCharacter.brand_id == project.brand_id,
-                BrandCharacter.company_id == project.company_id,
-                BrandCharacter.source_image_url.is_not(None),
-            )
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
-
     # -------------------------------------------------------------- preparation
     async def prepare_scenes(
         self, project: ContentProject, scenario: Scenario, *, provider_id: str
@@ -132,31 +105,6 @@ class SceneVideoService:
         if not provider.supports_quality_review:
             raise ConflictError(
                 "The selected AI provider must support final-video quality review before generation."
-            )
-        presenter_scenes = [
-            scene
-            for scene in scenario.scenes
-            if scene.scene_type == "presenter" and scene.speaker == "brand_character"
-        ]
-        unsupported_presenters = [
-            scene.index for scene in presenter_scenes if scene.dialogue and not provider.supports_lipsync
-        ]
-        if unsupported_presenters:
-            raise ConflictError(
-                "Spoken brand-character presenter scenes require real image/audio lip-sync support; "
-                f"provider {provider.provider_id!r} cannot generate them (scene indexes: "
-                f"{unsupported_presenters})."
-            )
-        if presenter_scenes and provider.supports_reference_image:
-            if not await self._character_reference_image(project):
-                raise ConflictError(
-                    "A saved public source_image_url is required for brand-character image-to-video scenes."
-                )
-        elif presenter_scenes and not provider.supports_lipsync:
-            raise ConflictError(
-                "Brand-character presenter scenes require a provider with real image/audio lip-sync support "
-                "or image-reference support; "
-                f"provider {provider.provider_id!r} cannot generate them."
             )
         existing = {
             job.scene_index: job
@@ -256,18 +204,6 @@ class SceneVideoService:
         submitted = 0
         first_transient: Exception | None = None
         first_permanent: SceneVideoPermanentError | None = None
-        scenario_scenes = (project.scenario or {}).get("scenes", [])
-        presenter_indexes = {
-            int(scene.get("index", -1))
-            for scene in scenario_scenes
-            if scene.get("scene_type") == "presenter"
-            and scene.get("speaker") == "brand_character"
-        }
-        character_reference_image = (
-            await self._character_reference_image(project)
-            if presenter_indexes and provider.supports_reference_image
-            else None
-        )
         for job in jobs:
             if job.provider_job_id is not None:
                 continue
@@ -288,11 +224,6 @@ class SceneVideoService:
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,
                 duration_seconds=job.duration_seconds,
-                reference_image_url=(
-                    character_reference_image
-                    if job.scene_index in presenter_indexes
-                    else None
-                ),
                 idempotency_key=f"vandad-scene-{job.id}",
                 metadata={"project_id": str(project.id), "scene_index": job.scene_index},
             )
@@ -569,9 +500,8 @@ class SceneVideoService:
     ) -> tuple[Any, dict[str, Any]]:
         """Compose scene clips through an AI provider and store its final output.
 
-        Composition job state is isolated in assembly_metadata. The legacy
-        provider_job_id and submission_metadata fields belong to the avatar
-        workflow and must never be overwritten by scene composition.
+        Composition job state is isolated in assembly_metadata and remains
+        separate from legacy project-level provider submission metadata.
         """
         if self.storage is None:
             raise ConflictError("Artifact storage is not configured.")

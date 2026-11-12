@@ -129,11 +129,6 @@ class ContentScenarioService:
             scene_count=options.get("scene_count"),
             brand_name=brand.display_name or brand.name,
             brand_tone=brand.tone,
-            character_name=visual_config.get("character_name") or brand.display_name or brand.name,
-            character_description=(
-                visual_config.get("character_description")
-                or visual_config.get("character_reference_prompt")
-            ),
             product_context=product_context,
             cta_text=cta_config.get("text"),
             hashtags=list(cta_config.get("hashtags") or []),

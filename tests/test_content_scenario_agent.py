@@ -33,7 +33,6 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
         language="fa-IR",
         tone="حرفه‌ای و صمیمی",
         cta_config={"text": "بیشتر آشنا شوید", "hashtags": ["#ونداد"]},
-        visual_config={"character_name": "وندیار"},
         status="active",
     )
     db_session.add(brand)
@@ -146,7 +145,7 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
     assert result["approval_required"] is True
     assert result["scene_count"] == 1
     assert captured["request"].brand_name == "ونداد"
-    assert captured["request"].character_name == "وندیار"
+    assert not hasattr(captured["request"], "character_name")
     assert "پایش پلتفرم" in captured["request"].platform_knowledge_context
     assert "قیمت‌گذاری عمومی مشخص نیست" in captured["request"].platform_knowledge_context
     assert captured["calls"] == 1

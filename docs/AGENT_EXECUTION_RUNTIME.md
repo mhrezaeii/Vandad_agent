@@ -18,7 +18,7 @@ The agent task runtime is separate from the workflow graph runtime. Workflow job
 
 - **Monitoring Agent**: public discovery, change detection, knowledge extraction and combined `platform.monitor`.
 - **Content Agent**: scenario generation through the existing content scenario service.
-- **Video Production Agent — target contract**: accepts an approved scenario/storyboard video project and dispatches it through one AI video-provider workflow. Character creation, persistent brand characters and talking-avatar production are out of product scope. The current handler implementation must be audited against this target before claiming runtime alignment. Paid dispatch requires a company provider budget.
+- **Video Production Agent — target contract**: accepts an approved scenario/storyboard video project and dispatches it through one AI video-provider workflow. Character creation, persistent brand characters and talking-avatar production are out of product scope. The active character/avatar branch has been removed from the API, scenario schema, workflow handlers and default provider registry (PR #16). Real-provider end-to-end generation, composition, quality review and final MP4 delivery remain unverified. Paid dispatch requires a company provider budget.
 - Authenticated browser actions and autonomous publishing remain disabled. Video task dispatch is approval-gated at the agent-task level and rechecks project approval before starting the workflow.
 
 ## Local operation
@@ -29,7 +29,7 @@ docker compose up -d --build agent-worker
 docker compose logs -f agent-worker
 ```
 
-The API and agent worker must share PostgreSQL. Monitoring and Content tasks use the PostgreSQL outbox directly. The Video Production Agent additionally uses the optional Redis-backed workflow queue; if Redis is unavailable, video dispatch fails closed while non-video agent tasks continue. Target behavior: the video workflow consumes the approved scenario/storyboard and returns provider-generated video artifacts. Confirm by code inspection and end-to-end tests that no legacy avatar/character branch remains; this document does not assert that implementation audit is complete. Configure `AGENT_WORKER_CONCURRENCY`, `AGENT_WORKER_POLL_INTERVAL`, `AGENT_WORKER_LEASE_SECONDS` and `AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS`.
+The API and agent worker must share PostgreSQL. Monitoring and Content tasks use the PostgreSQL outbox directly. The Video Production Agent additionally uses the optional Redis-backed workflow queue; if Redis is unavailable, video dispatch fails closed while non-video agent tasks continue. Target behavior: the video workflow consumes the approved scenario/storyboard and returns provider-generated video artifacts. Code-level removal is implemented in PR #16; the provider end-to-end and final-artifact acceptance gate is still pending. This document does not claim that a real production video has been generated. Configure `AGENT_WORKER_CONCURRENCY`, `AGENT_WORKER_POLL_INTERVAL`, `AGENT_WORKER_LEASE_SECONDS` and `AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS`.
 
 ## Progress events and approvals
 

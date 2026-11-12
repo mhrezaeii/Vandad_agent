@@ -67,7 +67,7 @@ Current state: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owne
 
 Provider adapters are infrastructure, not product agents. They should expose stable capability contracts and return normalized results/errors/usage. Product services and agents should not hard-code vendor-specific HTTP details.
 
-The OpenAI-compatible LLM adapter and APIMaster video adapter serve different APIs. APIMaster's current adapter is scene generation and explicitly does not support lip-sync. Do not route LLM requests to APIMaster unless a separately verified APIMaster LLM endpoint and adapter are added.
+The OpenAI-compatible LLM adapter and APIMaster video adapter serve different APIs. APIMaster's current adapter submits scene-generation jobs; it does not provide final-video composition or quality review. The Generic HTTP adapter can satisfy those capabilities only when an operator configures and verifies explicit provider-side compose and quality endpoints. No provider is production-ready merely because it can generate a scene clip. Do not route LLM requests to APIMaster unless a separately verified APIMaster LLM endpoint and adapter are added.
 
 Provider routing should later support:
 - explicit provider/model choice and a deterministic fallback policy;
@@ -156,7 +156,8 @@ Paid autonomous execution remains gated until staging and credentialed end-to-en
 - [x] Monitoring task dispatch and public discovery / knowledge extraction handler.
 - [x] Content scenario generation handler.
 - [x] Human approval lifecycle for paid video tasks and project script/scenario approval before generation.
-- [ ] Align the Video Production Agent implementation with the unified scenario/storyboard-to-AI-video-provider contract; remove any legacy avatar/character-generation branch and verify the end-to-end path.
+- [x] Remove the active character/avatar branch from the API, scenario schemas, workflow handlers, default provider registry and local runtime setup.
+- [ ] Verify a real provider can generate/compose/review the final video end-to-end and deliver a validated MP4 artifact.
 - [x] Settle scene-video reservations automatically when every completed scene reports an explicit USD cost; otherwise keep the reservation for operator reconciliation.
 - [ ] Mock-provider integration coverage and opt-in live smoke tests with spend ceilings.
 
