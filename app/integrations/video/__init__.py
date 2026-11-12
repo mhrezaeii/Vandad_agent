@@ -125,6 +125,7 @@ class SceneVideoProviderRegistry:
         require_quality_review: bool = False,
         required_durations: tuple[float, ...] = (),
         required_aspect_ratio: str | None = None,
+        required_language: str | None = None,
     ) -> SceneVideoProvider:
         """Return the first capability-compatible provider with a successful live probe."""
         for provider_id in provider_ids:
