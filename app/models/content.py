@@ -1,4 +1,8 @@
-"""Content production domain: brands, persistent characters, video projects."""
+"""Content production domain: brands, scenario projects and video artifacts.
+
+The historical brand_characters table/model is retained for existing database
+compatibility only; no active API, workflow or provider manages those records.
+"""
 
 from __future__ import annotations
 
@@ -73,6 +77,7 @@ class ContentBrand(Base, TimestampMixin):
         server_default=ContentBrandStatus.ACTIVE.value,
     )
 
+    # Historical relationship retained for database compatibility only.
     characters: Mapped[list[BrandCharacter]] = relationship(
         back_populates="brand", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -206,7 +211,7 @@ class ContentProject(Base, TimestampMixin):
         Uuid, ForeignKey("workflow_executions.id", ondelete="SET NULL"), nullable=True
     )
     # Paid generation protection: one persisted provider submission per project.
-    # NULL until HeyGen accepted a generation request.
+    # Legacy project-level submission metadata; active scene composition uses assembly_metadata.
     provider_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     provider_video_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
