@@ -494,8 +494,11 @@ class WorkflowEngine:
             # provider boundary; crashes remain visible as reserved/unknown.
             await self.session.commit()
 
+        # LLM completions are billable and do not carry a provider-enforced
+        # idempotency key here; never transparently retry an ambiguous request.
+        provider_idempotent = spec.idempotent and adapter.provider_id != "llm_openai"
         outcome = await self.executor.run(
-            adapter, context, operation_callable, idempotent=spec.idempotent
+            adapter, context, operation_callable, idempotent=provider_idempotent
         )
         if not outcome.success:
             error = outcome.error or ProviderError("The provider operation failed.")

@@ -192,7 +192,7 @@ class PlatformKnowledgeService:
         )
         # The provider may bill even if this worker exits before settlement.
         await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
+        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
             failed_result = getattr(outcome, "result", None)
