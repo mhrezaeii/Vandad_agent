@@ -1,66 +1,57 @@
-# WaveSpeed LTX-2 image-to-video smoke test
+# WaveSpeed LTX-2.3 text-to-video smoke test
 
-This is an opt-in, paid smoke test for the WaveSpeedAI model
-`wavespeed-ai/ltx-2-19b/image-to-video`. It is intentionally separate from
-the production Video Production Agent.
+This is an opt-in, paid smoke test for
+`wavespeed-ai/ltx-2.3/text-to-video`. It generates a video directly from a
+text prompt: **no image, reference file, or upload is required**.
 
 ## Product boundary
 
-WaveSpeed documents image-conditioned generation of a 5–20 second clip with
-synchronized audio. The documented model API does **not** expose storyboard
-composition or final-video AI quality-review endpoints. Therefore this test
-proves one reference-image-to-video clip only; it does not prove the complete
-multi-scene Vandad delivery contract and must not be advertised as production
-pipeline acceptance.
+This test proves one provider-generated text-to-video clip. It does not prove
+the complete Vandad multi-scene production contract, storyboard composition,
+editing, or AI quality review.
 
 ## Prepare
 
-1. Create an API key at https://wavespeed.ai/accesskey and top up the account.
-2. Add the key to the local `.env` only:
-
-   ```dotenv
-   WAVESPEED_API_KEY=your-real-key
-   ```
-
-3. Never commit `.env`, paste the key into chat, or send it to the temporary
-   upload URL. The script reads the key from the process environment.
-4. Activate the project virtual environment and install the project dev
+1. Create a WaveSpeed developer API key at https://wavespeed.ai/accesskey and
+   top up the account.
+2. Set `WAVESPEED_API_KEY` in your local environment or uncommitted `.env`.
+   Never commit the real key or paste it into chat.
+3. Activate the project virtual environment and install the project dev
    dependencies as described in the README.
 
 ## Run a low-cost first test
 
-Use a clear JPG, PNG or WebP image and describe one simple movement:
+The published LTX-2.3 estimate for 480p / 5 seconds is approximately USD 0.10.
+The provider's live estimate and final charge prevail.
 
 ```powershell
 . .\.venv\Scripts\Activate.ps1
-$env:WAVESPEED_API_KEY = (Get-Content .env | Where-Object { $_ -match '^WAVESPEED_API_KEY=' } | Select-Object -First 1).Split('=',2)[1].Trim().Trim('"')
-python .\scripts\wavespeed_smoke_test.py --image .\path\to\reference.png --prompt "Slow cinematic camera push-in; subtle natural movement; preserve the original composition." --resolution 480p --duration 5
+
+python .\scripts\wavespeed_smoke_test.py `
+  --prompt "Vertical cinematic advertisement: a premium electric vehicle drives slowly through a modern city at blue hour, reflections on wet pavement, smooth tracking camera, realistic lighting, no logos, no captions. Audio: subtle cinematic electronic music and soft city ambience." `
+  --resolution 480p `
+  --aspect-ratio 9:16 `
+  --duration 5
 ```
 
-Expected list-price estimate for the first generation is approximately USD
-0.06 at 480p/5s, before any account-specific taxes or pricing changes. The
-provider's final charge is authoritative.
+The script writes the MP4 to
+`artifacts/wavespeed/ltx23-text-to-video.mp4` by default.
 
 ## Safety and billing
 
-- The script uploads the local image using WaveSpeed's signed upload-ticket
-  flow. The API key is sent only to `api.wavespeed.ai`; it is never sent to
-  the temporary object-storage URL.
+- The script sends only the text prompt and generation settings to the model.
+  It does not call the media-upload endpoint.
 - The task-submission POST is sent exactly once. An ambiguous connection
   failure may still mean the provider accepted and billed the task. Check
   WaveSpeed prediction history before manually retrying.
-- Polling GET requests may retry transient errors. The script does not retry
-  paid generation POSTs.
-- The script downloads the completed MP4 to
-  `artifacts/wavespeed/ltx2-smoke.mp4` by default.
-- Uploaded input media is subject to WaveSpeed's retention policy; the
-  documented upload flow currently retains inputs for seven days.
+- Polling GET requests may retry transient errors. Paid generation POSTs are
+  never automatically retried.
+- The script validates the downloaded MP4 container before publishing the
+  output file locally.
 
 ## Next production gate
 
-After reviewing the clip's visual quality, motion fidelity, output resolution,
-audio and actual charge, decide whether WaveSpeed remains a scene-generation
-provider or whether a separate AI provider is needed for provider-side
-composition and quality review. Do not enable WaveSpeed as a production
-final-delivery provider until those required capabilities are implemented and
-verified.
+Review prompt adherence, visual quality, motion, audio, output duration,
+actual charge, and whether multiple scene clips can be composed into the
+Vandad final-delivery workflow. Do not mark the full production pipeline
+complete based on this one-clip smoke test.
