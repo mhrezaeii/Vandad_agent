@@ -254,6 +254,8 @@ async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
     assert metadata["mode"] == "ai_composition"
     assert metadata["provider_job_id"] == persisted_job_id
     assert metadata["production_path"] == "ai_provider_composition"
+    assert metadata["quality_review"]["accepted"] is True
+    assert "no visual/audio quality is assessed" in metadata["quality_review"]["summary"]
     assert project.provider_job_id is None
     assert artifact.content_type == "video/mp4"
     assert artifact.size_bytes > 0
@@ -320,7 +322,10 @@ async def test_scene_video_budget_waits_for_composition_and_aggregates_cost(
     assert project.cost_metadata["status"] == "reserved"
 
     await service._settle_project_video_budget(
-        project, await _jobs(db_session, project.id), composition_cost_usd=Decimal("0.20")
+        project,
+        await _jobs(db_session, project.id),
+        composition_cost_usd=Decimal("0.20"),
+        quality_cost_usd=Decimal("0.05"),
     )
     await db_session.commit()
     await db_session.refresh(reservation)
@@ -368,7 +373,10 @@ async def test_scene_video_budget_stays_reserved_when_composition_cost_is_unknow
     await service.submit_pending(project)
     await service.poll_jobs(project)
     await service._settle_project_video_budget(
-        project, await _jobs(db_session, project.id), composition_cost_usd=None
+        project,
+        await _jobs(db_session, project.id),
+        composition_cost_usd=Decimal("0.20"),
+        quality_cost_usd=None,
     )
     await db_session.commit()
     await db_session.refresh(reservation)

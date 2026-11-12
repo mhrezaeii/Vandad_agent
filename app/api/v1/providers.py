@@ -166,6 +166,7 @@ async def list_scene_video_providers(
             supports_reference_image=provider.supports_reference_image,
             supports_cancellation=provider.supports_cancellation,
             supports_composition=provider.supports_composition,
+            supports_quality_review=provider.supports_quality_review,
             daily_quota=provider.quota_limit_per_day(),
         )
         for provider in registry.list_providers()
@@ -189,6 +190,18 @@ async def list_scene_video_models(
             supports_reference_image=provider.supports_reference_image,
             supports_cancellation=provider.supports_cancellation,
             supports_composition=provider.supports_composition,
+            supports_quality_review=provider.supports_quality_review,
+            supported_modalities=list(provider.supported_modalities),
+            supported_languages=(
+                list(provider.supported_languages)
+                if provider.supported_languages is not None else None
+            ),
+            supported_aspect_ratios=(
+                list(provider.supported_aspect_ratios)
+                if provider.supported_aspect_ratios is not None else None
+            ),
+            min_duration_seconds=provider.min_duration_seconds,
+            max_duration_seconds=provider.max_duration_seconds,
         )
         for provider in registry.list_providers()
     ]

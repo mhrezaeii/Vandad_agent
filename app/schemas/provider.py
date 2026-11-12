@@ -88,6 +88,7 @@ class SceneVideoProviderRead(BaseModel):
     supports_reference_image: bool
     supports_cancellation: bool
     supports_composition: bool
+    supports_quality_review: bool = False
     daily_quota: int | None = None
 
 
@@ -100,10 +101,12 @@ class SceneVideoModelRead(BaseModel):
     supports_reference_image: bool
     supports_cancellation: bool
     supports_composition: bool
+    supports_quality_review: bool = False
+    supported_modalities: list[str] = Field(default_factory=lambda: ["video"])
     supported_languages: list[str] | None = None
     supported_aspect_ratios: list[str] | None = None
-    min_duration_seconds: int | None = None
-    max_duration_seconds: int | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
 
 class ProviderUsageReconcile(BaseModel):

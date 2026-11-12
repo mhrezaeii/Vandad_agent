@@ -565,3 +565,33 @@ def test_registry_registers_apimaster_only_when_configured():
         apimaster_config=APIMasterConfig(api_key="test-key")
     )
     assert configured.has("apimaster") is True
+
+
+
+def test_ordered_registry_enforces_quality_review_and_declared_duration_limits():
+    registry = build_scene_video_registry(
+        apimaster_config=APIMasterConfig(api_key="test-key"),
+        http_config=GenericHttpConfig(
+            base_url="https://video.example.test",
+            status_path="/v1/videos/{job_id}",
+            compose_path="/v1/compose",
+            quality_path="/v1/quality",
+            request_extra={"model": "studio-compose-v1"},
+            min_duration_seconds=3,
+            max_duration_seconds=12,
+        ),
+    )
+    selected = registry.resolve_ordered(
+        ["apimaster", "generic_http"],
+        require_composition=True,
+        require_quality_review=True,
+        required_durations=(5.0, 10.0),
+    )
+    assert selected.provider_id == "generic_http"
+    with pytest.raises(SceneVideoProviderRegistryError):
+        registry.resolve_ordered(
+            ["generic_http"],
+            require_composition=True,
+            require_quality_review=True,
+            required_durations=(13.0,),
+        )
