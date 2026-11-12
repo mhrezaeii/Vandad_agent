@@ -156,7 +156,7 @@ Paid autonomous execution remains gated until staging and credentialed end-to-en
 - [x] Monitoring task dispatch and public discovery / knowledge extraction handler.
 - [x] Content scenario generation handler.
 - [x] Human approval lifecycle for paid video tasks and project script/scenario approval before generation.
-- [x] Video Production Agent dispatches approved scenario/storyboard projects through one unified AI video workflow; no avatar or character-generation branch is part of the product flow.
+- [ ] Align the Video Production Agent implementation with the unified scenario/storyboard-to-AI-video-provider contract; remove any legacy avatar/character-generation branch and verify the end-to-end path.
 - [x] Settle scene-video reservations automatically when every completed scene reports an explicit USD cost; otherwise keep the reservation for operator reconciliation.
 - [ ] Mock-provider integration coverage and opt-in live smoke tests with spend ceilings.
 
