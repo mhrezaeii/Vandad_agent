@@ -1,23 +1,13 @@
-"""Content production service: brands, AI-native scenario projects and workflows.
+"""Content production service for AI-native scenario and video workflows.
 
-Orchestrates the video pipeline on top of the existing engine:
-
-- ``ensure_default_brands``    — idempotent seeding of the five default brands
-- ``ensure_vandefence_brand``  — idempotent first-brand bootstrap (compat)
-- ``ensure_workflow``          — idempotent workflow definitions bound to the
-  operator-selected provider connections
-- ``generate_script``          — starts the script workflow execution
-- ``approve_script``           — operator gate (script_ready -> approved)
-- ``generate_video``           — starts the video workflow execution; the paid
-  HeyGen submission happens exactly once inside ``content.submit_video``
+The active production path is scenario generation, operator approval, AI-provider
+scene generation, provider-side composition, quality review and artifact delivery.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
 from math import gcd
 from typing import Any
 
@@ -34,14 +24,12 @@ from app.integrations.providers import (
     ProviderExecutor,
     ProviderRegistry,
 )
-from app.integrations.providers.base import ProviderError, ProviderExecutionContext
 from app.models import (
     BrandPlatformLink,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
     Platform,
-    PlatformConnection,
     ProjectStatus,
     Workflow,
     WorkflowDefinitionStatus,
@@ -51,7 +39,6 @@ from app.models import (
 from app.security.authorization import CompanyScope
 from app.security.crypto import MasterKeyBox
 from app.services.audit_service import AuditService
-from app.services.credential_service import CredentialService
 from app.services.provider_budget_service import ProviderBudgetService
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.services.workflow_service import WorkflowService
