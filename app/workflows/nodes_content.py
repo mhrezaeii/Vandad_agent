@@ -686,9 +686,6 @@ async def _generate_scenario(
         ),
         brand_name=brand.display_name or brand.name,
         brand_tone=brand.tone,
-        character_name=(brand.visual_config or {}).get("character_name") or brand.display_name or brand.name,
-        character_description=(brand.visual_config or {}).get("character_description")
-        or (brand.visual_config or {}).get("character_reference_prompt"),
         product_context="\\n".join(
             value for value in (
                 brand.description,
