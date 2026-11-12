@@ -1,4 +1,4 @@
-"""Content production endpoints: brands, characters, projects, jobs, videos."""
+"""AI-native content production endpoints: brands, scenarios, projects, jobs and videos."""
 
 from __future__ import annotations
 
@@ -12,12 +12,9 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import company_scope
 from app.core.exceptions import NotFoundError
 from app.schemas.content import (
-    BrandCharacterRead,
     BrandCreate,
     BrandPlatformLinksUpdate,
     BrandUpdate,
-    CharacterCreateRequest,
-    CharacterStatusRequest,
     ContentBrandRead,
     ContentConnectionRequest,
     ContentJobRead,
@@ -146,62 +143,6 @@ async def list_brand_platforms(
     ]
 
 
-@router.get("/brands/{brand_id}/character", response_model=BrandCharacterRead)
-async def get_character(
-    brand_id: uuid.UUID,
-    scope: Annotated[CompanyScope, Depends(company_scope)],
-    service: Annotated[ContentService, Depends(get_content_service)],
-) -> BrandCharacterRead:
-    character = await service.get_character(brand_id, company_id=scope.company_id)
-    return BrandCharacterRead.model_validate(character)
-
-
-@router.post("/brands/{brand_id}/character", response_model=BrandCharacterRead, status_code=201)
-async def create_character(
-    brand_id: uuid.UUID,
-    payload: CharacterCreateRequest,
-    scope: Annotated[CompanyScope, Depends(company_scope)],
-    service: Annotated[ContentService, Depends(get_content_service)],
-) -> BrandCharacterRead:
-    character = await service.create_character(
-        brand_id,
-        company_id=scope.company_id,
-        connection_id=payload.connection_id,
-        source_image_url=str(payload.source_image_url) if payload.source_image_url else None,
-        voice_id=payload.voice_id,
-    )
-    return BrandCharacterRead.model_validate(character)
-
-
-@router.post("/brands/{brand_id}/character/refresh", response_model=BrandCharacterRead)
-async def refresh_character(
-    brand_id: uuid.UUID,
-    payload: CharacterCreateRequest,
-    scope: Annotated[CompanyScope, Depends(company_scope)],
-    service: Annotated[ContentService, Depends(get_content_service)],
-) -> BrandCharacterRead:
-    """Poll HeyGen photo-avatar training; persist the avatar id when ready."""
-    character = await service.refresh_character(
-        brand_id,
-        company_id=scope.company_id,
-        connection_id=payload.connection_id,
-    )
-    return BrandCharacterRead.model_validate(character)
-
-
-@router.post("/brands/{brand_id}/character/status", response_model=BrandCharacterRead)
-async def set_character_status(
-    brand_id: uuid.UUID,
-    payload: CharacterStatusRequest,
-    scope: Annotated[CompanyScope, Depends(company_scope)],
-    service: Annotated[ContentService, Depends(get_content_service)],
-) -> BrandCharacterRead:
-    character = await service.set_character_status(
-        brand_id, company_id=scope.company_id, active=payload.active
-    )
-    return BrandCharacterRead.model_validate(character)
-
-
 # -------------------------------------------------------------------- projects
 @router.post("/projects", response_model=ContentProjectRead, status_code=201)
 async def create_project(
@@ -259,19 +200,6 @@ async def approve_script(
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
     project = await service.approve_script(project_id, scope=scope)
-    return ContentProjectRead.model_validate(project)
-
-
-@router.post("/projects/{project_id}/generate-video", response_model=ContentProjectRead)
-async def generate_video(
-    project_id: uuid.UUID,
-    payload: ContentConnectionRequest,
-    scope: Annotated[CompanyScope, Depends(company_scope)],
-    service: Annotated[ContentService, Depends(get_content_service)],
-) -> ContentProjectRead:
-    project = await service.generate_video(
-        project_id, scope=scope, connection_id=payload.connection_id
-    )
     return ContentProjectRead.model_validate(project)
 
 
