@@ -190,13 +190,13 @@ class SceneVideoProvider(ABC):
             code="provider_composition_unsupported",
         )
 
-    @abstractmethod
     async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
         raise SceneVideoPermanentError(
             "This AI provider does not support final-video quality review.",
             code="provider_quality_review_unsupported",
         )
 
+    @abstractmethod
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         """Return the normalised status for a previously submitted job."""
 

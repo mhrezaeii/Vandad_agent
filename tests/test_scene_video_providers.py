@@ -114,7 +114,9 @@ async def test_default_validation_rejects_non_video_bytes():
 
 
 # ---------------------------------------------------------- generic HTTP
-def _http_provider(handler, *, compose_path: str | None = None, quality_path: str | None = None) -> GenericHttpSceneVideoProvider:
+def _http_provider(
+    handler, *, compose_path: str | None = None, quality_path: str | None = None
+) -> GenericHttpSceneVideoProvider:
     config = GenericHttpConfig(
         base_url="https://video.example.test",
         generate_path="/v1/videos",

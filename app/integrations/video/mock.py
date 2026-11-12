@@ -20,9 +20,9 @@ from app.integrations.video.base import (
     SceneJobState,
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
-    SceneVideoRequest,
     SceneVideoQualityRequest,
     SceneVideoQualityResult,
+    SceneVideoRequest,
 )
 
 
