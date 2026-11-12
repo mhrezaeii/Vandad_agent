@@ -52,15 +52,10 @@ LlmCall = Callable[..., Awaitable[Any]]
 
 
 def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
-    """Build a storyboard prompt for a branded, character-led product video."""
+    """Build an AI-native storyboard prompt with no persistent-character dependency."""
     scene_count = request.resolved_scene_count
     tone = request.brand_tone or "حرفه‌ای، روشن و قابل اعتماد؛ بدون اغراق و بدون ادعای اثبات‌نشده."
     brand = request.brand_name or "برند"
-    character_name = request.character_name or f"شخصیت اختصاصی {brand}"
-    character_description = request.character_description or (
-        "Use one consistent, recognizable brand character across every presenter scene. "
-        "Do not change face, age, hair, glasses, clothing, proportions or art direction between shots."
-    )
     product_context = request.product_context or (
         "Only show product capabilities explicitly provided in the topic or brand context."
     )
@@ -71,21 +66,18 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     system = (
         "تو کارگردان خلاق، نویسنده تبلیغاتی و طراح استوری‌بورد ویدیوی کوتاه فارسی هستی. "
         "فقط یک JSON معتبر برگردان و هیچ توضیحی بیرون JSON ننویس. "
-        "سناریو باید داستان‌محور باشد: ابتدا مسئله واقعی مخاطب، سپس ورود شخصیت برند، "
-        "بعد نمایش تصویری محصول و در پایان جمع‌بندی و CTA. "
+        "برای یک ویدیوی تبلیغاتی AI-native، روایت و تصویر را در قالب یک مسیر واحد طراحی کن؛ "
+        "هیچ کاراکتر اختصاصی، مجری ثابت، آواتار سخنگو یا هویت انسانی تکرارشونده نساز. "
+        "در صورت نیاز به انسان، فقط سوژه‌های عمومی و غیرثابت را در توصیف بصری همان صحنه بیاور. "
+        "برای هر صحنه scene_type را از problem, product_demo, b_roll, motion_graphic, cta انتخاب کن. "
         "روایت فارسی باید طبیعی، محاوره‌ایِ حرفه‌ای، خوش‌آهنگ و مناسب گویندگی باشد؛ "
         "از ترجمه ماشینی، جمله‌های طولانی، اغراق و ادعای اثبات‌نشده دوری کن. "
-        "برای هر صحنه scene_type را از problem, presenter, product_demo, b_roll, motion_graphic, cta انتخاب کن. "
-        "حداقل یک و حداکثر دو صحنه presenter داشته باش؛ شخصیت برند فقط در این صحنه‌ها رو به دوربین صحبت کند. "
-        "در صحنه‌های presenter، speaker باید brand_character و dialogue باید دقیقاً متن گفتاری همان صحنه باشد. "
-        "در صحنه‌های دیگر speaker را narrator یا none بگذار و از ساخت مجری تصادفی خودداری کن. "
-        "هویت بصری شخصیت برند در تمام صحنه‌های presenter باید کاملاً ثابت بماند؛ "
-        "از توصیف شخصیت مرجع استفاده کن و هیچ تغییر ظاهری، لباس یا سن ایجاد نکن. "
         "صحنه‌های product_demo باید محصول را در حال استفاده نشان دهند: رابط کاربری، داشبورد، "
         "تعامل کاربر و جریان کار؛ از متن ناخوانا و رابط کاربری ساختگی با قابلیت‌های ادعایی پرهیز کن. "
-        "visual_prompt را انگلیسی و سینمایی بنویس؛ narration, dialogue, subtitle و on_screen_text فارسی باشند. "
+        "visual_prompt را انگلیسی، سینمایی و دقیق بنویس؛ narration و on_screen_text فارسی باشند. "
         "برای هر صحنه اندازه نما، حرکت دوربین، نور، ترکیب‌بندی و transition را مشخص کن. "
-        "از متن رندرشده توسط مدل تصویر/ویدیو داخل قاب پرهیز کن؛ متن فارسی را سیستم تدوین اضافه می‌کند. "
+        "از متن رندرشده توسط مدل تصویر/ویدیو داخل قاب پرهیز کن؛ متن فارسی را فقط در صورت پشتیبانی "
+        "واقعی و اعلام‌شده Provider از قابلیت‌های خودش درخواست کن. "
         "ریتم تدوین پویا باشد اما کات‌ها بی‌دلیل و آزاردهنده نباشند. "
         "موسیقی را فقط به‌عنوان پیشنهاد سبک توصیف کن و هیچ موسیقی دارای حق نشر را درخواست نکن. "
         "از اطلاعات دانش پلتفرم فقط به‌عنوان مرجع استفاده کن؛ قابلیت، عدد، قیمت یا ادعای جدید نساز. "
@@ -93,41 +85,36 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "اگر اطلاعات لازم در دانش تأییدشده وجود ندارد، آن را در سناریو ادعا نکن."
     )
     user = (
-        f"برای برند «{brand}» یک ویدیوی تبلیغاتی عمودی {request.target_duration_seconds} ثانیه‌ای بساز.\n"
-        f"لحن برند: {tone}\nموضوع: {request.topic}\n"
-        f"تعداد صحنه: دقیقاً {scene_count}\n"
-        f"شخصیت ثابت برند: {character_name}\n"
-        f"توصیف مرجع شخصیت: {character_description}\n"
-        f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\n"
-        f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
-        f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
-        "ساختار JSON الزامی:\n"
-        "{\n"
-        '  "title": "عنوان فارسی",\n'
-        '  "opening_hook": "قلاب کوتاه فارسی",\n'
-        '  "visual_style": "consistent cinematic brand style in English",\n'
-        '  "scenes": [\n'
-        "    {\n"
-        '      "index": 0,\n'
-        '      "scene_type": "problem|presenter|product_demo|b_roll|motion_graphic|cta",\n'
-        '      "speaker": "brand_character|customer|narrator|none",\n'
-        '      "narration": "متن گویندگی فارسی",\n'
-        '      "dialogue": "دیالوگ فارسی شخصیت یا null",\n'
-        '      "visual_prompt": "Detailed English cinematic visual prompt",\n'
-        '      "camera_direction": "English camera framing and movement",\n'
-        '      "transition": "cut|dissolve|whip|match_cut|fade",\n'
-        '      "duration_seconds": 5,\n'
-        '      "on_screen_text": "متن کوتاه فارسی یا null",\n'
-        '      "subtitle_text": "زیرنویس فارسی"\n'
-        "    }\n"
-        "  ],\n"
-        '  "cta": "دعوت به اقدام فارسی",\n'
-        '  "caption": "کپشن فارسی",\n'
-        '  "hashtags": ["#هشتگ"]\n'
-        "}\n\n"
-        "ترتیب روایی را رعایت کن: problem → presenter → product_demo و b_roll → presenter یا cta. "
+        f"برای برند «{brand}» یک ویدیوی تبلیغاتی عمودی {request.target_duration_seconds} ثانیه‌ای بساز.\\n"
+        f"لحن برند: {tone}\\nموضوع: {request.topic}\\n"
+        f"تعداد صحنه: دقیقاً {scene_count}\\n"
+        f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\\n"
+        f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\\n"
+        f"CTA: {cta_hint}\\nهشتگ‌ها: {hashtags_hint}\\n\\n"
+        "ساختار JSON الزامی:\\n"
+        "{\\n"
+        '  "title": "عنوان فارسی",\\n'
+        '  "opening_hook": "قلاب کوتاه فارسی",\\n'
+        '  "visual_style": "consistent cinematic visual style in English",\\n'
+        '  "scenes": [\\n'
+        "    {\\n"
+        '      "index": 0,\\n'
+        '      "scene_type": "problem|product_demo|b_roll|motion_graphic|cta",\\n'
+        '      "narration": "متن گویندگی فارسی",\\n'
+        '      "visual_prompt": "Detailed English cinematic visual prompt",\\n'
+        '      "camera_direction": "English camera framing and movement",\\n'
+        '      "transition": "cut|dissolve|whip|match_cut|fade",\\n'
+        '      "duration_seconds": 5,\\n'
+        '      "on_screen_text": "متن کوتاه فارسی یا null",\\n'
+        '      "subtitle_text": "زیرنویس فارسی"\\n'
+        "    }\\n"
+        "  ],\\n"
+        '  "cta": "دعوت به اقدام فارسی",\\n'
+        '  "caption": "کپشن فارسی",\\n'
+        '  "hashtags": ["#هشتگ"]\\n'
+        "}\\n\\n"
+        "ترتیب روایی پیشنهادی: problem → product_demo و b_roll یا motion_graphic → cta. "
         "حداقل یک صحنه محصول و یک صحنه CTA لازم است. "
-        "دیالوگ شخصیت را داخل narration همان صحنه هم قرار بده تا نسخه‌های قدیمی‌تر سیستم سازگار بمانند. "
         "مجموع زمان صحنه‌ها باید دقیقاً با مدت هدف هماهنگ شود."
     )
     return system, user
