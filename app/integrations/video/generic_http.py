@@ -127,6 +127,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         self.model_id = str(model_id) if model_id else None
         self._client_factory = client_factory
         self.supports_composition = bool(config.compose_path)
+        self.supports_quality_review = bool(config.quality_path)
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
         body: dict[str, Any] = {
