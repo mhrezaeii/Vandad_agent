@@ -10,7 +10,7 @@ import httpx
 import pytest
 from sqlalchemy import select, text
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import NotFoundError
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 from app.models import (
     Company,
@@ -144,7 +144,7 @@ async def test_script_generation_persists_llm_output(
 
 async def test_content_tenant_isolation(db_session, content_service, workflow_factory, company_and_platform):
     company, _platform = company_and_platform
-    brand, _character = await _brand_with_character(db_session, content_service, company.id)
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     project = await content_service.create_project(
         scope=_scope(company.id), brand_id=brand.id, topic="تست"
     )
