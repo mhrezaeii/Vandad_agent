@@ -1,6 +1,6 @@
 """Content-production node handlers for the workflow engine.
 
-These nodes wire the generic engine to the video-production domain:
+These nodes wire the generic engine to the AI-native video-production domain:
 
 - ``content.update_project``  — persist LLM script output onto the project
 - ``content.submit_video``    — idempotent paid HeyGen submission (persisted
@@ -36,9 +36,7 @@ from app.integrations.providers.base import (
 )
 from app.models import (
     ArtifactKind,
-    BrandCharacter,
     BrandPlatformLink,
-    CharacterStatus,
     ContentBrand,
     ContentProject,
     PlatformKnowledgeSnapshot,
@@ -54,11 +52,6 @@ logger = logging.getLogger("app.content_nodes")
 # Content nodes reference their provider connection explicitly; this map is a
 # safety default when a node omits the provider.
 _PROVIDER_BY_OPERATION = {
-    "submit_video": "heygen",
-    "video_status": "heygen",
-    "create_photo_avatar": "heygen",
-    "photo_avatar_status": "heygen",
-    "list_voices": "heygen",
 }
 
 
@@ -72,10 +65,6 @@ async def dispatch_content_node(
     """Route content.* node types to their handlers."""
     handlers = {
         "content.update_project": _update_project,
-        "content.submit_video": _submit_video,
-        "content.poll_video": _poll_video,
-        "content.download_video": _download_video,
-        "content.render_video": _render_video,
         "content.generate_scenario": _generate_scenario,
         "content.prepare_scenes": _prepare_scenes,
         "content.submit_scene_videos": _submit_scene_videos,
