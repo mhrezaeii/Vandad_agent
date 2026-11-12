@@ -20,7 +20,6 @@ from app.integrations.video import (
     SceneVideoProviderRegistry,
     SceneVideoProviderRegistryError,
     SceneVideoQualityRequest,
-    SceneVideoQualityResult,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
