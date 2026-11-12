@@ -48,6 +48,7 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
     supports_cancellation = True
     supports_composition = True
     supports_quality_review = True
+    supports_health_check = True
     model_id = "mock-fixture"
     requires_network = False
 
@@ -86,6 +87,14 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
         if request.idempotency_key:
             self._idempotency[request.idempotency_key] = job_id
         return job_id
+
+    async def check_health(self):
+        from app.integrations.video.base import SceneVideoHealthResult
+        return SceneVideoHealthResult(
+            provider_id=self.provider_id,
+            healthy=True,
+            message="Mock fixture is available; this is not a live vendor health check.",
+        )
 
     async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
         """Fixture-only structural review; not a visual/audio assessment."""

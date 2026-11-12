@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     scene_video_http_retrieve_path: str | None = None
     scene_video_http_compose_path: str | None = None
     scene_video_http_quality_path: str | None = None
+    scene_video_http_health_path: str | None = None
     scene_video_http_api_key: str | None = None
     scene_video_http_auth_header: str = "Authorization"
     scene_video_http_auth_scheme: str = "Bearer"

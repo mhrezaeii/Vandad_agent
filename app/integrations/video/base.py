@@ -124,6 +124,14 @@ def _looks_like_video(data: bytes) -> bool:
 
 
 @dataclass(frozen=True)
+class SceneVideoHealthResult:
+    provider_id: str
+    healthy: bool
+    message: str
+    latency_ms: float | None = None
+
+
+@dataclass(frozen=True)
 class SceneVideoQualityRequest:
     """Provider-side AI review request for a composed final video."""
     project_id: str
@@ -174,6 +182,7 @@ class SceneVideoProvider(ABC):
     supports_reference_image: bool = False
     supports_composition: bool = False
     supports_quality_review: bool = False
+    supports_health_check: bool = False
     supported_modalities: tuple[str, ...] = ("video",)
     supported_languages: tuple[str, ...] | None = None
     supported_aspect_ratios: tuple[str, ...] | None = None
@@ -193,6 +202,12 @@ class SceneVideoProvider(ABC):
         raise SceneVideoPermanentError(
             "This AI provider does not support storyboard video composition.",
             code="provider_composition_unsupported",
+        )
+
+    async def check_health(self) -> SceneVideoHealthResult:
+        raise SceneVideoPermanentError(
+            "This scene-video provider has no configured live health probe.",
+            code="provider_health_probe_unsupported",
         )
 
     async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:

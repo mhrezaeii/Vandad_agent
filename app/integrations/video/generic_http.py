@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import socket
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,6 +69,7 @@ class GenericHttpConfig:
     retrieve_path: str | None = None
     compose_path: str | None = None
     quality_path: str | None = None
+    health_path: str | None = None
     api_key: str | None = None
     auth_header: str = "Authorization"
     auth_scheme: str = "Bearer"
@@ -97,16 +99,17 @@ class GenericHttpConfig:
             raise ValueError("GenericHttpConfig.status_path must contain '{job_id}'.")
         if self.retrieve_path is not None and "{job_id}" not in self.retrieve_path:
             raise ValueError("GenericHttpConfig.retrieve_path must contain '{job_id}'.")
-        if self.compose_path is not None:
-            parsed_compose = urlsplit(self.compose_path)
-            if (
-                not self.compose_path.startswith("/")
-                or parsed_compose.scheme
-                or parsed_compose.netloc
-                or parsed_compose.query
-                or parsed_compose.fragment
-            ):
-                raise ValueError("GenericHttpConfig.compose_path must be a local API path.")
+        for field_name, path in (("compose_path", self.compose_path), ("health_path", self.health_path)):
+            if path is not None:
+                parsed_path = urlsplit(path)
+                if (
+                    not path.startswith("/")
+                    or parsed_path.scheme
+                    or parsed_path.netloc
+                    or parsed_path.query
+                    or parsed_path.fragment
+                ):
+                    raise ValueError(f"GenericHttpConfig.{field_name} must be a local API path.")
         if self.min_duration_seconds is not None and self.min_duration_seconds <= 0:
             raise ValueError("min_duration_seconds must be positive.")
         if self.max_duration_seconds is not None and self.max_duration_seconds <= 0:
@@ -143,6 +146,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         self._client_factory = client_factory
         self.supports_composition = bool(config.compose_path)
         self.supports_quality_review = bool(config.quality_path)
+        self.supports_health_check = bool(config.health_path)
         self.supported_modalities = tuple(config.supported_modalities)
         self.supported_languages = config.supported_languages
         self.supported_aspect_ratios = config.supported_aspect_ratios
@@ -202,6 +206,24 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
                 code="provider_bad_response",
             )
         return str(job_id)
+
+    async def check_health(self):
+        if not self.config.health_path:
+            return await super().check_health()
+        started = time.perf_counter()
+        payload = await self._request_json("GET", f"{self._base()}{self.config.health_path}")
+        latency_ms = (time.perf_counter() - started) * 1000
+        healthy = isinstance(payload, dict) and (
+            payload.get("healthy") is True
+            or str(payload.get("status") or "").strip().lower() in {"ok", "healthy"}
+        )
+        from app.integrations.video.base import SceneVideoHealthResult
+        return SceneVideoHealthResult(
+            provider_id=self.provider_id,
+            healthy=healthy,
+            message="Provider health probe succeeded." if healthy else "Provider health probe reported unhealthy status.",
+            latency_ms=latency_ms,
+        )
 
     async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
         if not self.config.quality_path:
