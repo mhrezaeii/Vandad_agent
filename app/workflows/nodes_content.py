@@ -711,6 +711,10 @@ async def _generate_scenario(
         connection_id=uuid.UUID(str(connection_id)),
         request=request,
         timeout_seconds=min(timeout_seconds, 180.0),
+        task_id=(
+            uuid.UUID(str((execution.input_metadata or {}).get("agent_task_id")))
+            if (execution.input_metadata or {}).get("agent_task_id") else None
+        ),
     )
 
     project.scenario = scenario.model_dump(mode="json")

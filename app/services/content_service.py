@@ -829,7 +829,11 @@ class ContentService:
         execution, _created = await self._execution_service.execute_workflow(
             workflow.id,
             scope=scope,
-            input_metadata={"project_id": str(project.id), "topic": project.topic},
+            input_metadata={
+                "project_id": str(project.id),
+                "topic": project.topic,
+                "agent_task_id": str(task_id) if task_id else None,
+            },
             idempotency_key=f"script:{project.id}",
             trigger_type=WorkflowTriggerType.API,
             trigger_reference=str(project.id),
@@ -993,7 +997,12 @@ class ContentService:
         return project
 
     async def generate_scene_scenario(
-        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        connection_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         """Start scenario generation through the existing text API connection."""
         project = await self.get_project(project_id, company_id=scope.company_id)
@@ -1023,6 +1032,7 @@ class ContentService:
                 "topic": project.topic,
                 "target_duration_seconds": options.get("target_duration_seconds", 30),
                 "scene_count": options.get("scene_count"),
+                "agent_task_id": str(task_id) if task_id else None,
             },
             idempotency_key=f"scene-script:{project.id}",
             trigger_type=WorkflowTriggerType.API,
