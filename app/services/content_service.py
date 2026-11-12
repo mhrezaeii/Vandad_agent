@@ -1,4 +1,4 @@
-"""Content production service: brands, characters, projects, workflows.
+"""Content production service: brands, AI-native scenario projects and workflows.
 
 Orchestrates the video pipeline on top of the existing engine:
 
@@ -36,9 +36,7 @@ from app.integrations.providers import (
 )
 from app.integrations.providers.base import ProviderError, ProviderExecutionContext
 from app.models import (
-    BrandCharacter,
     BrandPlatformLink,
-    CharacterStatus,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
@@ -60,7 +58,6 @@ from app.services.workflow_service import WorkflowService
 
 BRAND_RESOURCE = "brand"
 PROJECT_RESOURCE = "project"
-CHARACTER_RESOURCE = "brand_character"
 
 SCRIPT_WORKFLOW_NAME = "vandefence.script.v1"
 VIDEO_WORKFLOW_NAME = "vandefence.video.v1"
@@ -601,182 +598,6 @@ class ContentService:
         statement = statement.order_by(ContentBrand.name)
         return list((await self.session.execute(statement)).scalars().all())
 
-    # -------------------------------------------------------------- character
-    async def get_character(self, brand_id: uuid.UUID, *, company_id: uuid.UUID) -> BrandCharacter:
-        await self.get_brand(brand_id, company_id=company_id)
-        character = (
-            await self.session.execute(
-                select(BrandCharacter).where(BrandCharacter.brand_id == brand_id)
-            )
-        ).scalar_one_or_none()
-        if character is None:
-            brand = await self.get_brand(brand_id, company_id=company_id)
-            character = BrandCharacter(
-                brand_id=brand.id,
-                company_id=company_id,
-                provider="heygen",
-                status=CharacterStatus.NOT_CREATED.value,
-                language=brand.language,
-            )
-            self.session.add(character)
-            await self.session.flush()
-        return character
-
-    async def create_character(
-        self,
-        brand_id: uuid.UUID,
-        *,
-        company_id: uuid.UUID,
-        connection_id: uuid.UUID,
-        source_image_url: str | None,
-        voice_id: str | None = None,
-    ) -> BrandCharacter:
-        """Start the verified HeyGen photo-avatar creation flow.
-
-        Requires an explicit ``source_image_url`` asset the provider can fetch.
-        A persistent character is created ONCE per brand — never per video.
-        """
-        brand = await self.get_brand(brand_id, company_id=company_id)
-        character = await self.get_character(brand_id, company_id=company_id)
-        if character.status == CharacterStatus.ACTIVE.value:
-            raise ConflictError(
-                "An active character already exists for this brand.",
-                details=[{"character_id": str(character.id)}],
-            )
-        if character.status == CharacterStatus.CREATING.value:
-            raise ConflictError("Character creation is already in progress.")
-        # A character is created ONCE per brand. Only a never-created or failed
-        # character may start (or restart) the paid photo-avatar training flow.
-        if character.status not in (
-            CharacterStatus.NOT_CREATED.value,
-            CharacterStatus.FAILED.value,
-        ):
-            raise ConflictError(
-                "A character already exists for this brand; reactivate it instead "
-                "of creating a new paid avatar.",
-                details=[{"character_id": str(character.id), "status": character.status}],
-            )
-        if not source_image_url:
-            raise ConflictError(
-                "A source portrait image_url is required to create the character "
-                "(explicit asset fetched by the provider).",
-                details=[{"field": "source_image_url"}],
-            )
-
-        character.source_image_url = source_image_url
-        character.voice_id = voice_id or character.voice_id
-        character.status = CharacterStatus.CREATING.value
-        character.creation_metadata = {"requested_at": self._now_iso()}
-
-        try:
-            metadata = await self._heygen_operation(
-                connection_id=connection_id,
-                company_id=company_id,
-                operation="create_photo_avatar",
-                params={
-                    "name": f"{brand.name} character",
-                    "image_url": source_image_url,
-                    # Stable key: a retried creation request cannot start (and
-                    # bill) a second photo-avatar training job.
-                    "idempotency_key": f"vandad-avatar-{character.id}",
-                },
-            )
-        except ProviderError as exc:
-            character.status = CharacterStatus.FAILED.value
-            character.creation_metadata = {
-                **(character.creation_metadata or {}),
-                "last_error": exc.message,
-                "error_code": exc.code,
-            }
-            await self.session.flush()
-            raise
-
-        character.provider_avatar_id = metadata.get("provider_avatar_id")
-        character.provider_group_id = metadata.get("provider_group_id")
-        character.avatar_kind = "photo_avatar"
-        character.status = CharacterStatus.TRAINING.value
-        character.creation_metadata = {
-            **(character.creation_metadata or {}),
-            "created_at": self._now_iso(),
-            **metadata,
-        }
-        self.audit.record(
-            event_type="content.character_creation_started",
-            action="create",
-            company_id=company_id,
-            resource_type=CHARACTER_RESOURCE,
-            resource_id=character.id,
-            metadata={
-                "provider": "heygen",
-                "provider_avatar_id": character.provider_avatar_id,
-                "group_id": character.provider_group_id,
-            },
-        )
-        await self.session.flush()
-        return character
-
-    async def refresh_character(
-        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, connection_id: uuid.UUID
-    ) -> BrandCharacter:
-        """Poll photo-avatar training; persist the persistent avatar id on success."""
-        character = await self.get_character(brand_id, company_id=company_id)
-        if character.provider_avatar_id is None:
-            raise ConflictError("Character creation has not started.")
-        try:
-            metadata = await self._heygen_operation(
-                connection_id=connection_id,
-                company_id=company_id,
-                operation="photo_avatar_status",
-                params={"provider_avatar_id": character.provider_avatar_id},
-            )
-        except ProviderError as exc:
-            if exc.code != "still_training":
-                raise
-            # Training is asynchronous; a poll is not an error. Keep the
-            # persisted look id and report the in-progress status.
-            character.last_checked_at = datetime.now(UTC)
-            character.creation_metadata = {
-                **(character.creation_metadata or {}),
-                "last_checked_at": self._now_iso(),
-                "last_status": "training",
-            }
-            await self.session.flush()
-            return character
-        character.last_checked_at = datetime.now(UTC)
-        avatar_id = metadata.get("provider_avatar_id") or character.provider_avatar_id
-        character.provider_avatar_id = str(avatar_id)
-        character.avatar_kind = "photo_avatar"
-        character.status = CharacterStatus.ACTIVE.value
-        character.creation_metadata = {**(character.creation_metadata or {}), **metadata}
-        self.audit.record(
-            event_type="content.character_activated",
-            action="activate",
-            company_id=company_id,
-            resource_type=CHARACTER_RESOURCE,
-            resource_id=character.id,
-            metadata={"provider_avatar_id": str(avatar_id)},
-        )
-        await self.session.flush()
-        return character
-
-    async def set_character_status(
-        self, brand_id: uuid.UUID, *, company_id: uuid.UUID, active: bool
-    ) -> BrandCharacter:
-        character = await self.get_character(brand_id, company_id=company_id)
-        if character.status == CharacterStatus.NOT_CREATED.value:
-            raise ConflictError("The character has not been created yet.")
-        character.status = CharacterStatus.ACTIVE.value if active else CharacterStatus.INACTIVE.value
-        self.audit.record(
-            event_type="content.character_status_changed",
-            action="activate" if active else "deactivate",
-            company_id=company_id,
-            resource_type=CHARACTER_RESOURCE,
-            resource_id=character.id,
-            metadata={"status": character.status},
-        )
-        await self.session.flush()
-        return character
-
     # ---------------------------------------------------------------- projects
     async def create_project(
         self, *, scope: CompanyScope, brand_id: uuid.UUID, topic: str
@@ -871,65 +692,6 @@ class ContentService:
             resource_type=PROJECT_RESOURCE,
             resource_id=project.id,
             metadata={},
-        )
-        await self.session.flush()
-        await self.session.refresh(project)
-        return project
-
-    async def generate_video(
-        self,
-        project_id: uuid.UUID,
-        *,
-        scope: CompanyScope,
-        connection_id: uuid.UUID,
-        task_id: uuid.UUID | None = None,
-    ) -> ContentProject:
-        project = await self.get_project(project_id, company_id=scope.company_id)
-        if project.status != ProjectStatus.APPROVED.value:
-            raise ConflictError(
-                f"Only approved projects can generate video (status '{project.status}').",
-                details=[{"status": project.status}],
-            )
-        if project.provider_job_id:
-            raise ConflictError(
-                "This project already has a paid HeyGen submission.",
-                details=[{"provider_job_id": project.provider_job_id}],
-            )
-        character = await self.get_character(project.brand_id, company_id=scope.company_id)
-        if character.status != CharacterStatus.ACTIVE.value or not character.provider_avatar_id:
-            raise ConflictError(
-                "The brand character is not active in HeyGen; create and activate it first.",
-                details=[{"status": character.status}],
-            )
-        await ProviderBudgetService(self.session).assert_budget_enabled(
-            scope.company_id, "heygen"
-        )
-        project.cost_metadata = {"provider_id": "heygen", "status": "budget_check_pending"}
-        await self.ensure_workflow(
-            VIDEO_WORKFLOW_NAME, VIDEO_WORKFLOW_GRAPH, company_id=scope.company_id,
-            connection_id=connection_id,
-        )
-        workflow = await self._require_published(VIDEO_WORKFLOW_NAME, scope.company_id)
-        execution, _created = await self._execution_service.execute_workflow(
-            workflow.id,
-            scope=scope,
-            input_metadata={
-                "project_id": str(project.id),
-                "agent_task_id": str(task_id) if task_id else None,
-            },
-            idempotency_key=f"video:{project.id}",
-            trigger_type=WorkflowTriggerType.API,
-            trigger_reference=str(project.id),
-        )
-        project.status = ProjectStatus.VIDEO_GENERATING.value
-        project.video_workflow_execution_id = execution.id
-        self.audit.record(
-            event_type="content.video_generation_started",
-            action="generate_video",
-            company_id=scope.company_id,
-            resource_type=PROJECT_RESOURCE,
-            resource_id=project.id,
-            metadata={"execution_id": str(execution.id)},
         )
         await self.session.flush()
         await self.session.refresh(project)
