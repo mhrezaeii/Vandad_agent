@@ -7,7 +7,7 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 - Python 3.12+, FastAPI, Pydantic v2
 - PostgreSQL 16, SQLAlchemy async, Alembic
 - Redis-backed workflow queue and worker
-- Provider adapters for OpenAI-compatible LLM APIs, browser automation, HeyGen and scene-video APIs
+- Provider adapters for OpenAI-compatible LLM APIs, browser automation and AI video APIs
 - APIMaster scene-video adapter (Wan video models), generic HTTP scene-video adapter and mock provider
 - AI-provider-native video generation, editing/composition and tenant-scoped artifact storage
 - Next.js 15 + React 19 + TypeScript frontend, Docker Compose, pytest and Ruff
