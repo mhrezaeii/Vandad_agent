@@ -272,7 +272,7 @@ async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
 
 
 
-async def test_completed_scene_jobs_settle_provider_usd_cost(
+async def test_scene_video_budget_waits_for_composition_and_aggregates_cost(
     db_session, content_service, company_and_platform
 ):
     from decimal import Decimal
@@ -315,10 +315,66 @@ async def test_completed_scene_jobs_settle_provider_usd_cost(
     await db_session.refresh(reservation)
 
     assert summary["all_terminal"] is True
+    assert reservation.status == "reserved"
+    assert reservation.actual_cost_usd is None
+    assert project.cost_metadata["status"] == "reserved"
+
+    await service._settle_project_video_budget(
+        project, await _jobs(db_session, project.id), composition_cost_usd=Decimal("0.20")
+    )
+    await db_session.commit()
+    await db_session.refresh(reservation)
+
     assert reservation.status == "settled"
-    assert reservation.actual_cost_usd == Decimal("0.30")
+    assert reservation.actual_cost_usd == Decimal("0.50")
     assert project.cost_metadata["status"] == "settled"
-    assert project.cost_metadata["actual_cost_usd"] == "0.30"
+    assert project.cost_metadata["actual_cost_usd"] == "0.50"
+
+
+async def test_scene_video_budget_stays_reserved_when_composition_cost_is_unknown(
+    db_session, content_service, company_and_platform
+):
+    from decimal import Decimal
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    reservation = ProviderUsageRecord(
+        company_id=company.id,
+        provider_id="mock",
+        operation="content.scene.generate_video",
+        status="reserved",
+        idempotency_key=f"scene-cost-unknown-{project.id}",
+        reserved_amount_usd=Decimal("5.00"),
+        usage_payload={},
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    project.cost_metadata = {
+        "provider_id": "mock",
+        "budget_reservation_id": str(reservation.id),
+        "status": "reserved",
+    }
+    provider = MockSceneVideoProvider(poll_steps=1)
+    async def completed_with_cost(job_id):
+        return SceneGenerationStatus(
+            job_id=job_id,
+            state=SceneJobState.COMPLETED.value,
+            progress=1.0,
+            raw={"cost_usd": "0.10", "currency": "USD"},
+        )
+    provider.get_generation_status = completed_with_cost
+    service = _service(db_session, provider)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    await service.submit_pending(project)
+    await service.poll_jobs(project)
+    await service._settle_project_video_budget(
+        project, await _jobs(db_session, project.id), composition_cost_usd=None
+    )
+    await db_session.commit()
+    await db_session.refresh(reservation)
+
+    assert reservation.status == "reserved"
+    assert reservation.actual_cost_usd is None
 
 
 async def test_submission_failure_can_be_retried(

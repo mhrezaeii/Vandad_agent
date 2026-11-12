@@ -383,17 +383,23 @@ class SceneVideoService:
             elif summary["cancelled"]:
                 project.status = ProjectStatus.CANCELLED.value
             else:
+                # Scene completion is not the end of the paid operation: the
+                # provider still has to compose the final deliverable. Keep the
+                # task reservation open until composition has completed.
                 project.status = ProjectStatus.VIDEO_GENERATED.value
-                await self._settle_project_video_budget(project, jobs)
         else:
             project.status = ProjectStatus.VIDEO_GENERATING.value
         await self.session.flush()
         return summary
 
     async def _settle_project_video_budget(
-        self, project: ContentProject, jobs: list[SceneVideoJob]
+        self,
+        project: ContentProject,
+        jobs: list[SceneVideoJob],
+        *,
+        composition_cost_usd: Decimal | None,
     ) -> None:
-        """Settle a paid scene reservation only when every clip reports USD cost."""
+        """Settle only after every scene and final composition report USD cost."""
         metadata = project.cost_metadata or {}
         reservation_id = metadata.get("budget_reservation_id")
         if not reservation_id or not jobs:
@@ -410,7 +416,11 @@ class SceneVideoService:
         )
         if reservation is None or reservation.status == "settled":
             return
-        costs: list[Decimal] = []
+        # Missing composition usage is unknown spend, not zero spend. Keep
+        # the original reservation charged until an operator reconciles it.
+        if composition_cost_usd is None or not composition_cost_usd.is_finite() or composition_cost_usd < 0:
+            return
+        costs: list[Decimal] = [composition_cost_usd]
         for job in jobs:
             value = (job.cost_metadata or {}).get("reported_cost_usd")
             if value is None:
@@ -647,7 +657,13 @@ class SceneVideoService:
                 code="invalid_final_video",
             )
 
-        reported_cost = parse_reported_cost(status.raw or {})
+        raw_usage = (status.raw or {}).get("usage")
+        reported_cost = parse_reported_cost(raw_usage) if isinstance(raw_usage, dict) else None
+        if reported_cost is None:
+            reported_cost = parse_reported_cost(status.raw or {})
+        await self._settle_project_video_budget(
+            project, jobs, composition_cost_usd=reported_cost
+        )
         metadata = {
             **assembly,
             "service": "ai_provider",
