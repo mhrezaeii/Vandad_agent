@@ -174,6 +174,11 @@ class SceneVideoProvider(ABC):
     supports_reference_image: bool = False
     supports_composition: bool = False
     supports_quality_review: bool = False
+    supported_modalities: tuple[str, ...] = ("video",)
+    supported_languages: tuple[str, ...] | None = None
+    supported_aspect_ratios: tuple[str, ...] | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
     @abstractmethod
     async def generate_video(self, request: SceneVideoRequest) -> str:

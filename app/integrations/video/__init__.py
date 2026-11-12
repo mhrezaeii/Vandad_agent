@@ -67,6 +67,9 @@ class SceneVideoProviderRegistry:
         require_composition: bool = False,
         require_lipsync: bool = False,
         require_reference_image: bool = False,
+        require_quality_review: bool = False,
+        required_durations: tuple[float, ...] = (),
+        required_aspect_ratio: str | None = None,
     ) -> SceneVideoProvider:
         """Choose the first configured provider satisfying required capabilities.
 
@@ -82,6 +85,22 @@ class SceneVideoProviderRegistry:
             if require_lipsync and not provider.supports_lipsync:
                 continue
             if require_reference_image and not provider.supports_reference_image:
+                continue
+            if require_quality_review and not provider.supports_quality_review:
+                continue
+            if provider.min_duration_seconds is not None and any(
+                duration < provider.min_duration_seconds for duration in required_durations
+            ):
+                continue
+            if provider.max_duration_seconds is not None and any(
+                duration > provider.max_duration_seconds for duration in required_durations
+            ):
+                continue
+            if (
+                required_aspect_ratio
+                and provider.supported_aspect_ratios is not None
+                and required_aspect_ratio not in provider.supported_aspect_ratios
+            ):
                 continue
             return provider
         raise SceneVideoProviderRegistryError(

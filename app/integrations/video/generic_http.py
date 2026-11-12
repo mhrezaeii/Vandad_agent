@@ -81,6 +81,11 @@ class GenericHttpConfig:
     request_extra: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 30.0
     download_allowed_hosts: tuple[str, ...] = ()
+    supported_modalities: tuple[str, ...] = ("video",)
+    supported_languages: tuple[str, ...] | None = None
+    supported_aspect_ratios: tuple[str, ...] | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.base_url)
@@ -102,6 +107,16 @@ class GenericHttpConfig:
                 or parsed_compose.fragment
             ):
                 raise ValueError("GenericHttpConfig.compose_path must be a local API path.")
+        if self.min_duration_seconds is not None and self.min_duration_seconds <= 0:
+            raise ValueError("min_duration_seconds must be positive.")
+        if self.max_duration_seconds is not None and self.max_duration_seconds <= 0:
+            raise ValueError("max_duration_seconds must be positive.")
+        if (
+            self.min_duration_seconds is not None
+            and self.max_duration_seconds is not None
+            and self.max_duration_seconds < self.min_duration_seconds
+        ):
+            raise ValueError("max_duration_seconds must not be below min_duration_seconds.")
         for host in self.download_allowed_hosts:
             if not host or host != host.strip() or "/" in host or ":" in host:
                 raise ValueError("download_allowed_hosts must contain plain hostnames only.")
@@ -128,7 +143,11 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         self._client_factory = client_factory
         self.supports_composition = bool(config.compose_path)
         self.supports_quality_review = bool(config.quality_path)
-        self.supports_quality_review = bool(config.quality_path)
+        self.supported_modalities = tuple(config.supported_modalities)
+        self.supported_languages = config.supported_languages
+        self.supported_aspect_ratios = config.supported_aspect_ratios
+        self.min_duration_seconds = config.min_duration_seconds
+        self.max_duration_seconds = config.max_duration_seconds
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
         body: dict[str, Any] = {
