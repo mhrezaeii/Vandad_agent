@@ -17,9 +17,9 @@ from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
     SceneVideoCompositionRequest,
+    SceneVideoHealthResult,
     SceneVideoPermanentError,
     SceneVideoProvider,
-    SceneVideoHealthResult,
     SceneVideoQualityRequest,
     SceneVideoQualityResult,
     SceneVideoRequest,
@@ -227,7 +227,11 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         return SceneVideoHealthResult(
             provider_id=self.provider_id,
             healthy=healthy,
-            message="Provider health probe succeeded." if healthy else "Provider health probe reported unhealthy status.",
+            message=(
+                "Provider health probe succeeded."
+                if healthy
+                else "Provider health probe reported unhealthy status."
+            ),
             latency_ms=latency_ms,
         )
 
