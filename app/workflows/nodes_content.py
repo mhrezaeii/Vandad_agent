@@ -21,7 +21,6 @@ from app.integrations.providers.base import (
     ProviderTransientError,
 )
 from app.models import (
-    ArtifactKind,
     BrandPlatformLink,
     ContentBrand,
     ContentProject,
@@ -84,6 +83,26 @@ async def _require_project(engine, execution: WorkflowExecution, project_id: uui
 
 
 # ------------------------------------------------------------- update_project
+async def _last_provider_output(engine, execution: WorkflowExecution) -> dict | None:
+    """Latest completed provider step output within this execution."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from app.models import WorkflowExecutionStep  # noqa: PLC0415
+
+    result = await engine.session.execute(
+        select(WorkflowExecutionStep)
+        .where(
+            WorkflowExecutionStep.execution_id == execution.id,
+            WorkflowExecutionStep.node_type == "action.provider",
+            WorkflowExecutionStep.status == "completed",
+        )
+        .order_by(WorkflowExecutionStep.started_at.desc())
+        .limit(1)
+    )
+    step = result.scalar_one_or_none()
+    return (step.output or {}) if step else None
+
+
 async def _update_project(
     engine, execution: WorkflowExecution, node: WorkflowNode, params: dict[str, Any], timeout_seconds: float
 ) -> dict[str, Any]:
