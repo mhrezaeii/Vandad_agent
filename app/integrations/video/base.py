@@ -1,13 +1,12 @@
 """Provider-neutral scene-video generation contract.
 
-The scene pipeline never talks to a vendor directly. It submits one request per
-scene through this interface, polls a persisted provider job id, retrieves the
-clip bytes, and validates them before assembly.
+The scene pipeline never talks to a vendor directly. It submits scene-generation
+and final-composition requests, polls persisted provider jobs, retrieves media,
+and validates the final provider-produced video.
 
-Nothing in this module is vendor-specific: concrete adapters (``mock`` and the
-generic HTTP adapter) implement the same four operations required by the
-pipeline — ``generate_video``, ``get_generation_status``, ``retrieve_video``
-and ``validate_output``.
+Nothing in this module is vendor-specific: concrete adapters implement the
+provider contract, including ``generate_video``, ``compose_video``,
+``get_generation_status``, ``retrieve_video`` and ``validate_output``.
 """
 
 from __future__ import annotations
@@ -98,7 +97,7 @@ class SceneGenerationStatus:
 
 @dataclass(frozen=True)
 class SceneVideoValidation:
-    """Result of validating a downloaded clip before assembly."""
+    """Result of validating provider-generated media before artifact finalization."""
 
     ok: bool
     size_bytes: int
@@ -124,6 +123,49 @@ def _looks_like_video(data: bytes) -> bool:
     return data[0:1] == b"\x00" and b"mdat" in data[:4096]
 
 
+@dataclass(frozen=True)
+class SceneVideoHealthResult:
+    provider_id: str
+    healthy: bool
+    message: str
+    latency_ms: float | None = None
+
+
+@dataclass(frozen=True)
+class SceneVideoQualityRequest:
+    """Provider-side AI review request for a composed final video."""
+    project_id: str
+    video_url: str
+    storyboard: dict[str, Any]
+    brand_context: dict[str, Any] = field(default_factory=dict)
+    expected_duration_seconds: float | None = None
+    aspect_ratio: str | None = None
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class SceneVideoQualityResult:
+    """Structured provider-side quality assessment."""
+    accepted: bool
+    score: float | None
+    summary: str
+    issues: tuple[str, ...] = ()
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SceneVideoCompositionRequest:
+    """AI-native composition request for a complete storyboard video."""
+
+    project_id: str
+    storyboard: dict[str, Any]
+    scene_video_urls: tuple[str, ...]
+    width: int
+    height: int
+    brand_context: dict[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
+
+
 class SceneVideoProvider(ABC):
     """Abstract scene-video provider.
 
@@ -133,14 +175,46 @@ class SceneVideoProvider(ABC):
 
     provider_id: str = ""
     display_name: str = ""
+    model_id: str | None = None
     supports_cancellation: bool = False
     supports_lipsync: bool = False
     requires_network: bool = False
     supports_reference_image: bool = False
+    supports_composition: bool = False
+    supports_quality_review: bool = False
+    supports_health_check: bool = False
+    supported_modalities: tuple[str, ...] = ("video",)
+    supported_languages: tuple[str, ...] | None = None
+    supported_aspect_ratios: tuple[str, ...] | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
     @abstractmethod
     async def generate_video(self, request: SceneVideoRequest) -> str:
         """Submit one scene and return the provider job id."""
+
+    async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
+        """Submit AI-provider editing/composition and return its persisted job id.
+
+        Providers that only generate isolated clips must fail closed rather than
+        silently falling back to local FFmpeg composition.
+        """
+        raise SceneVideoPermanentError(
+            "This AI provider does not support storyboard video composition.",
+            code="provider_composition_unsupported",
+        )
+
+    async def check_health(self) -> SceneVideoHealthResult:
+        raise SceneVideoPermanentError(
+            "This scene-video provider has no configured live health probe.",
+            code="provider_health_probe_unsupported",
+        )
+
+    async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
+        raise SceneVideoPermanentError(
+            "This AI provider does not support final-video quality review.",
+            code="provider_quality_review_unsupported",
+        )
 
     @abstractmethod
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:

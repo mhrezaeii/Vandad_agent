@@ -199,6 +199,57 @@ async def test_manual_retry_writes_next_outbox_attempt(db_session):
 
 
 
+async def test_agent_worker_persists_retryable_failure_and_enqueues_next_attempt(
+    company_and_platform, db_session
+):
+    company, platform = company_and_platform
+    db_session.add(CompanyAgent(company_id=company.id, agent_key="monitoring", status="active"))
+    await db_session.flush()
+    service = AgentTaskService(db_session, build_default_agent_registry())
+    task = await service.create_task(
+        company.id,
+        requested_by="test-user",
+        agent_key="monitoring",
+        capability="platform.discover",
+        title="Retry after transient provider failure",
+        input_payload={"platform_id": str(platform.id)},
+        idempotency_key=f"worker-retry-{uuid.uuid4()}",
+        priority=50,
+        max_attempts=2,
+    )
+    await db_session.commit()
+
+    class TemporaryProviderFailure(Exception):
+        retryable = True
+        code = "temporary_provider_failure"
+
+    worker = AgentTaskWorker()
+
+    class FailingDispatcher:
+        async def dispatch(self, *_args):
+            raise TemporaryProviderFailure("temporary provider outage")
+
+    worker.dispatcher = FailingDispatcher()
+    try:
+        outbox_id = await worker._claim_one()
+        assert outbox_id is not None
+        await worker._process(outbox_id)
+    finally:
+        await worker.engine.dispose()
+
+    await db_session.refresh(task)
+    assert task.status == "queued"
+    assert task.attempt_count == 1
+    rows = list((await db_session.scalars(
+        select(AgentTaskOutbox)
+        .where(AgentTaskOutbox.task_id == task.id)
+        .order_by(AgentTaskOutbox.attempt_number)
+    )).all())
+    assert [row.attempt_number for row in rows] == [1, 2]
+    assert rows[0].status == "delivered"
+    assert rows[1].status == "pending"
+
+
 async def test_monitoring_agent_composes_discovery_and_knowledge_extraction(
     company_and_platform, session_factory, monkeypatch
 ):
@@ -227,7 +278,7 @@ async def test_monitoring_agent_composes_discovery_and_knowledge_extraction(
         def __init__(self, session, registry, executor, master_key_box):
             calls.append(("knowledge_service_created",))
 
-        async def extract(self, *, platform, connection_id, max_documents):
+        async def extract(self, *, platform, connection_id, max_documents, task_id=None):
             calls.append(("extract", platform.id, connection_id, max_documents))
             return SimpleNamespace(
                 id=uuid.uuid4(),

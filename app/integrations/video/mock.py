@@ -5,9 +5,7 @@ synthetic MP4-shaped payload after a configurable number of status polls. That
 lets the full pipeline (submission -> polling -> download -> assembly) run
 without spending credits or requiring ffmpeg on the host.
 
-The payload is intentionally not a playable AI clip. Assembly tests that need a
-real decodable video generate their own fixtures with ffmpeg and skip when the
-binary is unavailable.
+The payload is a container-shaped fixture only; it is not a playable AI video.
 """
 
 from __future__ import annotations
@@ -20,7 +18,11 @@ from app.integrations.video.base import (
     InMemorySceneVideoProvider,
     SceneGenerationStatus,
     SceneJobState,
+    SceneVideoCompositionRequest,
+    SceneVideoHealthResult,
     SceneVideoPermanentError,
+    SceneVideoQualityRequest,
+    SceneVideoQualityResult,
     SceneVideoRequest,
 )
 
@@ -45,6 +47,10 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
     provider_id = "mock"
     display_name = "Local mock scene-video provider"
     supports_cancellation = True
+    supports_composition = True
+    supports_quality_review = True
+    supports_health_check = True
+    model_id = "mock-fixture"
     requires_network = False
 
     def __init__(
@@ -75,6 +81,45 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
         job_id = f"mock-{uuid.uuid4().hex}"
         self._jobs[job_id] = {
             "request": request,
+            "state": SceneJobState.QUEUED.value,
+            "polls": 0,
+            "payload": _synthetic_mp4(self.payload_size),
+        }
+        if request.idempotency_key:
+            self._idempotency[request.idempotency_key] = job_id
+        return job_id
+
+    async def check_health(self) -> SceneVideoHealthResult:
+        return SceneVideoHealthResult(
+            provider_id=self.provider_id,
+            healthy=True,
+            message="Mock fixture is available; this is not a live vendor health check.",
+        )
+
+    async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
+        """Fixture-only structural review; not a visual/audio assessment."""
+        return SceneVideoQualityResult(
+            accepted=True, score=1.0,
+            summary="Mock fixture passed structural review only; no visual/audio quality is assessed.",
+            issues=(), usage={},
+        )
+
+    async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
+        """Simulate provider-side editing/composition for integration tests."""
+        if request.idempotency_key and request.idempotency_key in self._idempotency:
+            return self._idempotency[request.idempotency_key]
+        self._consume_quota()
+        job_id = f"mock-compose-{uuid.uuid4().hex}"
+        synthetic_request = SceneVideoRequest(
+            scene_id=f"composition:{request.project_id}",
+            prompt="AI-native final video composition",
+            duration_seconds=30,
+            width=request.width,
+            height=request.height,
+            idempotency_key=request.idempotency_key,
+        )
+        self._jobs[job_id] = {
+            "request": synthetic_request,
             "state": SceneJobState.QUEUED.value,
             "polls": 0,
             "payload": _synthetic_mp4(self.payload_size),

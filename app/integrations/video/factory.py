@@ -22,6 +22,9 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             generate_path=getattr(settings, "scene_video_http_generate_path", "/v1/videos"),
             status_path=getattr(settings, "scene_video_http_status_path", "/v1/videos/{job_id}"),
             retrieve_path=getattr(settings, "scene_video_http_retrieve_path", None),
+            compose_path=getattr(settings, "scene_video_http_compose_path", None),
+            quality_path=getattr(settings, "scene_video_http_quality_path", None),
+            health_path=getattr(settings, "scene_video_http_health_path", None),
             api_key=getattr(settings, "scene_video_http_api_key", None),
             auth_header=getattr(settings, "scene_video_http_auth_header", "Authorization"),
             auth_scheme=getattr(settings, "scene_video_http_auth_scheme", "Bearer"),
@@ -30,6 +33,23 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
                 for host in getattr(settings, "scene_video_http_download_allowed_hosts", "").split(",")
                 if host.strip()
             ),
+            supported_modalities=tuple(
+                value.strip().lower()
+                for value in getattr(settings, "scene_video_http_supported_modalities", "video").split(",")
+                if value.strip()
+            ),
+            supported_languages=tuple(
+                value.strip()
+                for value in getattr(settings, "scene_video_http_supported_languages", "").split(",")
+                if value.strip()
+            ) or None,
+            supported_aspect_ratios=tuple(
+                value.strip()
+                for value in getattr(settings, "scene_video_http_supported_aspect_ratios", "").split(",")
+                if value.strip()
+            ) or None,
+            min_duration_seconds=getattr(settings, "scene_video_http_min_duration_seconds", None),
+            max_duration_seconds=getattr(settings, "scene_video_http_max_duration_seconds", None),
         )
 
     apimaster_config: APIMasterConfig | None = None

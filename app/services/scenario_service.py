@@ -191,6 +191,7 @@ class ScenarioService:
         timeout_seconds: float = 120.0,
         operation: str = "execute",
         idempotency_key: str | None = None,
+        task_id: uuid.UUID | None = None,
     ) -> tuple[Scenario, dict[str, Any]]:
         """Return the validated scenario plus sanitized LLM metadata."""
         system, user = build_scenario_prompt(request)
@@ -202,6 +203,7 @@ class ScenarioService:
             timeout_seconds=timeout_seconds,
             operation=operation,
             idempotency_key=idempotency_key,
+            task_id=task_id,
         )
         scenario = parse_scenario_content(metadata.get("content"), request)
         return scenario, metadata
@@ -216,6 +218,7 @@ class ScenarioService:
         timeout_seconds: float,
         operation: str,
         idempotency_key: str | None = None,
+        task_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         if self._llm_call is not None:
             raw = await self._llm_call(system=system, user=user)
@@ -271,11 +274,12 @@ class ScenarioService:
             idempotency_key=f"llm:{budget_key}",
             model=str(context.configuration.get("model") or "") or None,
             require_budget=True,
+            task_id=task_id,
         )
         # Persist the spend ceiling before crossing the provider boundary. If
         # this process dies mid-request, the reservation remains visible.
         await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
+        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
             failed_result = getattr(outcome, "result", None)

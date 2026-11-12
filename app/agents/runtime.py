@@ -180,6 +180,7 @@ class MonitoringAgentHandler:
                 ).extract(
                     platform=platform,
                     connection_id=connection_id,
+                    task_id=context.task_id,
                     max_documents=max(1, min(int(payload.get("max_documents", 20)), 20)),
                 )
                 await context.report_progress("monitoring.knowledge.completed", snapshot_id=str(snapshot.id))
@@ -235,6 +236,7 @@ class ContentAgentHandler:
                 timeout_seconds=max(
                     1.0, min(float(context.payload.get("timeout_seconds", 180)), 180.0)
                 ),
+                task_id=context.task_id,
             )
             await context.report_progress("content.scenario.completed", project_id=str(project_id))
             await session.commit()
@@ -315,7 +317,11 @@ class VideoProductionAgentHandler:
             )
             if capability == "video.scene.generate":
                 updated = await service.generate_scene_video(
-                    project_id, scope=scope, provider_id=provider_id
+                    project_id,
+                    scope=scope,
+                    provider_id=provider_id,
+                    task_id=context.task_id,
+                    provider_fallbacks=context.payload.get("provider_fallbacks"),
                 )
             elif capability == "video.avatar.generate":
                 try:
@@ -323,17 +329,18 @@ class VideoProductionAgentHandler:
                 except (KeyError, ValueError, TypeError) as exc:
                     raise ValueError("Avatar video tasks require a valid connection_id.") from exc
                 updated = await service.generate_video(
-                    project_id, scope=scope, connection_id=connection_id
+                    project_id, scope=scope, connection_id=connection_id, task_id=context.task_id
                 )
             else:
                 raise ConflictError("Unsupported video production capability.")
 
             cost_metadata = updated.cost_metadata or {}
+            effective_provider_id = updated.scene_video_provider or provider_id
             await context.report_progress(
                 "video.workflow.dispatched",
                 project_id=str(updated.id),
                 workflow_execution_id=str(updated.video_workflow_execution_id),
-                provider_id=provider_id,
+                provider_id=effective_provider_id,
                 cost_status=cost_metadata.get("status", "budget_check_pending"),
             )
             await session.commit()
@@ -342,7 +349,7 @@ class VideoProductionAgentHandler:
                 "project_id": str(updated.id),
                 "project_status": updated.status,
                 "workflow_execution_id": str(updated.video_workflow_execution_id),
-                "provider_id": provider_id,
+                "provider_id": effective_provider_id,
                 "budget_reservation_id": cost_metadata.get("budget_reservation_id"),
                 "cost_status": cost_metadata.get("status", "budget_check_pending"),
             }

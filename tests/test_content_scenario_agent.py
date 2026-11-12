@@ -112,7 +112,7 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
             self.session = session
 
         async def generate(
-            self, *, company_id, connection_id, request, timeout_seconds, idempotency_key=None
+            self, *, company_id, connection_id, request, timeout_seconds, idempotency_key=None, task_id=None
         ):
             captured["calls"] += 1
             captured["request"] = request

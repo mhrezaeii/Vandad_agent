@@ -21,8 +21,11 @@ from app.schemas.provider import (
     ProviderRead,
     ProviderUsageRead,
     ProviderUsageReconcile,
+    SceneVideoModelRead,
+    SceneVideoProviderHealthRead,
     SceneVideoProviderRead,
 )
+from app.security.redaction import redact_text
 from app.services.provider_budget_service import ProviderBudgetService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
@@ -159,14 +162,81 @@ async def list_scene_video_providers(
         SceneVideoProviderRead(
             provider_id=provider.provider_id,
             display_name=provider.display_name,
+            model_id=provider.model_id,
             requires_network=provider.requires_network,
             supports_lipsync=provider.supports_lipsync,
             supports_reference_image=provider.supports_reference_image,
             supports_cancellation=provider.supports_cancellation,
+            supports_composition=provider.supports_composition,
+            supports_quality_review=provider.supports_quality_review,
+            supports_health_check=provider.supports_health_check,
             daily_quota=provider.quota_limit_per_day(),
         )
         for provider in registry.list_providers()
     ]
+
+
+@router.get("/scene-video/models", response_model=list[SceneVideoModelRead])
+async def list_scene_video_models(
+    request: Request,
+    _principal: Annotated[object, Depends(get_principal)],
+) -> list[SceneVideoModelRead]:
+    """Return configured model capabilities without inventing unknown constraints."""
+    registry = getattr(request.app.state, "scene_video_registry", None)
+    if registry is None:
+        return []
+    return [
+        SceneVideoModelRead(
+            provider_id=provider.provider_id,
+            model_id=provider.model_id,
+            supports_lipsync=provider.supports_lipsync,
+            supports_reference_image=provider.supports_reference_image,
+            supports_cancellation=provider.supports_cancellation,
+            supports_composition=provider.supports_composition,
+            supports_quality_review=provider.supports_quality_review,
+            supports_health_check=provider.supports_health_check,
+            supported_modalities=list(provider.supported_modalities),
+            supported_languages=(
+                list(provider.supported_languages)
+                if provider.supported_languages is not None else None
+            ),
+            supported_aspect_ratios=(
+                list(provider.supported_aspect_ratios)
+                if provider.supported_aspect_ratios is not None else None
+            ),
+            min_duration_seconds=provider.min_duration_seconds,
+            max_duration_seconds=provider.max_duration_seconds,
+        )
+        for provider in registry.list_providers()
+    ]
+
+
+@router.post("/scene-video/{provider_id}/health", response_model=SceneVideoProviderHealthRead)
+async def probe_scene_video_provider_health(
+    provider_id: str,
+    request: Request,
+    _principal: Annotated[object, Depends(get_principal)],
+) -> SceneVideoProviderHealthRead:
+    registry = getattr(request.app.state, "scene_video_registry", None)
+    if registry is None or not registry.has(provider_id):
+        from app.core.exceptions import NotFoundError
+        raise NotFoundError("Scene-video provider is not registered.")
+    provider = registry.get(provider_id)
+    if not provider.supports_health_check:
+        return SceneVideoProviderHealthRead(
+            provider_id=provider_id,
+            supported=False,
+            healthy=False,
+            message="No live health probe is configured for this provider.",
+        )
+    result = await provider.check_health()
+    return SceneVideoProviderHealthRead(
+        provider_id=provider_id,
+        supported=True,
+        healthy=result.healthy,
+        message=redact_text(result.message),
+        latency_ms=result.latency_ms,
+    )
 
 
 @router.get("/{provider_id}", response_model=ProviderRead)

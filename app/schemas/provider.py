@@ -79,14 +79,44 @@ class ProviderHealthRead(BaseModel):
     last_call_at: datetime
 
 
+class SceneVideoProviderHealthRead(BaseModel):
+    provider_id: str
+    supported: bool
+    healthy: bool
+    message: str
+    latency_ms: float | None = None
+
+
 class SceneVideoProviderRead(BaseModel):
     provider_id: str
     display_name: str
+    model_id: str | None = None
     requires_network: bool
     supports_lipsync: bool
     supports_reference_image: bool
     supports_cancellation: bool
+    supports_composition: bool
+    supports_quality_review: bool = False
+    supports_health_check: bool = False
     daily_quota: int | None = None
+
+
+class SceneVideoModelRead(BaseModel):
+    """Configured model-level capability record; unknown constraints stay unknown."""
+
+    provider_id: str
+    model_id: str | None
+    supports_lipsync: bool
+    supports_reference_image: bool
+    supports_cancellation: bool
+    supports_composition: bool
+    supports_quality_review: bool = False
+    supports_health_check: bool = False
+    supported_modalities: list[str] = Field(default_factory=lambda: ["video"])
+    supported_languages: list[str] | None = None
+    supported_aspect_ratios: list[str] | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
 
 class ProviderUsageReconcile(BaseModel):

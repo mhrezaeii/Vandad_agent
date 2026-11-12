@@ -226,6 +226,26 @@ async def deactivate_connection(
     return ConnectionRead.model_validate(connection)
 
 
+@router.post("/{connection_id}/health", response_model=ConnectionTestResult)
+async def check_connection_health(
+    connection_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    validation: Annotated[ConnectionValidationService, Depends(get_connection_validation_service)],
+) -> ConnectionTestResult:
+    """Run a live provider health probe without changing connection lifecycle state."""
+    result = await validation.check_health(connection_id, company_id=scope.company_id)
+    return ConnectionTestResult(
+        success=result.success,
+        status_after=result.status_after,
+        provider_id=result.provider_id,
+        message=result.message,
+        error_code=result.error_code,
+        latency_ms=result.latency_ms,
+        attempts=result.attempts,
+        degraded=result.degraded,
+    )
+
+
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)
 async def test_connection(
     connection_id: uuid.UUID,

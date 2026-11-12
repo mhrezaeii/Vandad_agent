@@ -467,13 +467,68 @@ class WorkflowEngine:
             "validate_connection": adapter.validate_connection,
             "check_health": adapter.check_health,
         }[operation]
+        budget_service = None
+        budget_reservation = None
+        if adapter.provider_id == "llm_openai" and operation == "execute":
+            from app.services.provider_budget_service import ProviderBudgetService  # noqa: PLC0415
+
+            raw_task_id = (execution.input_metadata or {}).get("agent_task_id")
+            try:
+                task_id = uuid.UUID(str(raw_task_id)) if raw_task_id else None
+            except (TypeError, ValueError) as exc:
+                raise ProviderError(
+                    "The workflow contains an invalid agent task budget reference.",
+                    code="invalid_task_budget_context",
+                ) from exc
+            budget_service = ProviderBudgetService(self.session)
+            budget_reservation = await budget_service.reserve(
+                execution.company_id,
+                adapter.provider_id,
+                "workflow.llm.execute",
+                idempotency_key=f"workflow:{execution.id}:{node.node_key}",
+                model=str(context.configuration.get("model") or "") or None,
+                require_budget=True,
+                task_id=task_id,
+            )
+            # Commit the reservation before crossing a potentially billable
+            # provider boundary; crashes remain visible as reserved/unknown.
+            await self.session.commit()
+
+        # LLM completions are billable and do not carry a provider-enforced
+        # idempotency key here; never transparently retry an ambiguous request.
+        provider_idempotent = spec.idempotent and adapter.provider_id != "llm_openai"
         outcome = await self.executor.run(
-            adapter, context, operation_callable, idempotent=spec.idempotent
+            adapter, context, operation_callable, idempotent=provider_idempotent
         )
         if not outcome.success:
             error = outcome.error or ProviderError("The provider operation failed.")
+            if budget_service is not None and budget_reservation is not None:
+                await budget_service.settle(
+                    budget_reservation,
+                    error_code=error.code,
+                    usage={"attempts": outcome.attempts},
+                )
             raise error
         result = outcome.result
+        if budget_service is not None and budget_reservation is not None:
+            usage = {
+                **(result.metadata or {}),
+                **(
+                    result.metadata.get("usage")
+                    if isinstance((result.metadata or {}).get("usage"), dict)
+                    else {}
+                ),
+            }
+            await budget_service.settle(
+                budget_reservation,
+                usage={
+                    **usage,
+                    "model": (result.metadata or {}).get("model")
+                    or context.configuration.get("model"),
+                    "latency_ms": result.latency_ms,
+                    "attempts": outcome.attempts,
+                },
+            )
         raw_output = {
             "message": result.message,
             "latency_ms": result.latency_ms,

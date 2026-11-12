@@ -123,6 +123,7 @@ class PlatformKnowledgeService:
 
     async def extract(
         self, *, platform: Platform, connection_id: uuid.UUID, max_documents: int = 20,
+        task_id: uuid.UUID | None = None,
     ) -> PlatformKnowledgeSnapshot:
         documents = list((await self.session.scalars(
             select(PlatformSourceDocument).where(
@@ -187,10 +188,11 @@ class PlatformKnowledgeService:
             idempotency_key=f"knowledge:{budget_key}",
             model=str(context.configuration.get("model") or "") or None,
             require_budget=True,
+            task_id=task_id,
         )
         # The provider may bill even if this worker exits before settlement.
         await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=True)
+        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
         if not outcome.success:
             error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
             failed_result = getattr(outcome, "result", None)

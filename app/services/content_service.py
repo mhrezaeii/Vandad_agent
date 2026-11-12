@@ -18,6 +18,7 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
+from math import gcd
 from typing import Any
 
 from sqlalchemy import func, select
@@ -811,7 +812,8 @@ class ContentService:
 
     # --------------------------------------------------------- script + video
     async def generate_script(
-        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         project = await self.get_project(project_id, company_id=scope.company_id)
         if project.status not in (ProjectStatus.DRAFT.value, ProjectStatus.SCRIPT_FAILED.value):
@@ -827,7 +829,11 @@ class ContentService:
         execution, _created = await self._execution_service.execute_workflow(
             workflow.id,
             scope=scope,
-            input_metadata={"project_id": str(project.id), "topic": project.topic},
+            input_metadata={
+                "project_id": str(project.id),
+                "topic": project.topic,
+                "agent_task_id": str(task_id) if task_id else None,
+            },
             idempotency_key=f"script:{project.id}",
             trigger_type=WorkflowTriggerType.API,
             trigger_reference=str(project.id),
@@ -871,7 +877,12 @@ class ContentService:
         return project
 
     async def generate_video(
-        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        connection_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         project = await self.get_project(project_id, company_id=scope.company_id)
         if project.status != ProjectStatus.APPROVED.value:
@@ -902,7 +913,10 @@ class ContentService:
         execution, _created = await self._execution_service.execute_workflow(
             workflow.id,
             scope=scope,
-            input_metadata={"project_id": str(project.id)},
+            input_metadata={
+                "project_id": str(project.id),
+                "agent_task_id": str(task_id) if task_id else None,
+            },
             idempotency_key=f"video:{project.id}",
             trigger_type=WorkflowTriggerType.API,
             trigger_reference=str(project.id),
@@ -983,7 +997,12 @@ class ContentService:
         return project
 
     async def generate_scene_scenario(
-        self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        connection_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
     ) -> ContentProject:
         """Start scenario generation through the existing text API connection."""
         project = await self.get_project(project_id, company_id=scope.company_id)
@@ -1013,6 +1032,7 @@ class ContentService:
                 "topic": project.topic,
                 "target_duration_seconds": options.get("target_duration_seconds", 30),
                 "scene_count": options.get("scene_count"),
+                "agent_task_id": str(task_id) if task_id else None,
             },
             idempotency_key=f"scene-script:{project.id}",
             trigger_type=WorkflowTriggerType.API,
@@ -1065,6 +1085,8 @@ class ContentService:
         *,
         scope: CompanyScope,
         provider_id: str | None = None,
+        task_id: uuid.UUID | None = None,
+        provider_fallbacks: list[str] | None = None,
     ) -> ContentProject:
         """Start per-scene generation, polling, download and assembly."""
         project = await self.get_project(project_id, company_id=scope.company_id)
@@ -1089,12 +1111,64 @@ class ContentService:
 
             if get_settings().is_production:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
+        if self.scene_video_registry is None:
+            raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
         if selected_provider and self.scene_video_registry is not None:
-            if not self.scene_video_registry.has(selected_provider):
-                raise UnprocessableEntityError(
-                    f"Scene-video provider '{selected_provider}' is not available.",
-                    details=[{"field": "provider_id", "value": selected_provider}],
+            scenario_scenes = (project.scenario or {}).get("scenes", [])
+            requires_lipsync = any(
+                isinstance(scene, dict)
+                and scene.get("scene_type") == "presenter"
+                and scene.get("speaker") == "brand_character"
+                and bool(scene.get("dialogue") or scene.get("narration"))
+                for scene in scenario_scenes
+            )
+            fallback_ids = (
+                provider_fallbacks
+                if provider_fallbacks is not None
+                else options.get("provider_fallbacks", [])
+            )
+            ordered_ids = [selected_provider]
+            if isinstance(fallback_ids, list):
+                ordered_ids.extend(
+                    str(item) for item in fallback_ids
+                    if isinstance(item, str) and item and item not in ordered_ids
                 )
+            from app.integrations.video import SceneVideoProviderRegistryError
+
+            brand = await self.session.get(ContentBrand, project.brand_id)
+            if brand is None or brand.company_id != scope.company_id:
+                raise NotFoundError("Brand not found for this project.")
+            required_durations = tuple(
+                float(scene["duration_seconds"])
+                for scene in scenario_scenes
+                if isinstance(scene, dict)
+                and isinstance(scene.get("duration_seconds"), (int, float))
+                and not isinstance(scene.get("duration_seconds"), bool)
+            )
+            divisor = gcd(int(brand.video_width), int(brand.video_height))
+            required_aspect_ratio = (
+                f"{int(brand.video_width) // divisor}:{int(brand.video_height) // divisor}"
+            )
+            try:
+                selected = await self.scene_video_registry.resolve_ordered_healthy(
+                    ordered_ids,
+                    require_composition=True,
+                    require_lipsync=requires_lipsync,
+                    require_reference_image=bool(options.get("requires_reference_image", False)),
+                    require_quality_review=True,
+                    required_durations=required_durations,
+                    required_aspect_ratio=required_aspect_ratio,
+                    required_language=brand.language,
+                )
+            except SceneVideoProviderRegistryError as exc:
+                raise UnprocessableEntityError(
+                    "No configured scene-video provider satisfies the required production capabilities.",
+                    details=[{"field": "provider_id", "value": selected_provider}],
+                ) from exc
+            selected_provider = selected.provider_id
+            project.scene_video_provider = selected_provider
+            options["provider_id"] = selected_provider
+            project.scene_options = options
         if selected_provider:
             options["provider_id"] = selected_provider
             project.scene_options = options
@@ -1108,6 +1182,7 @@ class ContentService:
                 "content.scene.generate_video",
                 idempotency_key=f"scene-video:{project.id}",
                 require_budget=True,
+                task_id=task_id,
             )
             project.cost_metadata = {
                 "provider_id": selected_provider,
@@ -1132,6 +1207,7 @@ class ContentService:
                 input_metadata={
                     "project_id": str(project.id),
                     "provider_id": selected_provider,
+                    "agent_task_id": str(task_id) if task_id else None,
                     "narration_artifact_id": options.get("narration_artifact_id"),
                 },
                 idempotency_key=f"scene-video:{project.id}",

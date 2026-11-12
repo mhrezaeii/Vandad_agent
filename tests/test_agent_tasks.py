@@ -61,6 +61,44 @@ async def test_task_creation_requires_active_agent_and_is_idempotent(client):
     )
     assert changed.status_code == 409
 
+    changed_ceiling = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(spend_ceiling_usd="5.00"),
+    )
+    assert changed_ceiling.status_code == 409
+
+
+async def test_task_spend_ceiling_is_validated_and_persisted(client):
+    await _activate_agent(client)
+    key = f"spend-ceiling-{uuid.uuid4()}"
+    created = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(
+            idempotency_key=key,
+            spend_ceiling_usd="2.500000",
+        ),
+    )
+    assert created.status_code == 202, created.text
+    assert created.json()["spend_ceiling_usd"] == "2.500000"
+
+    replay = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(
+            idempotency_key=key,
+            spend_ceiling_usd="2.500000",
+        ),
+    )
+    assert replay.status_code == 202, replay.text
+
+    invalid = await client.post(
+        "/api/v1/agent-tasks",
+        json=_task_payload(
+            idempotency_key=f"invalid-ceiling-{uuid.uuid4()}",
+            spend_ceiling_usd="0",
+        ),
+    )
+    assert invalid.status_code == 422
+
 
 async def test_task_progress_events_are_persisted_and_company_scoped(client):
     await _activate_agent(client)
@@ -158,13 +196,17 @@ async def test_video_task_requires_approval_before_outbox_dispatch(client, db_se
         agent_key="video",
         capability="video.scene.generate",
         title="Generate approved scene video",
-        input_payload={"project_id": str(uuid.uuid4())},
+        input_payload={
+            "project_id": str(uuid.uuid4()),
+            "provider_fallbacks": ["apimaster", "generic_http"],
+        },
         idempotency_key=f"video-{uuid.uuid4()}",
     )
     created = await client.post("/api/v1/agent-tasks", json=payload)
     assert created.status_code == 202, created.text
     body = created.json()
     assert body["status"] == "awaiting_approval"
+    assert body["input_payload"]["provider_fallbacks"] == ["apimaster", "generic_http"]
 
     outbox_before = await db_session.scalar(
         select(AgentTaskOutbox).where(AgentTaskOutbox.task_id == uuid.UUID(body["id"]))

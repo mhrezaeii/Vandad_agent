@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import time
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -16,11 +17,16 @@ from sqlalchemy import select
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.integrations.providers import ProviderTransientError
+from app.integrations.providers.base import ProviderResult
 from app.models import (
+    AgentTask,
     Company,
+    CompanyProviderBudget,
     CredentialStorageType,
     Platform,
     PlatformConnection,
+    ProviderUsageRecord,
+    WorkflowExecution,
     WorkflowExecutionStep,
     WorkflowStatus,
 )
@@ -28,7 +34,7 @@ from app.security.crypto import MasterKeyBox
 from app.security.secret_value import SecretValue
 from app.services.credential_service import CredentialService
 from app.services.workflow_execution_service import WorkflowExecutionService
-from app.workflows.engine import WorkflowEngine
+from app.workflows.engine import WorkflowEngine, _NodeSpec
 from tests.conftest import TEST_MASTER_KEY_CONFIG
 from tests.provider_mocks import ScriptedProvider
 
@@ -532,3 +538,87 @@ async def test_engine_is_idempotent_for_terminal_executions(
     second = await wf_engine.run_execution(execution.id, company_id=company.id)
     assert second.outcome == "completed"
     assert len(await _steps(db_session, execution.id)) == steps_after_first
+
+
+async def test_workflow_llm_operation_is_bound_to_agent_task_spend_ceiling(
+    db_session, wf_engine, company_and_platform, monkeypatch
+):
+    company, _ = company_and_platform
+    connection = await _make_connection(
+        db_session,
+        company.id,
+        provider="llm_openai",
+        configuration={"model": "gpt-4.1-mini", "params": {}},
+    )
+    task_id = uuid.uuid4()
+    task = AgentTask(
+        id=task_id,
+        company_id=company.id,
+        agent_key="content",
+        capability="content.scenario.generate",
+        title="Budgeted script workflow",
+        status="running",
+        input_payload={},
+        spend_ceiling_usd=Decimal("0.50"),
+    )
+    db_session.add_all([
+        task,
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="llm_openai",
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("1.00"),
+            enabled=True,
+        ),
+    ])
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="budgeted-script-workflow",
+        workflow_type="custom",
+        status="running",
+        input_metadata={"agent_task_id": str(task_id)},
+    )
+    db_session.add(execution)
+    await db_session.commit()
+
+    adapter = wf_engine.registry.get("llm_openai")
+    calls = 0
+
+    async def fake_execute(context):
+        nonlocal calls
+        calls += 1
+        return ProviderResult(
+            provider_id="llm_openai",
+            success=True,
+            message="Script generated.",
+            metadata={"usage": {"cost_usd": "0.20", "currency": "USD"}},
+        )
+
+    monkeypatch.setattr(adapter, "execute", fake_execute)
+    node = SimpleNamespace(
+        configuration={"connection_id": str(connection.id), "operation": "execute"},
+        node_key="script_generation",
+        output_mapping={},
+    )
+    spec = _NodeSpec(node=node, settings={"timeout_seconds": 30, "idempotent": True})
+
+    with pytest.raises(ConflictError, match="agent task spend ceiling"):
+        await wf_engine._run_provider_action(
+            execution, spec, {}, timeout_seconds=30
+        )
+    assert calls == 0
+
+    task.spend_ceiling_usd = Decimal("2.00")
+    await db_session.commit()
+    result = await wf_engine._run_provider_action(
+        execution, spec, {}, timeout_seconds=30
+    )
+    assert result["message"] == "Script generated."
+    assert calls == 1
+
+    usage = await db_session.scalar(
+        select(ProviderUsageRecord).where(ProviderUsageRecord.task_id == task.id)
+    )
+    assert usage is not None
+    assert usage.status == "settled"
+    assert usage.actual_cost_usd == Decimal("0.20")

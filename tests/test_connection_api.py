@@ -174,6 +174,20 @@ async def test_test_and_activate_endpoints(client, company_and_platform):
     assert deactivated.json()["status"] == "disconnected"
 
 
+async def test_live_provider_health_probe(client, company_and_platform):
+    _, platform = company_and_platform
+    created = await _create_connection(client, platform, name="live-health-probe")
+    response = await client.post(
+        f"/api/v1/connections/{created['id']}/health",
+        headers=company_headers(platform),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider_id"] == "diagnostic"
+    assert body["success"] is True
+    assert body["attempts"] >= 1
+
+
 async def test_health_endpoint_returns_stored_fields(client, company_and_platform):
     _, platform = company_and_platform
     created = await _create_connection(client, platform)
@@ -241,7 +255,7 @@ async def test_cross_company_connection_access_is_404(client, db_session, compan
         response = await client.get(path, headers=foreign)
         assert response.status_code == 404, path
 
-    for action in ("test", "activate", "deactivate"):
+    for action in ("test", "health", "activate", "deactivate"):
         response = await client.post(f"/api/v1/connections/{created['id']}/{action}", headers=foreign)
         assert response.status_code == 404, action
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from math import gcd
 from typing import Any
 
 from sqlalchemy import select
@@ -24,9 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError
 from app.integrations.video import (
     SceneJobState,
+    SceneVideoCompositionRequest,
     SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoProviderRegistry,
+    SceneVideoQualityRequest,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
@@ -42,6 +45,7 @@ from app.models import (
     SceneVideoJobStatus,
 )
 from app.schemas.scenario import Scenario
+from app.security.redaction import redact_text
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
@@ -125,6 +129,10 @@ class SceneVideoService:
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
+        if not provider.supports_quality_review:
+            raise ConflictError(
+                "The selected AI provider must support final-video quality review before generation."
+            )
         presenter_scenes = [
             scene
             for scene in scenario.scenes
@@ -222,6 +230,28 @@ class SceneVideoService:
         jobs = await self._jobs(project)
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+        pending_jobs = [
+            job for job in jobs
+            if job.provider_job_id is None
+            and job.status not in (
+                SceneVideoJobStatus.CANCELLED.value,
+                SceneVideoJobStatus.COMPLETED.value,
+                SceneVideoJobStatus.DOWNLOADED.value,
+            )
+            and job.attempts < job.max_attempts
+        ]
+        if pending_jobs:
+            if not provider.supports_health_check:
+                raise SceneVideoPermanentError(
+                    "The selected provider has no live health probe; paid submission is blocked.",
+                    code="provider_health_probe_unsupported",
+                )
+            health = await provider.check_health()
+            if not health.healthy:
+                raise SceneVideoTransientError(
+                    "The selected provider is unhealthy; paid submission was not started.",
+                    code="provider_unhealthy",
+                )
 
         submitted = 0
         first_transient: Exception | None = None
@@ -382,17 +412,24 @@ class SceneVideoService:
             elif summary["cancelled"]:
                 project.status = ProjectStatus.CANCELLED.value
             else:
+                # Scene completion is not the end of the paid operation: the
+                # provider still has to compose the final deliverable. Keep the
+                # task reservation open until composition has completed.
                 project.status = ProjectStatus.VIDEO_GENERATED.value
-                await self._settle_project_video_budget(project, jobs)
         else:
             project.status = ProjectStatus.VIDEO_GENERATING.value
         await self.session.flush()
         return summary
 
     async def _settle_project_video_budget(
-        self, project: ContentProject, jobs: list[SceneVideoJob]
+        self,
+        project: ContentProject,
+        jobs: list[SceneVideoJob],
+        *,
+        composition_cost_usd: Decimal | None,
+        quality_cost_usd: Decimal | None,
     ) -> None:
-        """Settle a paid scene reservation only when every clip reports USD cost."""
+        """Settle only after every scene, composition and review report USD cost."""
         metadata = project.cost_metadata or {}
         reservation_id = metadata.get("budget_reservation_id")
         if not reservation_id or not jobs:
@@ -409,7 +446,18 @@ class SceneVideoService:
         )
         if reservation is None or reservation.status == "settled":
             return
-        costs: list[Decimal] = []
+        # Missing composition usage is unknown spend, not zero spend. Keep
+        # the original reservation charged until an operator reconciles it.
+        if (
+            composition_cost_usd is None
+            or quality_cost_usd is None
+            or not composition_cost_usd.is_finite()
+            or not quality_cost_usd.is_finite()
+            or composition_cost_usd < 0
+            or quality_cost_usd < 0
+        ):
+            return
+        costs: list[Decimal] = [composition_cost_usd, quality_cost_usd]
         for job in jobs:
             value = (job.cost_metadata or {}).get("reported_cost_usd")
             if value is None:
@@ -509,6 +557,272 @@ class SceneVideoService:
             project.status = ProjectStatus.FAILED.value
             project.error_message = "One or more scene videos could not be downloaded."
         return {"downloaded": downloaded, **summary}
+
+    async def finalize_project_video(
+        self,
+        project: ContentProject,
+        *,
+        execution_id: uuid.UUID,
+        width: int,
+        height: int,
+        brand_context: dict[str, Any] | None = None,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Compose scene clips through an AI provider and store its final output.
+
+        Composition job state is isolated in assembly_metadata. The legacy
+        provider_job_id and submission_metadata fields belong to the avatar
+        workflow and must never be overwritten by scene composition.
+        """
+        if self.storage is None:
+            raise ConflictError("Artifact storage is not configured.")
+
+        # Serialize competing workers on the project row. Provider-side
+        # idempotency remains the second line of defence for ambiguous retries.
+        locked_project = await self.session.scalar(
+            select(ContentProject)
+            .where(
+                ContentProject.id == project.id,
+                ContentProject.company_id == project.company_id,
+            )
+            .with_for_update()
+        )
+        if locked_project is None:
+            raise ConflictError("The content project is no longer available.")
+        project = locked_project
+
+        artifact_service = ArtifactService(
+            self.session, self.storage, max_size_bytes=self.max_size_bytes
+        )
+        if project.final_artifact_id is not None:
+            artifact = await artifact_service.get_artifact(
+                project.final_artifact_id, company_id=project.company_id
+            )
+            return artifact, dict(project.assembly_metadata or {})
+
+        provider = self._provider_for(project)
+        if not provider.supports_quality_review:
+            raise SceneVideoPermanentError(
+                "The selected AI provider cannot review final-video quality.",
+                code="provider_quality_review_unsupported",
+            )
+        jobs = sorted(await self._jobs(project), key=lambda item: item.scene_index)
+        if not jobs or any(not job.video_url for job in jobs):
+            raise ConflictError(
+                "Every scene must have a provider-hosted video URL before AI composition."
+            )
+
+        assembly = dict(project.assembly_metadata or {})
+        composition_job_id = assembly.get("composition_job_id")
+        if not composition_job_id:
+            if not provider.supports_composition:
+                raise SceneVideoPermanentError(
+                    "The selected AI provider cannot compose a final storyboard video.",
+                    code="provider_composition_unsupported",
+                )
+            await self._reserve_quota(project.company_id, provider)
+            request = SceneVideoCompositionRequest(
+                project_id=str(project.id),
+                storyboard=dict(project.scenario or {}),
+                scene_video_urls=tuple(job.video_url for job in jobs if job.video_url),
+                width=width,
+                height=height,
+                brand_context=dict(brand_context or {}),
+                idempotency_key=f"vandad-compose-{project.id}",
+            )
+            composition_job_id = str(await provider.compose_video(request))
+            assembly.update({
+                "service": "ai_provider",
+                "mode": "ai_composition",
+                "production_path": "ai_provider_composition",
+                "provider": provider.provider_id,
+                "composition_job_id": composition_job_id,
+                "composition_status": SceneJobState.QUEUED.value,
+            })
+            project.assembly_metadata = assembly
+            project.status = ProjectStatus.ASSEMBLING.value
+            await self.session.flush()
+            raise SceneVideoTransientError(
+                "AI video composition was submitted and is still processing.",
+                code="ai_composition_submitted",
+            )
+
+        if assembly.get("production_path") != "ai_provider_composition":
+            raise ConflictError("The project has an incompatible finalization state.")
+        if assembly.get("provider") != provider.provider_id:
+            raise ConflictError("The configured provider changed after composition submission.")
+
+        status = await provider.get_generation_status(str(composition_job_id))
+        assembly["composition_status"] = status.state
+        project.assembly_metadata = assembly
+        if status.is_terminal and not status.is_completed:
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = status.error_message or "AI video composition failed."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider could not compose the final video.",
+                code=status.error_code or "ai_composition_failed",
+            )
+        if not status.is_completed:
+            project.status = ProjectStatus.ASSEMBLING.value
+            await self.session.flush()
+            raise SceneVideoTransientError(
+                "AI video composition is still processing.",
+                code="ai_composition_in_progress",
+            )
+
+        preview = bytearray()
+
+        async def chunks():
+            async for chunk in provider.retrieve_video(str(composition_job_id)):
+                if len(preview) < _PREVIEW_BYTES:
+                    preview.extend(chunk[: _PREVIEW_BYTES - len(preview)])
+                yield chunk
+
+        artifact = await artifact_service.store_artifact(
+            execution_id,
+            company_id=project.company_id,
+            kind=ArtifactKind.VIDEO.value,
+            content_type="video/mp4",
+            chunks=chunks(),
+            filename=f"vandad-final-{project.id}.mp4",
+        )
+        validation = await provider.validate_output(bytes(preview), content_type="video/mp4")
+        if not validation.ok:
+            await artifact_service.delete_artifact(
+                artifact.id, company_id=project.company_id
+            )
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider returned an invalid final video."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid final video.",
+                code="invalid_final_video",
+            )
+
+        if not status.video_url:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider did not return a reviewable final-video URL."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider did not return a reviewable final-video URL.",
+                code="provider_quality_review_url_missing",
+            )
+        try:
+            quality = await provider.review_video(
+                SceneVideoQualityRequest(
+                    project_id=str(project.id),
+                    video_url=status.video_url,
+                    storyboard=dict(project.scenario or {}),
+                    brand_context=dict(brand_context or {}),
+                    expected_duration_seconds=sum(float(job.duration_seconds) for job in jobs),
+                    aspect_ratio=f"{width // gcd(width, height)}:{height // gcd(width, height)}",
+                    idempotency_key=f"vandad-quality-{project.id}",
+                )
+            )
+        except SceneVideoTransientError:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.ASSEMBLING.value
+            await self.session.flush()
+            raise
+        except Exception as exc:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider quality-review operation failed."
+            await self.session.flush()
+            if isinstance(exc, SceneVideoPermanentError):
+                raise
+            raise SceneVideoPermanentError(
+                "The AI provider quality-review operation failed.",
+                code="provider_quality_review_failed",
+            ) from exc
+        if (
+            not isinstance(quality.accepted, bool)
+            or (
+                quality.score is not None
+                and (
+                    isinstance(quality.score, bool)
+                    or not isinstance(quality.score, (int, float))
+                    or not 0 <= float(quality.score) <= 1
+                )
+            )
+            or not isinstance(quality.summary, str)
+        ):
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider returned an invalid quality report."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid quality report.",
+                code="provider_quality_report_invalid",
+            )
+        raw_usage = (status.raw or {}).get("usage")
+        reported_cost = parse_reported_cost(raw_usage) if isinstance(raw_usage, dict) else None
+        if reported_cost is None:
+            reported_cost = parse_reported_cost(status.raw or {})
+        quality_cost = parse_reported_cost(quality.usage or {})
+        await self._settle_project_video_budget(
+            project,
+            jobs,
+            composition_cost_usd=reported_cost,
+            quality_cost_usd=quality_cost,
+        )
+        quality_metadata = {
+            "accepted": quality.accepted,
+            "score": quality.score,
+            "summary": redact_text(quality.summary)[:1000],
+            "issues": [redact_text(str(issue))[:300] for issue in quality.issues[:20]],
+            "cost_usd": str(quality_cost) if quality_cost is not None else None,
+        }
+        if not quality.accepted:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider rejected final-video quality."
+            project.assembly_metadata = {
+                **(project.assembly_metadata or {}),
+                "quality_review": quality_metadata,
+            }
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider rejected final-video quality.",
+                code="provider_quality_rejected",
+            )
+        metadata = {
+            **assembly,
+            "service": "ai_provider",
+            "mode": "ai_composition",
+            "provider": provider.provider_id,
+            "provider_job_id": str(composition_job_id),
+            "scene_count": len(jobs),
+            "width": width,
+            "height": height,
+            "artifact_id": str(artifact.id),
+            "size_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256,
+            "provider_reported_cost_usd": str(reported_cost) if reported_cost is not None else None,
+            "quality_review": quality_metadata,
+            "composition_status": SceneJobState.COMPLETED.value,
+        }
+        project.final_artifact_id = artifact.id
+        project.assembly_metadata = metadata
+        project.status = ProjectStatus.COMPLETED.value
+        project.error_message = None
+        self.audit.record(
+            event_type="scene.ai_composed",
+            action="compose",
+            company_id=project.company_id,
+            resource_type="content_project",
+            resource_id=project.id,
+            metadata={
+                "artifact_id": str(artifact.id),
+                "provider": provider.provider_id,
+                "provider_job_id": str(composition_job_id),
+                "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256,
+            },
+        )
+        await self.session.flush()
+        return artifact, metadata
 
     # ------------------------------------------------------------------- cancel
     async def cancel(self, project: ContentProject) -> dict[str, Any]:

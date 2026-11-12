@@ -13,6 +13,7 @@ from app.integrations.video import (
     SceneJobState,
     SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
+    SceneVideoTransientError,
     build_scene_video_registry,
 )
 from app.models import (
@@ -198,7 +199,82 @@ async def test_poll_and_retrieve_completed_scenes(
     assert all(job.cost_metadata["size_bytes"] > 0 for job in jobs)
 
 
-async def test_completed_scene_jobs_settle_provider_usd_cost(
+
+async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    from app.storage.local import LocalArtifactStorage
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="ai-compose-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.commit()
+
+    provider = MockSceneVideoProvider(poll_steps=1)
+    storage = LocalArtifactStorage(tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024)
+    service = _service(db_session, provider, storage=storage)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    jobs = await _jobs(db_session, project.id)
+    for job in jobs:
+        job.video_url = f"https://provider.example/{job.scene_key}.mp4"
+    await db_session.commit()
+
+    with pytest.raises(SceneVideoTransientError, match="submitted"):
+        await service.finalize_project_video(
+            project,
+            execution_id=execution.id,
+            width=1080,
+            height=1920,
+            brand_context={"name": "Vandad"},
+        )
+    persisted_job_id = project.assembly_metadata["composition_job_id"]
+    assert persisted_job_id
+    assert project.provider_job_id is None
+    assert project.submission_metadata is None
+    await db_session.commit()
+
+    artifact, metadata = await service.finalize_project_video(
+        project,
+        execution_id=execution.id,
+        width=1080,
+        height=1920,
+        brand_context={"name": "Vandad"},
+    )
+    await db_session.commit()
+
+    assert project.status == "completed"
+    assert project.final_artifact_id == artifact.id
+    assert metadata["service"] == "ai_provider"
+    assert metadata["mode"] == "ai_composition"
+    assert metadata["provider_job_id"] == persisted_job_id
+    assert metadata["production_path"] == "ai_provider_composition"
+    assert metadata["quality_review"]["accepted"] is True
+    assert "no visual/audio quality is assessed" in metadata["quality_review"]["summary"]
+    assert project.provider_job_id is None
+    assert artifact.content_type == "video/mp4"
+    assert artifact.size_bytes > 0
+    assert len(provider.jobs) == 1
+
+    same_artifact, _ = await service.finalize_project_video(
+        project,
+        execution_id=execution.id,
+        width=1080,
+        height=1920,
+        brand_context={"name": "Vandad"},
+    )
+    assert same_artifact.id == artifact.id
+    assert len(provider.jobs) == 1
+
+
+
+
+async def test_scene_video_budget_waits_for_composition_and_aggregates_cost(
     db_session, content_service, company_and_platform
 ):
     from decimal import Decimal
@@ -241,10 +317,72 @@ async def test_completed_scene_jobs_settle_provider_usd_cost(
     await db_session.refresh(reservation)
 
     assert summary["all_terminal"] is True
+    assert reservation.status == "reserved"
+    assert reservation.actual_cost_usd is None
+    assert project.cost_metadata["status"] == "reserved"
+
+    await service._settle_project_video_budget(
+        project,
+        await _jobs(db_session, project.id),
+        composition_cost_usd=Decimal("0.20"),
+        quality_cost_usd=Decimal("0.05"),
+    )
+    await db_session.commit()
+    await db_session.refresh(reservation)
+
     assert reservation.status == "settled"
-    assert reservation.actual_cost_usd == Decimal("0.30")
+    assert reservation.actual_cost_usd == Decimal("0.55")
     assert project.cost_metadata["status"] == "settled"
-    assert project.cost_metadata["actual_cost_usd"] == "0.30"
+    assert project.cost_metadata["actual_cost_usd"] == "0.55"
+
+
+async def test_scene_video_budget_stays_reserved_when_composition_cost_is_unknown(
+    db_session, content_service, company_and_platform
+):
+    from decimal import Decimal
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    reservation = ProviderUsageRecord(
+        company_id=company.id,
+        provider_id="mock",
+        operation="content.scene.generate_video",
+        status="reserved",
+        idempotency_key=f"scene-cost-unknown-{project.id}",
+        reserved_amount_usd=Decimal("5.00"),
+        usage_payload={},
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    project.cost_metadata = {
+        "provider_id": "mock",
+        "budget_reservation_id": str(reservation.id),
+        "status": "reserved",
+    }
+    provider = MockSceneVideoProvider(poll_steps=1)
+    async def completed_with_cost(job_id):
+        return SceneGenerationStatus(
+            job_id=job_id,
+            state=SceneJobState.COMPLETED.value,
+            progress=1.0,
+            raw={"cost_usd": "0.10", "currency": "USD"},
+        )
+    provider.get_generation_status = completed_with_cost
+    service = _service(db_session, provider)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    await service.submit_pending(project)
+    await service.poll_jobs(project)
+    await service._settle_project_video_budget(
+        project,
+        await _jobs(db_session, project.id),
+        composition_cost_usd=Decimal("0.20"),
+        quality_cost_usd=None,
+    )
+    await db_session.commit()
+    await db_session.refresh(reservation)
+
+    assert reservation.status == "reserved"
+    assert reservation.actual_cost_usd is None
 
 
 async def test_submission_failure_can_be_retried(
@@ -385,3 +523,80 @@ def test_scene_provider_prompt_carries_character_identity_dialogue_and_product_d
     assert "SPOKEN DIALOGUE" in prompt
     assert "medium close-up" in prompt
     assert "match_cut" in prompt
+
+
+async def test_final_video_is_rejected_when_ai_quality_review_fails(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    from app.integrations.video import SceneVideoQualityResult
+    from app.storage.local import LocalArtifactStorage
+
+    class RejectingMockProvider(MockSceneVideoProvider):
+        async def review_video(self, request):
+            return SceneVideoQualityResult(
+                accepted=False,
+                score=0.2,
+                summary="The final video failed the quality gate.",
+                issues=("Narration mismatch",),
+            )
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="quality-rejection-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.commit()
+    provider = RejectingMockProvider(poll_steps=1)
+    storage = LocalArtifactStorage(tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024)
+    service = _service(db_session, provider, storage=storage)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    for job in await _jobs(db_session, project.id):
+        job.video_url = f"https://provider.example/{job.scene_key}.mp4"
+    await db_session.commit()
+
+    with pytest.raises(SceneVideoTransientError, match="submitted"):
+        await service.finalize_project_video(
+            project, execution_id=execution.id, width=1080, height=1920
+        )
+    await db_session.commit()
+
+    with pytest.raises(SceneVideoPermanentError, match="rejected final-video quality"):
+        await service.finalize_project_video(
+            project, execution_id=execution.id, width=1080, height=1920
+        )
+    await db_session.commit()
+
+    assert project.status == "failed"
+    assert project.final_artifact_id is None
+    assert project.assembly_metadata["quality_review"]["accepted"] is False
+
+
+async def test_submit_pending_blocks_paid_generation_when_live_health_probe_is_unhealthy(
+    db_session, content_service, company_and_platform
+):
+    from app.integrations.video import SceneVideoHealthResult
+
+    class UnhealthyMockProvider(MockSceneVideoProvider):
+        async def check_health(self) -> SceneVideoHealthResult:
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message="Provider is unavailable.",
+            )
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    provider = UnhealthyMockProvider()
+    service = _service(db_session, provider)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+
+    with pytest.raises(SceneVideoTransientError, match="paid submission was not started"):
+        await service.submit_pending(project)
+
+    assert provider.jobs == {}
+    jobs = await _jobs(db_session, project.id)
+    assert all(job.attempts == 0 for job in jobs)

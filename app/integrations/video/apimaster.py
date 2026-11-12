@@ -68,10 +68,13 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
     requires_network = True
     supports_reference_image = True
     supports_lipsync = False
+    min_duration_seconds = 2
+    max_duration_seconds = 30
     _MAX_REDIRECTS = 3
 
     def __init__(self, config: APIMasterConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
+        self.model_id = config.model
         self._client_factory = client_factory
 
     async def generate_video(self, request: SceneVideoRequest) -> str:

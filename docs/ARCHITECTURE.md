@@ -44,9 +44,9 @@ FastAPI API / authentication / company scope
         |
         +--> Content & Media Services
                 +--> Brand Character
-                +--> Talking Avatar (Piper -> Wav2Lip -> FFmpeg)
-                +--> Scene Video (Storyboard -> Scene Clips -> Assembly)
-                +--> Persian Subtitles / Branding
+                +--> AI-native media production (provider generation/editing/composition)
+                +--> Provider-returned final artifacts
+                +--> Tenant-scoped artifact storage
                 +--> Artifact Storage
 
 Shared infrastructure: PostgreSQL + Alembic, Redis, artifact storage, audit events.
@@ -79,14 +79,11 @@ Provider routing should later support:
 
 Do not claim "cheapest" based on advertised prices alone. Compare real output quality, successful completion rate, retries, media duration/resolution and actual reported cost per accepted deliverable.
 
-### Two video pipelines
+### Unified AI-native video production
 
-Keep the two video paths separate:
+There is one production path. Talking-avatar, presenter, scene-based, motion-graphics and cinematic showcase are styles within that path, not separate local rendering pipelines.
 
-1. **Talking avatar**: Persian speech generation, face/lip animation and final rendering. It is the path for a persistent presenter speaking a script.
-2. **Scene video**: storyboard, independent scene generation, clip retrieval and assembly. It is the path for product footage, B-roll and cinematic scenes.
-
-The Video Production Agent routes approved tasks into these existing workflows, but each pipeline retains its own capability contract. Scene generation is not a substitute for lip-sync.
+The orchestrator selects provider capabilities for generation, speech, lip-sync, editing and composition. A provider must explicitly advertise a capability before it is selected. If no configured provider can complete a required stage, execution fails closed; Vandad must not silently substitute FFmpeg, local TTS, local lip-sync or a local scene assembler. Provider-returned final artifacts are validated and stored without unnecessary local rendering.
 
 ## Current implementation map
 
@@ -100,12 +97,12 @@ The Video Production Agent routes approved tasks into these existing workflows, 
 | Agent catalog and company enablement | Implemented on feature stack | Definitions are code-owned; company rows only enable approved agents |
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
 | Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
-| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, LLM usage settlement and paid video reservations; unknown costs remain reserved |
-| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day request/error/latency metrics derived from the usage ledger; live health probes remain |
-| Deterministic provider/model routing and fallback | Partial | Explicit connection/model selection exists; ordered fallback and cross-provider capability negotiation remain |
+| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets and task-row-serialized aggregate spend ceilings across LLM and video child operations; scene clip, composition and AI quality-review costs settle together only when all are reported; unknown costs remain reserved |
+| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day metrics, live connection probes, and explicit scene-video health endpoints; automatic video fallback skips providers without a configured successful live probe |
+| Deterministic provider/model routing and fallback | Implemented foundation for scene video | Explicit priority order filtered by composition, lip-sync, reference image, quality review, declared duration/aspect constraints and live health; catalog exposes modalities and only operator/provider-declared language, ratio and duration constraints; LLM fallback remains |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
 | Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
-| Talking-avatar local renderer | Utility script exists | Local runtime/model assets are not source-controlled |
+| AI-native video generation and composition | Implemented foundation | Provider-side composition and final-video AI quality review are capability-gated; mock review is fixture-only; real credentialed output validation remains |
 | Web UI and identity | Initial implementation | Persian RTL Next.js console, live task SSE, trusted OIDC-proxy identity, tenant claims and baseline roles; visual/accessibility review and deployment integration remain |
 
 ## Required security and reliability invariants
@@ -142,15 +139,18 @@ The Video Production Agent routes approved tasks into these existing workflows, 
 
 ### P1 — Provider and cost control (not complete)
 
-- Normalize provider/model capabilities and constraints.
+- [x] Add an optional per-agent-task spend ceiling and atomically aggregate reservations across child provider operations and workflows by locking the parent task row; implementation and CI verified; production staging validation remains pending.
+- [x] Propagate task identity into Monitoring knowledge extraction, Content scenario generation, scene-video project reservations and avatar workflow provider reservations; CI verified; production staging validation remains pending.
+- [x] Add a configured scene-video model capability catalog for known flags; unknown language, aspect-ratio and duration constraints remain explicitly unset until verified from provider contracts.
 - [x] Add company/provider monthly budgets and per-operation reservations; unknown cost remains reserved rather than being reported as free.
 - [x] Record LLM provider-reported usage, latency, attempts and actual cost when explicitly supplied.
 - [x] Require a configured company budget before dispatching paid video-agent operations.
-- [x] Add tenant-scoped rolling provider request/error/latency telemetry and admin-only manual spend reconciliation.\n- [ ] Add explicit ordered fallback/capability routing and live provider health probes.
-- [ ] Add provider/model capability constraints for language, modality, duration, aspect ratio and lip-sync.
+- [x] Add tenant-scoped rolling provider request/error/latency telemetry and admin-only manual spend reconciliation.
+- [x] Add deterministic ordered scene-video fallback with composition/lip-sync/reference-image capability filtering, plus a tenant-scoped live connection health-probe API; broader LLM fallback remains.
+- [ ] Populate verified model constraints for language, modality, duration and aspect ratio; do not infer undocumented provider limits.
 - Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
 
-Paid autonomous execution remains gated until these controls are implemented and verified.
+Paid autonomous execution remains gated until staging and credentialed end-to-end tests verify the task ceiling/context propagation, provider routing and live probes against real vendor behavior.
 
 ### P2 — Product workflows
 

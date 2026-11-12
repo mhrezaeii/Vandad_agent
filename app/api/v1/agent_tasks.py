@@ -44,6 +44,7 @@ def _task_read(task, registry: AgentRegistry) -> AgentTaskRead:
         cancel_requested=task.cancel_requested,
         attempt_count=task.attempt_count,
         max_attempts=task.max_attempts,
+        spend_ceiling_usd=task.spend_ceiling_usd,
         error_code=task.error_code,
         error_message=task.error_message,
         started_at=task.started_at,
@@ -70,6 +71,7 @@ async def create_agent_task(
         idempotency_key=payload.idempotency_key,
         priority=payload.priority,
         max_attempts=payload.max_attempts,
+        spend_ceiling_usd=payload.spend_ceiling_usd,
     )
     return _task_read(task, service.registry)
 

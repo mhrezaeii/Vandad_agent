@@ -4,6 +4,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -14,6 +15,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -56,6 +58,7 @@ class AgentTask(Base, TimestampMixin):
         ),
         CheckConstraint("priority BETWEEN 0 AND 100", name="priority_valid"),
         CheckConstraint("attempt_count >= 0 AND max_attempts >= 1", name="attempt_limits_valid"),
+        CheckConstraint("spend_ceiling_usd IS NULL OR spend_ceiling_usd > 0", name="spend_ceiling_positive"),
         CheckConstraint(
             "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
             name="completed_at_after_started_at",
@@ -94,6 +97,7 @@ class AgentTask(Base, TimestampMixin):
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3, server_default="3")
+    spend_ceiling_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)

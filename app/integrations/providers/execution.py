@@ -91,8 +91,10 @@ class ProviderExecutor:
         Failures surface as ``ExecutionOutcome.error`` with a sanitized message.
         """
         resolved_policy = policy or self._default_policy
-        is_idempotent = context.configuration.get(
-            "idempotent", adapter.default_operation_idempotent if idempotent is None else idempotent
+        is_idempotent = (
+            bool(context.configuration.get("idempotent", adapter.default_operation_idempotent))
+            if idempotent is None
+            else idempotent
         )
         attempts_allowed = resolved_policy.max_attempts if is_idempotent else 1
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -12,7 +14,12 @@ from app.integrations.video import (
     GenericHttpSceneVideoProvider,
     MockSceneVideoProvider,
     SceneJobState,
+    SceneVideoCompositionRequest,
+    SceneVideoHealthResult,
     SceneVideoPermanentError,
+    SceneVideoProviderRegistry,
+    SceneVideoProviderRegistryError,
+    SceneVideoQualityRequest,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
@@ -38,6 +45,20 @@ async def _drain(provider, job_id: str) -> bytes:
 
 
 # ------------------------------------------------------------------ mock
+async def test_mock_provider_quality_review_is_explicitly_fixture_only():
+    provider = MockSceneVideoProvider()
+    assert provider.supports_quality_review is True
+    result = await provider.review_video(
+        SceneVideoQualityRequest(
+            project_id="project-1",
+            video_url="https://example.test/synthetic.mp4",
+            storyboard={},
+        )
+    )
+    assert result.accepted is True
+    assert "no visual/audio quality is assessed" in result.summary
+
+
 async def test_mock_provider_polls_to_completion_and_downloads():
     provider = MockSceneVideoProvider(poll_steps=2)
     job_id = await provider.generate_video(_request())
@@ -95,11 +116,17 @@ async def test_default_validation_rejects_non_video_bytes():
 
 
 # ---------------------------------------------------------- generic HTTP
-def _http_provider(handler) -> GenericHttpSceneVideoProvider:
+def _http_provider(
+    handler, *, compose_path: str | None = None, quality_path: str | None = None,
+    health_path: str | None = None
+) -> GenericHttpSceneVideoProvider:
     config = GenericHttpConfig(
         base_url="https://video.example.test",
         generate_path="/v1/videos",
         status_path="/v1/videos/{job_id}",
+        compose_path=compose_path,
+        quality_path=quality_path,
+        health_path=health_path,
         api_key="test-secret",
         download_allowed_hosts=("cdn.example.test",),
     )
@@ -109,6 +136,109 @@ def _http_provider(handler) -> GenericHttpSceneVideoProvider:
             transport=httpx.MockTransport(handler), timeout=timeout
         ),
     )
+
+
+
+async def test_generic_http_composes_final_video_when_capability_is_configured():
+    received = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received
+        received = json.loads(request.content)
+        return httpx.Response(202, json={"id": "compose-1"})
+
+    provider = _http_provider(handler, compose_path="/v1/compose")
+    assert provider.supports_composition is True
+    request = SceneVideoCompositionRequest(
+        project_id="project-1",
+        storyboard={"title": "Campaign"},
+        scene_video_urls=("https://cdn.example.test/1.mp4", "https://cdn.example.test/2.mp4"),
+        width=1080,
+        height=1920,
+        idempotency_key="compose-idem",
+    )
+    job_id = await provider.compose_video(request)
+
+    assert job_id == "compose-1"
+    assert received["output"]["aspect_ratio"] == "9:16"
+    assert received["scene_video_urls"] == list(request.scene_video_urls)
+    assert received["idempotency_key"] == "compose-idem"
+
+
+async def test_generic_http_without_compose_path_fails_closed():
+    provider = _http_provider(lambda _request: httpx.Response(404), compose_path=None)
+    assert provider.supports_composition is False
+    request = SceneVideoCompositionRequest(
+        project_id="project-1",
+        storyboard={},
+        scene_video_urls=("https://cdn.example.test/1.mp4",),
+        width=1080,
+        height=1920,
+    )
+    with pytest.raises(SceneVideoPermanentError, match="no composition endpoint"):
+        await provider.compose_video(request)
+
+
+
+
+async def test_generic_http_quality_review_validates_and_returns_report():
+    received = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received
+        received = json.loads(request.content)
+        return httpx.Response(200, json={
+            "accepted": True,
+            "score": 0.92,
+            "summary": "Clear narration and coherent scenes.",
+            "issues": [],
+            "usage": {"cost_usd": "0.12"},
+        })
+
+    provider = _http_provider(handler, quality_path="/v1/quality")
+    assert provider.supports_quality_review is True
+    result = await provider.review_video(
+        SceneVideoQualityRequest(
+            project_id="project-1",
+            video_url="https://cdn.example.test/final.mp4",
+            storyboard={"title": "Campaign"},
+            expected_duration_seconds=30,
+            aspect_ratio="9:16",
+            idempotency_key="quality-idem",
+        )
+    )
+    assert result.accepted is True
+    assert result.score == pytest.approx(0.92)
+    assert result.usage["cost_usd"] == "0.12"
+    assert received["idempotency_key"] == "quality-idem"
+
+
+async def test_generic_http_quality_review_fails_closed_without_endpoint():
+    provider = _http_provider(lambda _request: httpx.Response(404))
+    assert provider.supports_quality_review is False
+    with pytest.raises(SceneVideoPermanentError, match="no quality-review endpoint"):
+        await provider.review_video(
+            SceneVideoQualityRequest(
+                project_id="project-1",
+                video_url="https://cdn.example.test/final.mp4",
+                storyboard={},
+            )
+        )
+
+
+async def test_generic_http_quality_review_rejects_malformed_report():
+    provider = _http_provider(
+        lambda _request: httpx.Response(200, json={"accepted": "yes"}),
+        quality_path="/v1/quality",
+    )
+    with pytest.raises(SceneVideoPermanentError, match="invalid quality report"):
+        await provider.review_video(
+            SceneVideoQualityRequest(
+                project_id="project-1",
+                video_url="https://cdn.example.test/final.mp4",
+                storyboard={},
+            )
+        )
 
 
 async def test_generic_http_submits_with_bearer_auth_and_polls():
@@ -195,6 +325,27 @@ def test_generic_http_config_requires_status_placeholder():
 
 
 # ------------------------------------------------------------- registry
+def test_ordered_registry_selection_skips_models_missing_required_capabilities():
+    registry = build_scene_video_registry(
+        apimaster_config=APIMasterConfig(api_key="test-key"),
+        http_config=GenericHttpConfig(
+            base_url="https://video.example.test",
+            status_path="/v1/videos/{job_id}",
+            compose_path="/v1/compose",
+            request_extra={"model": "studio-compose-v1"},
+        ),
+    )
+    selected = registry.resolve_ordered(
+        ["apimaster", "generic_http"],
+        require_composition=True,
+    )
+    assert selected.provider_id == "generic_http"
+    assert selected.model_id == "studio-compose-v1"
+
+    with pytest.raises(SceneVideoProviderRegistryError, match="satisfies the requested capabilities"):
+        registry.resolve_ordered(["apimaster"], require_composition=True)
+
+
 def test_registry_includes_mock_and_only_configured_http():
     mock_only = build_scene_video_registry()
     assert mock_only.has("mock") is True
@@ -418,3 +569,85 @@ def test_registry_registers_apimaster_only_when_configured():
         apimaster_config=APIMasterConfig(api_key="test-key")
     )
     assert configured.has("apimaster") is True
+
+
+
+def test_ordered_registry_enforces_quality_review_and_declared_duration_limits():
+    registry = build_scene_video_registry(
+        apimaster_config=APIMasterConfig(api_key="test-key"),
+        http_config=GenericHttpConfig(
+            base_url="https://video.example.test",
+            status_path="/v1/videos/{job_id}",
+            compose_path="/v1/compose",
+            quality_path="/v1/quality",
+            request_extra={"model": "studio-compose-v1"},
+            min_duration_seconds=3,
+            max_duration_seconds=12,
+            supported_languages=("fa-IR",),
+        ),
+    )
+    selected = registry.resolve_ordered(
+        ["apimaster", "generic_http"],
+        require_composition=True,
+        require_quality_review=True,
+        required_durations=(5.0, 10.0),
+        required_language="fa-IR",
+    )
+    assert selected.provider_id == "generic_http"
+    with pytest.raises(SceneVideoProviderRegistryError):
+        registry.resolve_ordered(
+            ["generic_http"],
+            require_composition=True,
+            require_quality_review=True,
+            required_durations=(13.0,),
+        )
+
+    with pytest.raises(SceneVideoProviderRegistryError):
+        registry.resolve_ordered(
+            ["generic_http"],
+            require_composition=True,
+            require_quality_review=True,
+            required_language="en-US",
+        )
+
+
+
+async def test_generic_http_live_health_probe_requires_explicit_endpoint():
+    def healthy_handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(200, json={"healthy": True})
+
+    provider = _http_provider(healthy_handler, health_path="/health")
+    assert provider.supports_health_check is True
+    result = await provider.check_health()
+    assert result.provider_id == "generic_http"
+    assert result.healthy is True
+    assert result.latency_ms is not None
+
+    unconfigured = _http_provider(lambda _request: httpx.Response(404))
+    assert unconfigured.supports_health_check is False
+    with pytest.raises(SceneVideoPermanentError, match="no configured live health probe"):
+        await unconfigured.check_health()
+
+
+
+async def test_ordered_healthy_registry_skips_unhealthy_provider():
+    class UnhealthyMockProvider(MockSceneVideoProvider):
+        provider_id = "unhealthy_mock"
+
+        async def check_health(self):
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message="Provider is unhealthy.",
+            )
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(UnhealthyMockProvider())
+    registry.register(MockSceneVideoProvider())
+    selected = await registry.resolve_ordered_healthy(
+        ["unhealthy_mock", "mock"],
+        require_composition=True,
+        require_quality_review=True,
+    )
+    assert selected.provider_id == "mock"

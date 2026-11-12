@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,8 +16,12 @@ import httpx
 from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
+    SceneVideoCompositionRequest,
+    SceneVideoHealthResult,
     SceneVideoPermanentError,
     SceneVideoProvider,
+    SceneVideoQualityRequest,
+    SceneVideoQualityResult,
     SceneVideoRequest,
     SceneVideoTransientError,
 )
@@ -62,6 +68,9 @@ class GenericHttpConfig:
     generate_path: str = "/v1/videos"
     status_path: str = "/v1/videos/{job_id}"
     retrieve_path: str | None = None
+    compose_path: str | None = None
+    quality_path: str | None = None
+    health_path: str | None = None
     api_key: str | None = None
     auth_header: str = "Authorization"
     auth_scheme: str = "Bearer"
@@ -75,8 +84,15 @@ class GenericHttpConfig:
     request_extra: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 30.0
     download_allowed_hosts: tuple[str, ...] = ()
+    supported_modalities: tuple[str, ...] = ("video",)
+    supported_languages: tuple[str, ...] | None = None
+    supported_aspect_ratios: tuple[str, ...] | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
     def __post_init__(self) -> None:
+        if not self.supported_modalities or any(not item.strip() for item in self.supported_modalities):
+            raise ValueError("supported_modalities must contain at least one non-empty value.")
         parsed = urlsplit(self.base_url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("GenericHttpConfig.base_url must be an HTTPS URL without userinfo.")
@@ -86,9 +102,39 @@ class GenericHttpConfig:
             raise ValueError("GenericHttpConfig.status_path must contain '{job_id}'.")
         if self.retrieve_path is not None and "{job_id}" not in self.retrieve_path:
             raise ValueError("GenericHttpConfig.retrieve_path must contain '{job_id}'.")
+        for field_name, path in (
+            ("compose_path", self.compose_path),
+            ("quality_path", self.quality_path),
+            ("health_path", self.health_path),
+        ):
+            if path is not None:
+                parsed_path = urlsplit(path)
+                if (
+                    not path.startswith("/")
+                    or parsed_path.scheme
+                    or parsed_path.netloc
+                    or parsed_path.query
+                    or parsed_path.fragment
+                ):
+                    raise ValueError(f"GenericHttpConfig.{field_name} must be a local API path.")
+        if self.min_duration_seconds is not None and self.min_duration_seconds <= 0:
+            raise ValueError("min_duration_seconds must be positive.")
+        if self.max_duration_seconds is not None and self.max_duration_seconds <= 0:
+            raise ValueError("max_duration_seconds must be positive.")
+        if (
+            self.min_duration_seconds is not None
+            and self.max_duration_seconds is not None
+            and self.max_duration_seconds < self.min_duration_seconds
+        ):
+            raise ValueError("max_duration_seconds must not be below min_duration_seconds.")
         for host in self.download_allowed_hosts:
             if not host or host != host.strip() or "/" in host or ":" in host:
                 raise ValueError("download_allowed_hosts must contain plain hostnames only.")
+
+
+def _aspect_ratio(width: int, height: int) -> str:
+    divisor = math.gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
 
 
 class GenericHttpSceneVideoProvider(SceneVideoProvider):
@@ -102,7 +148,17 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
 
     def __init__(self, config: GenericHttpConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
+        model_id = config.request_extra.get("model")
+        self.model_id = str(model_id) if model_id else None
         self._client_factory = client_factory
+        self.supports_composition = bool(config.compose_path)
+        self.supports_quality_review = bool(config.quality_path)
+        self.supports_health_check = bool(config.health_path)
+        self.supported_modalities = tuple(config.supported_modalities)
+        self.supported_languages = config.supported_languages
+        self.supported_aspect_ratios = config.supported_aspect_ratios
+        self.min_duration_seconds = config.min_duration_seconds
+        self.max_duration_seconds = config.max_duration_seconds
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
         body: dict[str, Any] = {
@@ -126,6 +182,109 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
                 "The provider response did not contain a job id.", code="provider_bad_response"
             )
         return str(job_id)
+
+    async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
+        """Ask the configured AI provider to edit scene clips into one final video."""
+        if not self.config.compose_path:
+            raise SceneVideoPermanentError(
+                "The configured AI provider has no composition endpoint.",
+                code="provider_composition_unsupported",
+            )
+        body = {
+            "project_id": request.project_id,
+            "storyboard": request.storyboard,
+            "scene_video_urls": list(request.scene_video_urls),
+            "output": {
+                "width": request.width,
+                "height": request.height,
+                "aspect_ratio": _aspect_ratio(request.width, request.height),
+            },
+            "brand_context": request.brand_context,
+        }
+        if request.idempotency_key:
+            body["idempotency_key"] = request.idempotency_key
+        payload = await self._request_json(
+            "POST", f"{self._base()}{self.config.compose_path}", json=body
+        )
+        job_id = _dig(payload, self.config.job_id_field)
+        if job_id is None or str(job_id).strip() == "":
+            raise SceneVideoPermanentError(
+                "The composition response did not contain a job id.",
+                code="provider_bad_response",
+            )
+        return str(job_id)
+
+    async def check_health(self) -> SceneVideoHealthResult:
+        if not self.config.health_path:
+            return await super().check_health()
+        started = time.perf_counter()
+        payload = await self._request_json("GET", f"{self._base()}{self.config.health_path}")
+        latency_ms = (time.perf_counter() - started) * 1000
+        healthy = isinstance(payload, dict) and (
+            payload.get("healthy") is True
+            or str(payload.get("status") or "").strip().lower() in {"ok", "healthy"}
+        )
+        return SceneVideoHealthResult(
+            provider_id=self.provider_id,
+            healthy=healthy,
+            message=(
+                "Provider health probe succeeded."
+                if healthy
+                else "Provider health probe reported unhealthy status."
+            ),
+            latency_ms=latency_ms,
+        )
+
+    async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
+        if not self.config.quality_path:
+            raise SceneVideoPermanentError(
+                "The configured AI provider has no quality-review endpoint.",
+                code="provider_quality_review_unsupported",
+            )
+        body = {
+            "project_id": request.project_id,
+            "video_url": request.video_url,
+            "storyboard": request.storyboard,
+            "brand_context": request.brand_context,
+            "expected_duration_seconds": request.expected_duration_seconds,
+            "aspect_ratio": request.aspect_ratio,
+        }
+        if request.idempotency_key:
+            body["idempotency_key"] = request.idempotency_key
+        payload = await self._request_json(
+            "POST", f"{self._base()}{self.config.quality_path}", json=body
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("accepted"), bool):
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid quality report.",
+                code="provider_quality_report_invalid",
+            )
+        score = payload.get("score")
+        if score is not None and (
+            isinstance(score, bool) or not isinstance(score, (int, float))
+            or not math.isfinite(float(score)) or not 0 <= float(score) <= 1
+        ):
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid quality score.",
+                code="provider_quality_report_invalid",
+            )
+        issues = payload.get("issues", [])
+        summary = payload.get("summary", "")
+        usage = payload.get("usage", {})
+        if (not isinstance(issues, list) or any(not isinstance(x, str) for x in issues)
+            or not isinstance(summary, str) or not summary.strip()
+            or not isinstance(usage, dict)):
+            raise SceneVideoPermanentError(
+                "The AI provider returned a malformed quality report.",
+                code="provider_quality_report_invalid",
+            )
+        return SceneVideoQualityResult(
+            accepted=payload["accepted"],
+            score=float(score) if score is not None else None,
+            summary=summary[:2000],
+            issues=tuple(x[:500] for x in issues[:50]),
+            usage=usage,
+        )
 
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         path = self.config.status_path.format(job_id=job_id)
@@ -289,7 +448,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
             raise SceneVideoTransientError(
                 "The provider could not be reached.", code="provider_unreachable"
             ) from exc
-        if response.status_code in (200, 201):
+        if response.status_code in (200, 201, 202):
             try:
                 return response.json()
             except ValueError as exc:

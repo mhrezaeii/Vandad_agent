@@ -81,15 +81,6 @@ class Settings(BaseSettings):
     # Hard cap per artifact; streaming writes abort beyond it.
     artifact_max_size_bytes: int = Field(default=2 * 1024**3, ge=1)
 
-    # --- Video rendering (see app.services.video_render_service) ----------------
-    # Directory containing Persian-capable fonts (the Docker image installs
-    # fonts-vazirmatn under /usr/share/fonts). If it does not exist, libass
-    # falls back to the system fontconfig.
-    video_fonts_dir: str = "/usr/share/fonts"
-    video_font_name: str = "Vazirmatn"
-    video_ffmpeg_bin: str = "ffmpeg"
-    video_ffprobe_bin: str = "ffprobe"
-
     # --- Scene-based (non-avatar) video pipeline ------------------------------
     # ``mock`` produces synthetic local clips and never calls a network or a
     # paid provider. Set to ``generic_http`` only after an authorised provider
@@ -101,8 +92,6 @@ class Settings(BaseSettings):
     scene_video_max_poll_attempts: int = Field(default=60, ge=1, le=600)
     scene_video_output_width: int = Field(default=1080, ge=1, le=8192)
     scene_video_output_height: int = Field(default=1920, ge=1, le=8192)
-    scene_video_output_fps: int = Field(default=30, ge=1, le=120)
-    scene_assembly_timeout_seconds: float = Field(default=1800.0, gt=0, le=7200)
 
     # APIMaster is opt-in; no paid request is made unless selected explicitly.
     scene_video_apimaster_api_key: str | None = None
@@ -120,11 +109,19 @@ class Settings(BaseSettings):
     scene_video_http_generate_path: str = "/v1/videos"
     scene_video_http_status_path: str = "/v1/videos/{job_id}"
     scene_video_http_retrieve_path: str | None = None
+    scene_video_http_compose_path: str | None = None
+    scene_video_http_quality_path: str | None = None
+    scene_video_http_health_path: str | None = None
     scene_video_http_api_key: str | None = None
     scene_video_http_auth_header: str = "Authorization"
     scene_video_http_auth_scheme: str = "Bearer"
     # Comma-separated exact HTTPS hostnames allowed for provider media downloads.
     scene_video_http_download_allowed_hosts: str = ""
+    scene_video_http_supported_modalities: str = "video"
+    scene_video_http_supported_languages: str = ""
+    scene_video_http_supported_aspect_ratios: str = ""
+    scene_video_http_min_duration_seconds: float | None = Field(default=None, gt=0)
+    scene_video_http_max_duration_seconds: float | None = Field(default=None, gt=0)
 
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
