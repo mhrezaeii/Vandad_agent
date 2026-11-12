@@ -584,6 +584,7 @@ def test_ordered_registry_enforces_quality_review_and_declared_duration_limits()
             request_extra={"model": "studio-compose-v1"},
             min_duration_seconds=3,
             max_duration_seconds=12,
+            supported_languages=("fa-IR",),
         ),
     )
     selected = registry.resolve_ordered(
@@ -591,6 +592,7 @@ def test_ordered_registry_enforces_quality_review_and_declared_duration_limits()
         require_composition=True,
         require_quality_review=True,
         required_durations=(5.0, 10.0),
+        required_language="fa-IR",
     )
     assert selected.provider_id == "generic_http"
     with pytest.raises(SceneVideoProviderRegistryError):
@@ -599,6 +601,14 @@ def test_ordered_registry_enforces_quality_review_and_declared_duration_limits()
             require_composition=True,
             require_quality_review=True,
             required_durations=(13.0,),
+        )
+
+    with pytest.raises(SceneVideoProviderRegistryError):
+        registry.resolve_ordered(
+            ["generic_http"],
+            require_composition=True,
+            require_quality_review=True,
+            required_language="en-US",
         )
 
 

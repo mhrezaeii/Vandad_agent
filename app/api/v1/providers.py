@@ -193,6 +193,7 @@ async def list_scene_video_models(
             supports_cancellation=provider.supports_cancellation,
             supports_composition=provider.supports_composition,
             supports_quality_review=provider.supports_quality_review,
+            supports_health_check=provider.supports_health_check,
             supported_modalities=list(provider.supported_modalities),
             supported_languages=(
                 list(provider.supported_languages)

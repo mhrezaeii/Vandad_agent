@@ -111,6 +111,7 @@ class SceneVideoModelRead(BaseModel):
     supports_cancellation: bool
     supports_composition: bool
     supports_quality_review: bool = False
+    supports_health_check: bool = False
     supported_modalities: list[str] = Field(default_factory=lambda: ["video"])
     supported_languages: list[str] | None = None
     supported_aspect_ratios: list[str] | None = None

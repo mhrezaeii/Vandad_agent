@@ -71,6 +71,7 @@ class SceneVideoProviderRegistry:
         require_quality_review: bool = False,
         required_durations: tuple[float, ...] = (),
         required_aspect_ratio: str | None = None,
+        required_language: str | None = None,
     ) -> SceneVideoProvider:
         """Choose the first configured provider satisfying required capabilities.
 
@@ -103,6 +104,12 @@ class SceneVideoProviderRegistry:
                 and required_aspect_ratio not in provider.supported_aspect_ratios
             ):
                 continue
+            if (
+                required_language
+                and provider.supported_languages is not None
+                and required_language not in provider.supported_languages
+            ):
+                continue
             return provider
         raise SceneVideoProviderRegistryError(
             "No configured scene-video provider satisfies the requested capabilities."
@@ -130,6 +137,7 @@ class SceneVideoProviderRegistry:
                     require_quality_review=require_quality_review,
                     required_durations=required_durations,
                     required_aspect_ratio=required_aspect_ratio,
+                    required_language=required_language,
                 )
             except SceneVideoProviderRegistryError:
                 continue

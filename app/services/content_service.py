@@ -1146,6 +1146,7 @@ class ContentService:
                     require_quality_review=True,
                     required_durations=required_durations,
                     required_aspect_ratio=required_aspect_ratio,
+                    required_language=brand.language,
                 )
             except SceneVideoProviderRegistryError as exc:
                 raise UnprocessableEntityError(
