@@ -14,9 +14,6 @@ from app.core.exceptions import NotFoundError
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 from app.models import (
     Company,
-    ContentBrand,
-    Platform,  # noqa: E402
-    PlatformConnection,
     ProjectStatus,
 )
 from app.security.authorization import CompanyScope, Principal
