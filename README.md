@@ -64,9 +64,9 @@ The backend is organized around these boundaries:
 4. **Task lifecycle** — company-scoped task requests, idempotency, cancellation, retries and immutable run history.
 5. **Workflow runtime** — validated workflow graphs, persisted executions, Redis queue, worker, retries and schedules.
 6. **Provider fabric** — provider registry and adapters; credentials are resolved through the secret boundary.
-7. **Media pipeline** — brand character management, scene generation, assembly, Persian subtitles and artifact delivery.
+7. **Video pipeline** — scenario/storyboard handoff to AI video providers, provider-side video generation/composition, quality checks and artifact delivery.
 
-The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned capability router, durable task events, Monitoring / Content scenario handlers and an approval-gated Video Production Agent. The video handler routes to the existing avatar or scene workflow; paid dispatch requires a company budget. Aggregate end-to-end validation remains a release gate. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
+The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned capability router, durable task events, Monitoring / Content scenario handlers and an approval-gated Video Production Agent. The intended product flow is platform monitoring → Company Brain → GPT-based scenario → storyboard/video prompt → AI video provider → quality control → final video delivery. The Video Production Agent must use one unified AI video production path; there is no character-generation or talking-avatar product workflow. Paid dispatch requires a company budget. Aggregate end-to-end validation remains a release gate. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
 
 See [Architecture and implementation status](docs/ARCHITECTURE.md).
 
@@ -85,23 +85,20 @@ All routes are under `/api/v1`. The main route groups are:
 | Executions | `/executions` | Workflow execution and schedules |
 | Agents | `/agents` | Agent catalog and tenant agent activation |
 | Agent tasks | `/agent-tasks` | Task requests, approval, cancellation, retry, run history and SSE progress events |
-| Content | `/content` | Brand, character and video project workflows |
+| Content | `/content` | Brand, scenario, storyboard and video project workflows |
 | Artifacts | `/artifacts` | Tenant-scoped artifact metadata and delivery |
 
 Company-scoped endpoints use the `X-Company-ID` boundary. Cross-company resource access must remain denied without leaking resource existence.
 
 ## AI-native video production
 
-Vandad uses one unified AI-only production path. Talking-avatar, presenter,
-scene-based, motion-graphics and cinematic showcase are production styles,
-not separate local rendering pipelines.
+Vandad uses one unified AI-only video production path: GPT-assisted scenario and storyboard preparation are handed to an AI video provider, which generates the video. Motion graphics, product demonstrations, interface showcases and cinematic product videos are visual styles within this path. Character generation, persistent brand characters and talking-avatar production are out of scope.
 
 - **AI provider output:** when a provider returns a complete video, Vandad
   validates the media response and stores that artifact directly.
-- **Scene workflow:** providers may generate individual clips; a provider
-  with an explicit composition capability must then edit/assemble those clips
-  and return the final video. Vandad does not compose them locally.
-- **HeyGen:** the avatar workflow uses the provider's final generated video.
+- **Provider-side generation/composition:** a provider may return a complete
+  video directly or generate clips and compose them through its own explicit
+  AI capability. Vandad does not perform creative local video assembly.
 - **APIMaster:** supports scene generation; it is not treated as a final
   composition provider unless that capability is explicitly implemented.
 - **Generic HTTP:** provider-side composition is enabled only when an
@@ -109,6 +106,6 @@ not separate local rendering pipelines.
 - **Mock:** produces synthetic, non-playable fixtures for automated tests and
   local development only; production rejects it.
 
-Creative production does not require FFmpeg, FFprobe, local TTS, local lip-sync
-or traditional editing software. Storage, integrity checks and metadata
+Creative video production does not require character-generation systems,
+FFmpeg, FFprobe, local TTS, local lip-sync or traditional editing software. Storage, integrity checks and metadata
 handling remain ordinary backend responsibilities.
