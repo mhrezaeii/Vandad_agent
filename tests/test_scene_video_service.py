@@ -523,3 +523,53 @@ def test_scene_provider_prompt_carries_character_identity_dialogue_and_product_d
     assert "SPOKEN DIALOGUE" in prompt
     assert "medium close-up" in prompt
     assert "match_cut" in prompt
+
+
+async def test_final_video_is_rejected_when_ai_quality_review_fails(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    from app.integrations.video import SceneVideoQualityResult
+    from app.storage.local import LocalArtifactStorage
+
+    class RejectingMockProvider(MockSceneVideoProvider):
+        async def review_video(self, request):
+            return SceneVideoQualityResult(
+                accepted=False,
+                score=0.2,
+                summary="The final video failed the quality gate.",
+                issues=("Narration mismatch",),
+            )
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="quality-rejection-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.commit()
+    provider = RejectingMockProvider(poll_steps=1)
+    storage = LocalArtifactStorage(tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024)
+    service = _service(db_session, provider, storage=storage)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+    for job in await _jobs(db_session, project.id):
+        job.video_url = f"https://provider.example/{job.scene_key}.mp4"
+    await db_session.commit()
+
+    with pytest.raises(SceneVideoTransientError, match="submitted"):
+        await service.finalize_project_video(
+            project, execution_id=execution.id, width=1080, height=1920
+        )
+    await db_session.commit()
+
+    with pytest.raises(SceneVideoPermanentError, match="rejected final-video quality"):
+        await service.finalize_project_video(
+            project, execution_id=execution.id, width=1080, height=1920
+        )
+    await db_session.commit()
+
+    assert project.status == "failed"
+    assert project.final_artifact_id is None
+    assert project.assembly_metadata["quality_review"]["accepted"] is False

@@ -97,12 +97,12 @@ The orchestrator selects provider capabilities for generation, speech, lip-sync,
 | Agent catalog and company enablement | Implemented on feature stack | Definitions are code-owned; company rows only enable approved agents |
 | Agent task/run persistence and transactional outbox | Implemented on feature stack | Tenant-scoped lifecycle and idempotency |
 | Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
-| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets, per-task aggregate spend ceilings across agent handlers and child workflows, LLM usage settlement and paid video reservations; unknown costs remain reserved; GitHub Actions backend lint/tests and frontend lint/build passed on the current implementation |
-| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day request/error/latency metrics plus a tenant-scoped live connection health-probe endpoint; real vendor probes still require configured credentials |
-| Deterministic provider/model routing and fallback | Partial | Ordered scene-video provider fallback now filters by composition, lip-sync and reference-image capability; configured video model catalog exposes known flags; LLM fallback and unknown model constraints remain |
+| Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets and task-row-serialized aggregate spend ceilings across LLM and video child operations; scene clip, composition and AI quality-review costs settle together only when all are reported; unknown costs remain reserved |
+| Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day metrics, live connection probes, and explicit scene-video health endpoints; automatic video fallback skips providers without a configured successful live probe |
+| Deterministic provider/model routing and fallback | Implemented foundation for scene video | Explicit priority order filtered by composition, lip-sync, reference image, quality review, declared duration/aspect constraints and live health; catalog exposes modalities and only operator/provider-declared language, ratio and duration constraints; LLM fallback remains |
 | APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
 | Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
-| AI-native video generation and composition | Implemented foundation | Provider-side composition is capability-gated; real credentialed output validation remains |
+| AI-native video generation and composition | Implemented foundation | Provider-side composition and final-video AI quality review are capability-gated; mock review is fixture-only; real credentialed output validation remains |
 | Web UI and identity | Initial implementation | Persian RTL Next.js console, live task SSE, trusted OIDC-proxy identity, tenant claims and baseline roles; visual/accessibility review and deployment integration remain |
 
 ## Required security and reliability invariants

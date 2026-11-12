@@ -15,9 +15,12 @@ from app.integrations.video import (
     MockSceneVideoProvider,
     SceneJobState,
     SceneVideoCompositionRequest,
+    SceneVideoHealthResult,
     SceneVideoPermanentError,
+    SceneVideoProviderRegistry,
     SceneVideoProviderRegistryError,
     SceneVideoQualityRequest,
+    SceneVideoQualityResult,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
@@ -616,3 +619,26 @@ async def test_generic_http_live_health_probe_requires_explicit_endpoint():
     assert unconfigured.supports_health_check is False
     with pytest.raises(SceneVideoPermanentError, match="no configured live health probe"):
         await unconfigured.check_health()
+
+
+
+async def test_ordered_healthy_registry_skips_unhealthy_provider():
+    class UnhealthyMockProvider(MockSceneVideoProvider):
+        provider_id = "unhealthy_mock"
+
+        async def check_health(self):
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message="Provider is unhealthy.",
+            )
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(UnhealthyMockProvider())
+    registry.register(MockSceneVideoProvider())
+    selected = await registry.resolve_ordered_healthy(
+        ["unhealthy_mock", "mock"],
+        require_composition=True,
+        require_quality_review=True,
+    )
+    assert selected.provider_id == "mock"
