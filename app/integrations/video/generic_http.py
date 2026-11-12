@@ -91,6 +91,8 @@ class GenericHttpConfig:
     max_duration_seconds: float | None = None
 
     def __post_init__(self) -> None:
+        if not self.supported_modalities or any(not item.strip() for item in self.supported_modalities):
+            raise ValueError("supported_modalities must contain at least one non-empty value.")
         parsed = urlsplit(self.base_url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("GenericHttpConfig.base_url must be an HTTPS URL without userinfo.")

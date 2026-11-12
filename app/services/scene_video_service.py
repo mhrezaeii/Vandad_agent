@@ -45,6 +45,7 @@ from app.models import (
     SceneVideoJobStatus,
 )
 from app.schemas.scenario import Scenario
+from app.security.redaction import redact_text
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
@@ -718,7 +719,8 @@ class SceneVideoService:
             or (
                 quality.score is not None
                 and (
-                    not isinstance(quality.score, (int, float))
+                    isinstance(quality.score, bool)
+                    or not isinstance(quality.score, (int, float))
                     or not 0 <= float(quality.score) <= 1
                 )
             )
@@ -746,8 +748,8 @@ class SceneVideoService:
         quality_metadata = {
             "accepted": quality.accepted,
             "score": quality.score,
-            "summary": quality.summary[:1000],
-            "issues": [str(issue)[:300] for issue in quality.issues[:20]],
+            "summary": redact_text(quality.summary)[:1000],
+            "issues": [redact_text(str(issue))[:300] for issue in quality.issues[:20]],
             "cost_usd": str(quality_cost) if quality_cost is not None else None,
         }
         if not quality.accepted:
