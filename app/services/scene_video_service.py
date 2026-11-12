@@ -500,9 +500,8 @@ class SceneVideoService:
     ) -> tuple[Any, dict[str, Any]]:
         """Compose scene clips through an AI provider and store its final output.
 
-        Composition job state is isolated in assembly_metadata. The legacy
-        provider_job_id and submission_metadata fields belong to the avatar
-        workflow and must never be overwritten by scene composition.
+        Composition job state is isolated in assembly_metadata and remains
+        separate from legacy project-level provider submission metadata.
         """
         if self.storage is None:
             raise ConflictError("Artifact storage is not configured.")
