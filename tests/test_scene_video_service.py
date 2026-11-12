@@ -6,7 +6,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.core.exceptions import ConflictError
 from app.integrations.video import (
     MockSceneVideoProvider,
     SceneGenerationStatus,
