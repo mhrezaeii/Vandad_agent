@@ -29,8 +29,8 @@ from app.integrations.video import (
     SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoProviderRegistry,
-    SceneVideoQuotaExhaustedError,
     SceneVideoQualityRequest,
+    SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
 )
