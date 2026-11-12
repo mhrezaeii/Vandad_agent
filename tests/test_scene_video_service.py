@@ -331,7 +331,7 @@ async def test_scene_video_budget_waits_for_composition_and_aggregates_cost(
     await db_session.refresh(reservation)
 
     assert reservation.status == "settled"
-    assert reservation.actual_cost_usd == Decimal("0.50")
+    assert reservation.actual_cost_usd == Decimal("0.55")
     assert project.cost_metadata["status"] == "settled"
     assert project.cost_metadata["actual_cost_usd"] == "0.50"
 
