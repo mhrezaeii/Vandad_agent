@@ -550,7 +550,9 @@ async def test_workflow_llm_operation_is_bound_to_agent_task_spend_ceiling(
         provider="llm_openai",
         configuration={"model": "gpt-4.1-mini", "params": {}},
     )
+    task_id = uuid.uuid4()
     task = AgentTask(
+        id=task_id,
         company_id=company.id,
         agent_key="content",
         capability="content.scenario.generate",
@@ -574,7 +576,7 @@ async def test_workflow_llm_operation_is_bound_to_agent_task_spend_ceiling(
         workflow_name="budgeted-script-workflow",
         workflow_type="custom",
         status="running",
-        input_metadata={"agent_task_id": str(task.id)},
+        input_metadata={"agent_task_id": str(task_id)},
     )
     db_session.add(execution)
     await db_session.commit()
