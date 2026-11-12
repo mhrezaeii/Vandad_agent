@@ -17,9 +17,9 @@ from app.integrations.video import (
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
     SceneVideoProviderRegistryError,
+    SceneVideoQualityRequest,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
-    SceneVideoQualityRequest,
     SceneVideoTransientError,
     build_scene_video_registry,
 )
@@ -43,6 +43,20 @@ async def _drain(provider, job_id: str) -> bytes:
 
 
 # ------------------------------------------------------------------ mock
+async def test_mock_provider_quality_review_is_explicitly_fixture_only():
+    provider = MockSceneVideoProvider()
+    assert provider.supports_quality_review is True
+    result = await provider.review_video(
+        SceneVideoQualityRequest(
+            project_id="project-1",
+            video_url="https://example.test/synthetic.mp4",
+            storyboard={},
+        )
+    )
+    assert result.accepted is True
+    assert "not assessed" in result.summary
+
+
 async def test_mock_provider_polls_to_completion_and_downloads():
     provider = MockSceneVideoProvider(poll_steps=2)
     job_id = await provider.generate_video(_request())
