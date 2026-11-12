@@ -573,3 +573,30 @@ async def test_final_video_is_rejected_when_ai_quality_review_fails(
     assert project.status == "failed"
     assert project.final_artifact_id is None
     assert project.assembly_metadata["quality_review"]["accepted"] is False
+
+
+async def test_submit_pending_blocks_paid_generation_when_live_health_probe_is_unhealthy(
+    db_session, content_service, company_and_platform
+):
+    from app.integrations.video import SceneVideoHealthResult
+
+    class UnhealthyMockProvider(MockSceneVideoProvider):
+        async def check_health(self) -> SceneVideoHealthResult:
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message="Provider is unavailable.",
+            )
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    provider = UnhealthyMockProvider()
+    service = _service(db_session, provider)
+    await service.prepare_scenes(project, _scenario(), provider_id="mock")
+
+    with pytest.raises(SceneVideoTransientError, match="paid submission was not started"):
+        await service.submit_pending(project)
+
+    assert provider.jobs == {}
+    jobs = await _jobs(db_session, project.id)
+    assert all(job.attempts == 0 for job in jobs)

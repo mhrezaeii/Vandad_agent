@@ -1101,6 +1101,8 @@ class ContentService:
 
             if get_settings().is_production:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
+        if self.scene_video_registry is None:
+            raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
             requires_lipsync = any(

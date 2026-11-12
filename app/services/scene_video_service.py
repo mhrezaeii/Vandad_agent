@@ -230,6 +230,28 @@ class SceneVideoService:
         jobs = await self._jobs(project)
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+        pending_jobs = [
+            job for job in jobs
+            if job.provider_job_id is None
+            and job.status not in (
+                SceneVideoJobStatus.CANCELLED.value,
+                SceneVideoJobStatus.COMPLETED.value,
+                SceneVideoJobStatus.DOWNLOADED.value,
+            )
+            and job.attempts < job.max_attempts
+        ]
+        if pending_jobs:
+            if not provider.supports_health_check:
+                raise SceneVideoPermanentError(
+                    "The selected provider has no live health probe; paid submission is blocked.",
+                    code="provider_health_probe_unsupported",
+                )
+            health = await provider.check_health()
+            if not health.healthy:
+                raise SceneVideoTransientError(
+                    "The selected provider is unhealthy; paid submission was not started.",
+                    code="provider_unhealthy",
+                )
 
         submitted = 0
         first_transient: Exception | None = None
