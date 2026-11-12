@@ -25,6 +25,7 @@ from app.schemas.provider import (
     SceneVideoProviderHealthRead,
     SceneVideoProviderRead,
 )
+from app.security.redaction import redact_text
 from app.services.provider_budget_service import ProviderBudgetService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
@@ -233,7 +234,7 @@ async def probe_scene_video_provider_health(
         provider_id=provider_id,
         supported=True,
         healthy=result.healthy,
-        message=result.message,
+        message=redact_text(result.message),
         latency_ms=result.latency_ms,
     )
 

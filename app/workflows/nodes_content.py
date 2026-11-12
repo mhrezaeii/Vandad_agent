@@ -706,15 +706,20 @@ async def _generate_scenario(
     service = ScenarioService(
         engine.session, engine.registry, engine.executor, engine._keys  # noqa: SLF001
     )
+    raw_task_id = (execution.input_metadata or {}).get("agent_task_id")
+    try:
+        task_id = uuid.UUID(str(raw_task_id)) if raw_task_id else None
+    except (TypeError, ValueError) as exc:
+        raise ProviderPermanentError(
+            "The workflow contains an invalid agent task budget reference.",
+            code="invalid_task_budget_context",
+        ) from exc
     scenario, metadata = await service.generate(
         company_id=execution.company_id,
         connection_id=uuid.UUID(str(connection_id)),
         request=request,
         timeout_seconds=min(timeout_seconds, 180.0),
-        task_id=(
-            uuid.UUID(str((execution.input_metadata or {}).get("agent_task_id")))
-            if (execution.input_metadata or {}).get("agent_task_id") else None
-        ),
+        task_id=task_id,
     )
 
     project.scenario = scenario.model_dump(mode="json")
