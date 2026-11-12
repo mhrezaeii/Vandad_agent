@@ -181,7 +181,7 @@ async def test_non_idempotent_operations_never_retry(key_box):
         connection_id=uuid.uuid4(),
         company_id=uuid.uuid4(),
         platform_id=uuid.uuid4(),
-        configuration={},
+        configuration={"idempotent": True},
         credential=None,
         credential_type=None,
         secret_reference=None,
