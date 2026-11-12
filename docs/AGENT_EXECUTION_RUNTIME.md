@@ -18,7 +18,7 @@ The agent task runtime is separate from the workflow graph runtime. Workflow job
 
 - **Monitoring Agent**: public discovery, change detection, knowledge extraction and combined `platform.monitor`.
 - **Content Agent**: scenario generation through the existing content scenario service.
-- **Video Production Agent**: routes an approved avatar project to the existing HeyGen workflow or an approved scene project to the scene-video workflow. It requires a company provider budget before paid dispatch and does not merge the avatar and scene pipelines.
+- **Video Production Agent**: takes an approved scenario/storyboard video project and dispatches it through the unified AI video-provider workflow. It does not create or manage characters, brand characters or talking avatars. It requires a company provider budget before paid dispatch.
 - Authenticated browser actions and autonomous publishing remain disabled. Video task dispatch is approval-gated at the agent-task level and rechecks project approval before starting the workflow.
 
 ## Local operation
@@ -29,7 +29,7 @@ docker compose up -d --build agent-worker
 docker compose logs -f agent-worker
 ```
 
-The API and agent worker must share PostgreSQL. Monitoring and Content tasks use the PostgreSQL outbox directly. The Video Production Agent additionally uses the optional Redis-backed workflow queue; if Redis is unavailable, video dispatch fails closed while non-video agent tasks continue. Configure `AGENT_WORKER_CONCURRENCY`, `AGENT_WORKER_POLL_INTERVAL`, `AGENT_WORKER_LEASE_SECONDS` and `AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS`.
+The API and agent worker must share PostgreSQL. Monitoring and Content tasks use the PostgreSQL outbox directly. The Video Production Agent additionally uses the optional Redis-backed workflow queue; if Redis is unavailable, video dispatch fails closed while non-video agent tasks continue. The video workflow consumes the approved scenario/storyboard and returns provider-generated video artifacts; no local avatar or character renderer is part of this runtime. Configure `AGENT_WORKER_CONCURRENCY`, `AGENT_WORKER_POLL_INTERVAL`, `AGENT_WORKER_LEASE_SECONDS` and `AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS`.
 
 ## Progress events and approvals
 
