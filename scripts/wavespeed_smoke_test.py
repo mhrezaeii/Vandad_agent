@@ -1,16 +1,13 @@
-"""Paid, opt-in WaveSpeed LTX-2 image-to-video smoke test.
+"""Paid, opt-in WaveSpeed LTX-2.3 text-to-video smoke test.
 
-This is deliberately an isolated provider smoke test, not a production
-Video Production Agent adapter: LTX-2 image-to-video returns a scene clip and
-does not document provider-side storyboard composition or AI quality review.
-The generation POST is sent exactly once because an ambiguous timeout may
-still have created a billable prediction.
+Generates a video directly from a text prompt. No image, file upload, or
+reference media is required. The paid generation POST is sent exactly once:
+an ambiguous timeout may still have created a billable prediction.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import mimetypes
 import os
 import sys
 import time
@@ -21,8 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 
 API_BASE = "https://api.wavespeed.ai/api/v3"
-MODEL_ID = "wavespeed-ai/ltx-2-19b/image-to-video"
-MAX_IMAGE_BYTES = 200 * 1024 * 1024
+MODEL_ID = "wavespeed-ai/ltx-2.3/text-to-video"
 TERMINAL_FAILURES = {"failed", "cancelled", "timeout", "deleted"}
 
 
@@ -65,71 +61,45 @@ def _video_url(payload: Any) -> str:
     return _https_url(first, label="video output")
 
 
+def build_payload(
+    *, prompt: str, resolution: str, aspect_ratio: str, duration: int, seed: int | None = None
+) -> dict[str, Any]:
+    if not prompt.strip():
+        raise WaveSpeedError("Prompt must not be empty.")
+    if resolution not in {"480p", "720p", "1080p"}:
+        raise WaveSpeedError("Unsupported resolution.")
+    if aspect_ratio not in {"16:9", "9:16"}:
+        raise WaveSpeedError("Unsupported aspect ratio.")
+    if duration not in {5, 10, 15, 20}:
+        raise WaveSpeedError("Duration must be 5, 10, 15, or 20 seconds.")
+    payload: dict[str, Any] = {
+        "prompt": prompt.strip(),
+        "resolution": resolution,
+        "aspect_ratio": aspect_ratio,
+        "duration": duration,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
+
+
 def _auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-
-
-def upload_image(client: httpx.Client, api_key: str, image_path: Path) -> str:
-    if not image_path.is_file():
-        raise WaveSpeedError(f"Reference image does not exist: {image_path}")
-    size = image_path.stat().st_size
-    if size <= 0 or size > MAX_IMAGE_BYTES:
-        raise WaveSpeedError("Reference image must be between 1 byte and 200 MB.")
-    content_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
-    ticket_response = client.post(
-        f"{API_BASE}/media/uploads",
-        headers={**_auth_headers(api_key), "Content-Type": "application/json"},
-        json={"filename": image_path.name, "size": size, "content_type": content_type},
-    )
-    if ticket_response.status_code != 200:
-        if ticket_response.status_code == 401:
-            raise WaveSpeedError("WaveSpeed rejected the API key (HTTP 401).")
-        if ticket_response.status_code == 429:
-            raise WaveSpeedError("WaveSpeed image-upload quota/rate limit reached (HTTP 429).")
-        raise WaveSpeedError(f"WaveSpeed image-upload ticket failed (HTTP {ticket_response.status_code}).")
-    ticket = _data(ticket_response.json())
-    upload = ticket.get("upload")
-    if not isinstance(upload, dict):
-        raise WaveSpeedError("WaveSpeed upload ticket is missing upload instructions.")
-    upload_url = _https_url(upload.get("url"), label="temporary upload")
-    upload_headers = upload.get("headers")
-    if not isinstance(upload_headers, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in upload_headers.items()
-    ):
-        raise WaveSpeedError("WaveSpeed upload ticket contains invalid headers.")
-    # Important: the temporary storage URL receives only the ticket headers,
-    # never the WaveSpeed API key.
-    with image_path.open("rb") as image_file:
-        upload_response = client.put(
-            upload_url,
-            headers=upload_headers,
-            content=image_file,
-            timeout=300.0,
-            follow_redirects=False,
-        )
-    if not 200 <= upload_response.status_code < 300:
-        raise WaveSpeedError(f"WaveSpeed image upload failed (HTTP {upload_response.status_code}).")
-    return _https_url(ticket.get("download_url"), label="uploaded image")
 
 
 def submit_prediction(
     client: httpx.Client,
     api_key: str,
     *,
-    image_url: str,
     prompt: str,
     resolution: str,
+    aspect_ratio: str,
     duration: int,
     seed: int | None = None,
 ) -> str:
-    body: dict[str, Any] = {
-        "image": _https_url(image_url, label="reference image"),
-        "prompt": prompt,
-        "resolution": resolution,
-        "duration": duration,
-    }
-    if seed is not None:
-        body["seed"] = seed
+    body = build_payload(
+        prompt=prompt, resolution=resolution, aspect_ratio=aspect_ratio, duration=duration, seed=seed
+    )
     try:
         response = client.post(
             f"{API_BASE}/{MODEL_ID}",
@@ -138,8 +108,6 @@ def submit_prediction(
             timeout=60.0,
         )
     except httpx.TransportError as exc:
-        # Never automatically repeat a paid submit: the provider may have
-        # accepted the request before the connection was lost.
         raise WaveSpeedError(
             "Submission outcome is uncertain. Check WaveSpeed prediction history before retrying."
         ) from exc
@@ -191,7 +159,6 @@ def poll_prediction(
         if status == "completed":
             return result
         if status in TERMINAL_FAILURES:
-            # Do not include raw provider payloads: they may contain private URLs.
             raise WaveSpeedError(f"WaveSpeed prediction ended with terminal status: {status}.")
         time.sleep(delay)
         delay = min(10.0, delay * 1.25)
@@ -236,13 +203,15 @@ def download_video(client: httpx.Client, video_url: str, output_path: Path) -> i
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate one paid WaveSpeed LTX-2 image-to-video test clip.")
-    parser.add_argument("--image", required=True, type=Path, help="Local JPG/PNG/WebP reference image.")
-    parser.add_argument("--prompt", required=True, help="Describe one simple motion/action.")
+    parser = argparse.ArgumentParser(
+        description="Generate one paid WaveSpeed LTX-2.3 text-to-video test clip (no image input)."
+    )
+    parser.add_argument("--prompt", required=True, help="Describe the complete scene and motion.")
     parser.add_argument("--resolution", choices=("480p", "720p", "1080p"), default="480p")
+    parser.add_argument("--aspect-ratio", choices=("16:9", "9:16"), default="9:16")
     parser.add_argument("--duration", choices=(5, 10, 15, 20), type=int, default=5)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--output", type=Path, default=Path("artifacts/wavespeed/ltx2-smoke.mp4"))
+    parser.add_argument("--output", type=Path, default=Path("artifacts/wavespeed/ltx23-text-to-video.mp4"))
     parser.add_argument("--max-wait-seconds", type=int, default=900)
     return parser.parse_args()
 
@@ -253,27 +222,22 @@ def main() -> int:
     if not api_key:
         print("WAVESPEED_API_KEY is not set. Add it to your local .env; do not commit or paste it into chat.", file=sys.stderr)
         return 2
-    if not args.prompt.strip():
-        print("Prompt must not be empty.", file=sys.stderr)
-        return 2
     if args.max_wait_seconds < 30:
         print("--max-wait-seconds must be at least 30.", file=sys.stderr)
         return 2
 
-    rates = {"480p": 0.06, "720p": 0.08, "1080p": 0.12}
-    estimate = rates[args.resolution] * (args.duration / 5)
+    rates_per_five_seconds = {"480p": 0.10, "720p": 0.15, "1080p": 0.20}
+    estimate = rates_per_five_seconds[args.resolution] * (args.duration / 5)
     print(f"Model: {MODEL_ID}")
-    print(f"Requested output: {args.resolution}, {args.duration}s")
-    print(f"Reference upload + generation estimate: about ${estimate:.2f} (provider charge prevails).")
-    print("The paid generation request will be submitted exactly once.")
+    print(f"Requested output: {args.resolution}, {args.aspect_ratio}, {args.duration}s")
+    print(f"Text-only generation estimate: about ${estimate:.2f} (provider charge prevails).")
+    print("No image will be uploaded. The paid generation request will be submitted exactly once.")
 
     try:
         with httpx.Client(timeout=60.0, follow_redirects=False) as client:
-            image_url = upload_image(client, api_key, args.image)
-            print("Reference image uploaded.")
             prediction_id = submit_prediction(
-                client, api_key, image_url=image_url, prompt=args.prompt.strip(),
-                resolution=args.resolution, duration=args.duration, seed=args.seed,
+                client, api_key, prompt=args.prompt, resolution=args.resolution,
+                aspect_ratio=args.aspect_ratio, duration=args.duration, seed=args.seed,
             )
             print(f"Prediction accepted: {prediction_id}")
             result = poll_prediction(
