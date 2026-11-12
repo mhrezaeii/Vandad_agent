@@ -99,7 +99,11 @@ class GenericHttpConfig:
             raise ValueError("GenericHttpConfig.status_path must contain '{job_id}'.")
         if self.retrieve_path is not None and "{job_id}" not in self.retrieve_path:
             raise ValueError("GenericHttpConfig.retrieve_path must contain '{job_id}'.")
-        for field_name, path in (("compose_path", self.compose_path), ("health_path", self.health_path)):
+        for field_name, path in (
+            ("compose_path", self.compose_path),
+            ("quality_path", self.quality_path),
+            ("health_path", self.health_path),
+        ):
             if path is not None:
                 parsed_path = urlsplit(path)
                 if (

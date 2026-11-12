@@ -1138,7 +1138,7 @@ class ContentService:
                 f"{int(brand.video_width) // divisor}:{int(brand.video_height) // divisor}"
             )
             try:
-                selected = self.scene_video_registry.resolve_ordered(
+                selected = await self.scene_video_registry.resolve_ordered_healthy(
                     ordered_ids,
                     require_composition=True,
                     require_lipsync=requires_lipsync,

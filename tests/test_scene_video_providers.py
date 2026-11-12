@@ -115,7 +115,8 @@ async def test_default_validation_rejects_non_video_bytes():
 
 # ---------------------------------------------------------- generic HTTP
 def _http_provider(
-    handler, *, compose_path: str | None = None, quality_path: str | None = None
+    handler, *, compose_path: str | None = None, quality_path: str | None = None,
+    health_path: str | None = None
 ) -> GenericHttpSceneVideoProvider:
     config = GenericHttpConfig(
         base_url="https://video.example.test",
@@ -123,6 +124,7 @@ def _http_provider(
         status_path="/v1/videos/{job_id}",
         compose_path=compose_path,
         quality_path=quality_path,
+        health_path=health_path,
         api_key="test-secret",
         download_allowed_hosts=("cdn.example.test",),
     )
@@ -595,3 +597,22 @@ def test_ordered_registry_enforces_quality_review_and_declared_duration_limits()
             require_quality_review=True,
             required_durations=(13.0,),
         )
+
+
+
+async def test_generic_http_live_health_probe_requires_explicit_endpoint():
+    def healthy_handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(200, json={"healthy": True})
+
+    provider = _http_provider(healthy_handler, health_path="/health")
+    assert provider.supports_health_check is True
+    result = await provider.check_health()
+    assert result.provider_id == "generic_http"
+    assert result.healthy is True
+    assert result.latency_ms is not None
+
+    unconfigured = _http_provider(lambda _request: httpx.Response(404))
+    assert unconfigured.supports_health_check is False
+    with pytest.raises(SceneVideoPermanentError, match="no configured live health probe"):
+        await unconfigured.check_health()

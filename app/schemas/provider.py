@@ -79,6 +79,14 @@ class ProviderHealthRead(BaseModel):
     last_call_at: datetime
 
 
+class SceneVideoProviderHealthRead(BaseModel):
+    provider_id: str
+    supported: bool
+    healthy: bool
+    message: str
+    latency_ms: float | None = None
+
+
 class SceneVideoProviderRead(BaseModel):
     provider_id: str
     display_name: str
@@ -89,6 +97,7 @@ class SceneVideoProviderRead(BaseModel):
     supports_cancellation: bool
     supports_composition: bool
     supports_quality_review: bool = False
+    supports_health_check: bool = False
     daily_quota: int | None = None
 
 

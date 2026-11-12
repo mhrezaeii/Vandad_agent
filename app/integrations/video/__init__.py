@@ -108,6 +108,43 @@ class SceneVideoProviderRegistry:
             "No configured scene-video provider satisfies the requested capabilities."
         )
 
+    async def resolve_ordered_healthy(
+        self,
+        provider_ids: list[str],
+        *,
+        require_composition: bool = False,
+        require_lipsync: bool = False,
+        require_reference_image: bool = False,
+        require_quality_review: bool = False,
+        required_durations: tuple[float, ...] = (),
+        required_aspect_ratio: str | None = None,
+    ) -> SceneVideoProvider:
+        """Return the first capability-compatible provider with a successful live probe."""
+        for provider_id in provider_ids:
+            try:
+                provider = self.resolve_ordered(
+                    [provider_id],
+                    require_composition=require_composition,
+                    require_lipsync=require_lipsync,
+                    require_reference_image=require_reference_image,
+                    require_quality_review=require_quality_review,
+                    required_durations=required_durations,
+                    required_aspect_ratio=required_aspect_ratio,
+                )
+            except SceneVideoProviderRegistryError:
+                continue
+            if not provider.supports_health_check:
+                continue
+            try:
+                health = await provider.check_health()
+            except Exception:  # provider errors are a fallback signal; never select an unprobed provider
+                continue
+            if health.healthy:
+                return provider
+        raise SceneVideoProviderRegistryError(
+            "No configured provider satisfies the capabilities and passes a live health probe."
+        )
+
     def __len__(self) -> int:
         return len(self._providers)
 
