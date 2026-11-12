@@ -60,7 +60,6 @@ BRAND_RESOURCE = "brand"
 PROJECT_RESOURCE = "project"
 
 SCRIPT_WORKFLOW_NAME = "vandefence.script.v1"
-VIDEO_WORKFLOW_NAME = "vandefence.video.v1"
 SCENE_SCRIPT_WORKFLOW_NAME = "vandad.scene.script.v1"
 SCENE_VIDEO_WORKFLOW_NAME = "vandad.scene.video.v1"
 
@@ -200,75 +199,6 @@ SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
         {"from_key": "record_script", "to_key": "finish"},
     ],
 }
-
-VIDEO_WORKFLOW_GRAPH: dict[str, Any] = {
-    "nodes": [
-        {"node_key": "start", "node_type": "trigger.manual", "name": "trigger"},
-        {
-            "node_key": "submit",
-            "node_type": "content.submit_video",
-            "name": "submit to heygen (idempotent)",
-            "configuration": {"connection_id": "__HEYGEN_CONNECTION__"},
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            "execution_settings": {
-                "timeout_seconds": 60,
-                "max_retries": 2,
-                "idempotent": False,
-            },
-        },
-        {
-            "node_key": "wait",
-            "node_type": "control.delay",
-            "name": "initial provider wait",
-            "configuration": {"seconds": 30},
-        },
-        {
-            "node_key": "poll",
-            "node_type": "content.poll_video",
-            "name": "poll heygen status",
-            "configuration": {"connection_id": "__HEYGEN_CONNECTION__"},
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            # Still-processing is a transient error: the engine retries with
-            # backoff (~60 x 30s = up to ~30 min), re-polling from the persisted
-            # provider_job_id. Never resubmits.
-            "execution_settings": {
-                "timeout_seconds": 30,
-                "max_retries": 60,
-                "backoff_seconds": 30,
-                "idempotent": True,
-            },
-        },
-        {
-            "node_key": "download",
-            "node_type": "content.download_video",
-            "name": "download raw video",
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            "execution_settings": {"timeout_seconds": 900, "max_retries": 2},
-        },
-        {
-            "node_key": "render",
-            "node_type": "content.render_video",
-            "name": "render branded video",
-            "input_mapping": {"project_id": "$trigger.project_id"},
-            "execution_settings": {"timeout_seconds": 1800, "max_retries": 1},
-        },
-        {
-            "node_key": "finish",
-            "node_type": "control.complete",
-            "name": "done",
-            "configuration": {"outcome": "completed"},
-        },
-    ],
-    "edges": [
-        {"from_key": "start", "to_key": "submit"},
-        {"from_key": "submit", "to_key": "wait"},
-        {"from_key": "wait", "to_key": "poll"},
-        {"from_key": "poll", "to_key": "download"},
-        {"from_key": "download", "to_key": "render"},
-        {"from_key": "render", "to_key": "finish"},
-    ],
-}
-
 
 SCENE_SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
     "nodes": [
@@ -608,7 +538,7 @@ class ContentService:
             brand_id=brand.id,
             topic=topic,
             status=ProjectStatus.DRAFT.value,
-            video_mode="avatar",
+            video_mode="scene",
         )
         self.session.add(project)
         await self.session.flush()
@@ -877,13 +807,6 @@ class ContentService:
             raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
-            requires_lipsync = any(
-                isinstance(scene, dict)
-                and scene.get("scene_type") == "presenter"
-                and scene.get("speaker") == "brand_character"
-                and bool(scene.get("dialogue") or scene.get("narration"))
-                for scene in scenario_scenes
-            )
             fallback_ids = (
                 provider_fallbacks
                 if provider_fallbacks is not None
@@ -915,7 +838,6 @@ class ContentService:
                 selected = await self.scene_video_registry.resolve_ordered_healthy(
                     ordered_ids,
                     require_composition=True,
-                    require_lipsync=requires_lipsync,
                     require_reference_image=bool(options.get("requires_reference_image", False)),
                     require_quality_review=True,
                     required_durations=required_durations,
@@ -1218,97 +1140,7 @@ class ContentService:
             raise ConflictError(f"Required workflow '{name}' is not published for this company.")
         return workflow
 
-    # ----------------------------------------------------------- heygen helper
-    async def _heygen_operation(
-        self,
-        *,
-        connection_id: uuid.UUID,
-        company_id: uuid.UUID,
-        operation: str,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        adapter = self.registry.get("heygen")
-        connection = await self.session.get(PlatformConnection, connection_id)
-        if connection is None or connection.company_id != company_id:
-            raise NotFoundError(
-                "Connection not found.",
-                details=[{"field": "connection_id", "value": str(connection_id)}],
-            )
-        credential = None
-        credential_type = None
-        secret_reference = None
-        if connection.credential_reference_id is not None:
-            resolved = await CredentialService(self.session, self._keys).resolve_credential(
-                connection.credential_reference_id, company_id=company_id
-            )
-            credential, credential_type, secret_reference = (
-                resolved.payload,
-                resolved.credential_type,
-                resolved.secret_reference,
-            )
-        context = ProviderExecutionContext(
-            provider_id="heygen",
-            connection_id=connection.id,
-            company_id=company_id,
-            platform_id=connection.platform_id,
-            configuration={
-                **connection.configuration,
-                # Adapter operations read their arguments from ``params``; merge
-                # per-call arguments over any connection-level defaults.
-                "params": {**(connection.configuration or {}).get("params", {}), **params},
-            },
-            credential=credential,
-            credential_type=credential_type,
-            secret_reference=secret_reference,
-            timeout_seconds=60.0,
-            operation=operation,
-        )
-        billable_operations = {"create_photo_avatar", "train_photo_avatar", "submit_video"}
-        budget_service = ProviderBudgetService(self.session)
-        reservation = None
-        if operation in billable_operations:
-            budget_key = hashlib.sha256(
-                f"{company_id}:{connection_id}:{operation}:{json.dumps(params, sort_keys=True, default=str)}".encode()
-            ).hexdigest()
-            reservation = await budget_service.reserve(
-                company_id,
-                adapter.provider_id,
-                f"heygen.{operation}",
-                idempotency_key=f"heygen:{budget_key}",
-                require_budget=True,
-            )
-            await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
-        if not outcome.success:
-            error = outcome.error or ProviderError(
-                "The HeyGen operation failed.", code="heygen_failure"
-            )
-            if reservation is not None:
-                failed_result = getattr(outcome, "result", None)
-                failure_usage = {"attempts": outcome.attempts}
-                failed_latency = getattr(failed_result, "latency_ms", None)
-                if failed_latency is not None:
-                    failure_usage["latency_ms"] = failed_latency
-                await budget_service.settle(
-                    reservation, error_code=error.code, usage=failure_usage
-                )
-            raise error
-        metadata = outcome.result.metadata or {}
-        if reservation is not None:
-            usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
-            await budget_service.settle(
-                reservation,
-                usage={
-                    **usage,
-                    "latency_ms": outcome.result.latency_ms,
-                    "attempts": outcome.attempts,
-                },
-            )
-        return metadata
 
-    @staticmethod
-    def _now_iso() -> str:
-        return datetime.now(UTC).isoformat()
 
 
 def _system_principal():
