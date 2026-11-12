@@ -18,6 +18,7 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
+from math import gcd
 from typing import Any
 
 from sqlalchemy import func, select
@@ -1122,12 +1123,29 @@ class ContentService:
                 )
             from app.integrations.video import SceneVideoProviderRegistryError
 
+            brand = await self.session.get(ContentBrand, project.brand_id)
+            if brand is None or brand.company_id != scope.company_id:
+                raise NotFoundError("Brand not found for this project.")
+            required_durations = tuple(
+                float(scene["duration_seconds"])
+                for scene in scenario_scenes
+                if isinstance(scene, dict)
+                and isinstance(scene.get("duration_seconds"), (int, float))
+                and not isinstance(scene.get("duration_seconds"), bool)
+            )
+            divisor = gcd(int(brand.video_width), int(brand.video_height))
+            required_aspect_ratio = (
+                f"{int(brand.video_width) // divisor}:{int(brand.video_height) // divisor}"
+            )
             try:
                 selected = self.scene_video_registry.resolve_ordered(
                     ordered_ids,
                     require_composition=True,
                     require_lipsync=requires_lipsync,
                     require_reference_image=bool(options.get("requires_reference_image", False)),
+                    require_quality_review=True,
+                    required_durations=required_durations,
+                    required_aspect_ratio=required_aspect_ratio,
                 )
             except SceneVideoProviderRegistryError as exc:
                 raise UnprocessableEntityError(

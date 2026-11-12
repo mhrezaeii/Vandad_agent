@@ -126,6 +126,10 @@ class SceneVideoService:
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
+        if not provider.supports_quality_review:
+            raise ConflictError(
+                "The selected AI provider must support final-video quality review before generation."
+            )
         presenter_scenes = [
             scene
             for scene in scenario.scenes
@@ -398,8 +402,9 @@ class SceneVideoService:
         jobs: list[SceneVideoJob],
         *,
         composition_cost_usd: Decimal | None,
+        quality_cost_usd: Decimal | None,
     ) -> None:
-        """Settle only after every scene and final composition report USD cost."""
+        """Settle only after every scene, composition and review report USD cost."""
         metadata = project.cost_metadata or {}
         reservation_id = metadata.get("budget_reservation_id")
         if not reservation_id or not jobs:
@@ -418,9 +423,16 @@ class SceneVideoService:
             return
         # Missing composition usage is unknown spend, not zero spend. Keep
         # the original reservation charged until an operator reconciles it.
-        if composition_cost_usd is None or not composition_cost_usd.is_finite() or composition_cost_usd < 0:
+        if (
+            composition_cost_usd is None
+            or quality_cost_usd is None
+            or not composition_cost_usd.is_finite()
+            or not quality_cost_usd.is_finite()
+            or composition_cost_usd < 0
+            or quality_cost_usd < 0
+        ):
             return
-        costs: list[Decimal] = [composition_cost_usd]
+        costs: list[Decimal] = [composition_cost_usd, quality_cost_usd]
         for job in jobs:
             value = (job.cost_metadata or {}).get("reported_cost_usd")
             if value is None:
@@ -563,6 +575,11 @@ class SceneVideoService:
             return artifact, dict(project.assembly_metadata or {})
 
         provider = self._provider_for(project)
+        if not provider.supports_quality_review:
+            raise SceneVideoPermanentError(
+                "The selected AI provider cannot review final-video quality.",
+                code="provider_quality_review_unsupported",
+            )
         jobs = sorted(await self._jobs(project), key=lambda item: item.scene_index)
         if not jobs or any(not job.video_url for job in jobs):
             raise ConflictError(
@@ -657,13 +674,93 @@ class SceneVideoService:
                 code="invalid_final_video",
             )
 
+        if not status.video_url:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider did not return a reviewable final-video URL."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider did not return a reviewable final-video URL.",
+                code="provider_quality_review_url_missing",
+            )
+        try:
+            quality = await provider.review_video(
+                SceneVideoQualityRequest(
+                    project_id=str(project.id),
+                    video_url=status.video_url,
+                    storyboard=dict(project.scenario or {}),
+                    brand_context=dict(brand_context or {}),
+                    expected_duration_seconds=sum(float(job.duration_seconds) for job in jobs),
+                    aspect_ratio=f"{width // gcd(width, height)}:{height // gcd(width, height)}",
+                    idempotency_key=f"vandad-quality-{project.id}",
+                )
+            )
+        except SceneVideoTransientError:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.ASSEMBLING.value
+            await self.session.flush()
+            raise
+        except Exception as exc:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider quality-review operation failed."
+            await self.session.flush()
+            if isinstance(exc, SceneVideoPermanentError):
+                raise
+            raise SceneVideoPermanentError(
+                "The AI provider quality-review operation failed.",
+                code="provider_quality_review_failed",
+            ) from exc
+        if (
+            not isinstance(quality.accepted, bool)
+            or (
+                quality.score is not None
+                and (
+                    not isinstance(quality.score, (int, float))
+                    or not 0 <= float(quality.score) <= 1
+                )
+            )
+            or not isinstance(quality.summary, str)
+        ):
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider returned an invalid quality report."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid quality report.",
+                code="provider_quality_report_invalid",
+            )
         raw_usage = (status.raw or {}).get("usage")
         reported_cost = parse_reported_cost(raw_usage) if isinstance(raw_usage, dict) else None
         if reported_cost is None:
             reported_cost = parse_reported_cost(status.raw or {})
+        quality_cost = parse_reported_cost(quality.usage or {})
         await self._settle_project_video_budget(
-            project, jobs, composition_cost_usd=reported_cost
+            project,
+            jobs,
+            composition_cost_usd=reported_cost,
+            quality_cost_usd=quality_cost,
         )
+        quality_metadata = {
+            "accepted": quality.accepted,
+            "score": quality.score,
+            "summary": quality.summary[:1000],
+            "issues": [str(issue)[:300] for issue in quality.issues[:20]],
+            "cost_usd": str(quality_cost) if quality_cost is not None else None,
+        }
+        if not quality.accepted:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider rejected final-video quality."
+            project.assembly_metadata = {
+                **(project.assembly_metadata or {}),
+                "quality_review": quality_metadata,
+            }
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider rejected final-video quality.",
+                code="provider_quality_rejected",
+            )
         metadata = {
             **assembly,
             "service": "ai_provider",
@@ -677,6 +774,7 @@ class SceneVideoService:
             "size_bytes": artifact.size_bytes,
             "sha256": artifact.sha256,
             "provider_reported_cost_usd": str(reported_cost) if reported_cost is not None else None,
+            "quality_review": quality_metadata,
             "composition_status": SceneJobState.COMPLETED.value,
         }
         project.final_artifact_id = artifact.id
