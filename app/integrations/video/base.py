@@ -124,6 +124,28 @@ def _looks_like_video(data: bytes) -> bool:
 
 
 @dataclass(frozen=True)
+class SceneVideoQualityRequest:
+    """Provider-side AI review request for a composed final video."""
+    project_id: str
+    video_url: str
+    storyboard: dict[str, Any]
+    brand_context: dict[str, Any] = field(default_factory=dict)
+    expected_duration_seconds: float | None = None
+    aspect_ratio: str | None = None
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class SceneVideoQualityResult:
+    """Structured provider-side quality assessment."""
+    accepted: bool
+    score: float | None
+    summary: str
+    issues: tuple[str, ...] = ()
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SceneVideoCompositionRequest:
     """AI-native composition request for a complete storyboard video."""
 
@@ -151,6 +173,7 @@ class SceneVideoProvider(ABC):
     requires_network: bool = False
     supports_reference_image: bool = False
     supports_composition: bool = False
+    supports_quality_review: bool = False
 
     @abstractmethod
     async def generate_video(self, request: SceneVideoRequest) -> str:
@@ -168,6 +191,12 @@ class SceneVideoProvider(ABC):
         )
 
     @abstractmethod
+    async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
+        raise SceneVideoPermanentError(
+            "This AI provider does not support final-video quality review.",
+            code="provider_quality_review_unsupported",
+        )
+
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         """Return the normalised status for a previously submitted job."""
 

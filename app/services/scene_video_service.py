@@ -13,6 +13,7 @@ beyond what the provider or operator configured.
 from __future__ import annotations
 
 import uuid
+from math import gcd
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -30,6 +31,7 @@ from app.integrations.video import (
     SceneVideoProviderRegistry,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
+    SceneVideoQualityRequest,
     SceneVideoTransientError,
 )
 from app.models import (
@@ -353,7 +355,59 @@ class SceneVideoService:
             raw_usage = (status.raw or {}).get("usage")
             reported_cost = parse_reported_cost(raw_usage) if isinstance(raw_usage, dict) else None
             if reported_cost is None:
-                reported_cost = parse_reported_cost(status.raw or {})
+                if not provider.supports_quality_review:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The selected AI provider cannot review final-video quality."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The selected AI provider cannot review final-video quality.",
+                code="provider_quality_review_unsupported",
+            )
+        try:
+            quality = await provider.review_video(
+                SceneVideoQualityRequest(
+                    project_id=str(project.id),
+                    video_url=status.video_url or "",
+                    storyboard=dict(project.scenario or {}),
+                    brand_context=dict(brand_context or {}),
+                    expected_duration_seconds=sum(float(job.duration_seconds) for job in jobs),
+                    aspect_ratio=f"{width // gcd(width, height)}:{height // gcd(width, height)}",
+                    idempotency_key=f"vandad-quality-{project.id}",
+                )
+            )
+        except SceneVideoTransientError:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.ASSEMBLING.value
+            await self.session.flush()
+            raise
+        except Exception as exc:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider quality-review operation failed."
+            await self.session.flush()
+            if isinstance(exc, SceneVideoPermanentError):
+                raise
+            raise SceneVideoPermanentError(
+                "The AI provider quality-review operation failed.",
+                code="provider_quality_review_failed",
+            ) from exc
+        if not quality.accepted:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The AI provider rejected final-video quality."
+            project.assembly_metadata = {
+                **(project.assembly_metadata or {}),
+                "quality_review": {"accepted": False, "score": quality.score,
+                    "summary": quality.summary, "issues": list(quality.issues)},
+            }
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The AI provider rejected final-video quality.",
+                code="provider_quality_rejected",
+            )
+
+        reported_cost = parse_reported_cost(status.raw or {})
             if reported_cost is not None:
                 job.cost_metadata = {
                     **(job.cost_metadata or {}),
@@ -662,6 +716,8 @@ class SceneVideoService:
             "sha256": artifact.sha256,
             "provider_reported_cost_usd": str(reported_cost) if reported_cost is not None else None,
             "composition_status": SceneJobState.COMPLETED.value,
+            "quality_review": {"accepted": quality.accepted, "score": quality.score,
+                "summary": quality.summary, "issues": list(quality.issues), "usage": quality.usage},
         }
         project.final_artifact_id = artifact.id
         project.assembly_metadata = metadata

@@ -18,6 +18,8 @@ from app.integrations.video.base import (
     SceneVideoProvider,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
+    SceneVideoQualityRequest,
+    SceneVideoQualityResult,
     SceneVideoTransientError,
     SceneVideoValidation,
 )
@@ -133,6 +135,8 @@ __all__ = [
     "SceneVideoProviderRegistryError",
     "SceneVideoQuotaExhaustedError",
     "SceneVideoRequest",
+    "SceneVideoQualityRequest",
+    "SceneVideoQualityResult",
     "SceneVideoTransientError",
     "SceneVideoValidation",
     "build_scene_video_registry",

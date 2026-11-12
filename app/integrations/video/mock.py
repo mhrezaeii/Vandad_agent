@@ -21,6 +21,8 @@ from app.integrations.video.base import (
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
     SceneVideoRequest,
+    SceneVideoQualityRequest,
+    SceneVideoQualityResult,
 )
 
 
@@ -45,6 +47,7 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
     display_name = "Local mock scene-video provider"
     supports_cancellation = True
     supports_composition = True
+    supports_quality_review = True
     model_id = "mock-fixture"
     requires_network = False
 
@@ -83,6 +86,14 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
         if request.idempotency_key:
             self._idempotency[request.idempotency_key] = job_id
         return job_id
+
+    async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
+        """Fixture-only structural review; not a visual/audio assessment."""
+        return SceneVideoQualityResult(
+            accepted=True, score=1.0,
+            summary="Mock fixture passed structural review only; no visual/audio quality is assessed.",
+            issues=(), usage={},
+        )
 
     async def compose_video(self, request: SceneVideoCompositionRequest) -> str:
         """Simulate provider-side editing/composition for integration tests."""

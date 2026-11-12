@@ -19,6 +19,7 @@ from app.integrations.video import (
     SceneVideoProviderRegistryError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
+    SceneVideoQualityRequest,
     SceneVideoTransientError,
     build_scene_video_registry,
 )
@@ -99,12 +100,13 @@ async def test_default_validation_rejects_non_video_bytes():
 
 
 # ---------------------------------------------------------- generic HTTP
-def _http_provider(handler, *, compose_path: str | None = None) -> GenericHttpSceneVideoProvider:
+def _http_provider(handler, *, compose_path: str | None = None, quality_path: str | None = None) -> GenericHttpSceneVideoProvider:
     config = GenericHttpConfig(
         base_url="https://video.example.test",
         generate_path="/v1/videos",
         status_path="/v1/videos/{job_id}",
         compose_path=compose_path,
+        quality_path=quality_path,
         api_key="test-secret",
         download_allowed_hosts=("cdn.example.test",),
     )
@@ -157,6 +159,66 @@ async def test_generic_http_without_compose_path_fails_closed():
         await provider.compose_video(request)
 
 
+
+
+async def test_generic_http_quality_review_validates_and_returns_report():
+    received = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received
+        received = json.loads(request.content)
+        return httpx.Response(200, json={
+            "accepted": True,
+            "score": 0.92,
+            "summary": "Clear narration and coherent scenes.",
+            "issues": [],
+            "usage": {"cost_usd": "0.12"},
+        })
+
+    provider = _http_provider(handler, quality_path="/v1/quality")
+    assert provider.supports_quality_review is True
+    result = await provider.review_video(
+        SceneVideoQualityRequest(
+            project_id="project-1",
+            video_url="https://cdn.example.test/final.mp4",
+            storyboard={"title": "Campaign"},
+            expected_duration_seconds=30,
+            aspect_ratio="9:16",
+            idempotency_key="quality-idem",
+        )
+    )
+    assert result.accepted is True
+    assert result.score == pytest.approx(0.92)
+    assert result.usage["cost_usd"] == "0.12"
+    assert received["idempotency_key"] == "quality-idem"
+
+
+async def test_generic_http_quality_review_fails_closed_without_endpoint():
+    provider = _http_provider(lambda _request: httpx.Response(404))
+    assert provider.supports_quality_review is False
+    with pytest.raises(SceneVideoPermanentError, match="no quality-review endpoint"):
+        await provider.review_video(
+            SceneVideoQualityRequest(
+                project_id="project-1",
+                video_url="https://cdn.example.test/final.mp4",
+                storyboard={},
+            )
+        )
+
+
+async def test_generic_http_quality_review_rejects_malformed_report():
+    provider = _http_provider(
+        lambda _request: httpx.Response(200, json={"accepted": "yes"}),
+        quality_path="/v1/quality",
+    )
+    with pytest.raises(SceneVideoPermanentError, match="invalid quality report"):
+        await provider.review_video(
+            SceneVideoQualityRequest(
+                project_id="project-1",
+                video_url="https://cdn.example.test/final.mp4",
+                storyboard={},
+            )
+        )
 
 
 async def test_generic_http_submits_with_bearer_auth_and_polls():

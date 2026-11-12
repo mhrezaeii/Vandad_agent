@@ -19,6 +19,8 @@ from app.integrations.video.base import (
     SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoRequest,
+    SceneVideoQualityRequest,
+    SceneVideoQualityResult,
     SceneVideoTransientError,
 )
 
@@ -65,6 +67,7 @@ class GenericHttpConfig:
     status_path: str = "/v1/videos/{job_id}"
     retrieve_path: str | None = None
     compose_path: str | None = None
+    quality_path: str | None = None
     api_key: str | None = None
     auth_header: str = "Authorization"
     auth_scheme: str = "Bearer"
@@ -178,6 +181,57 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
                 code="provider_bad_response",
             )
         return str(job_id)
+
+    async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
+        if not self.config.quality_path:
+            raise SceneVideoPermanentError(
+                "The configured AI provider has no quality-review endpoint.",
+                code="provider_quality_review_unsupported",
+            )
+        body = {
+            "project_id": request.project_id,
+            "video_url": request.video_url,
+            "storyboard": request.storyboard,
+            "brand_context": request.brand_context,
+            "expected_duration_seconds": request.expected_duration_seconds,
+            "aspect_ratio": request.aspect_ratio,
+        }
+        if request.idempotency_key:
+            body["idempotency_key"] = request.idempotency_key
+        payload = await self._request_json(
+            "POST", f"{self._base()}{self.config.quality_path}", json=body
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("accepted"), bool):
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid quality report.",
+                code="provider_quality_report_invalid",
+            )
+        score = payload.get("score")
+        if score is not None and (
+            isinstance(score, bool) or not isinstance(score, (int, float))
+            or not math.isfinite(float(score)) or not 0 <= float(score) <= 1
+        ):
+            raise SceneVideoPermanentError(
+                "The AI provider returned an invalid quality score.",
+                code="provider_quality_report_invalid",
+            )
+        issues = payload.get("issues", [])
+        summary = payload.get("summary", "")
+        usage = payload.get("usage", {})
+        if (not isinstance(issues, list) or any(not isinstance(x, str) for x in issues)
+            or not isinstance(summary, str) or not summary.strip()
+            or not isinstance(usage, dict)):
+            raise SceneVideoPermanentError(
+                "The AI provider returned a malformed quality report.",
+                code="provider_quality_report_invalid",
+            )
+        return SceneVideoQualityResult(
+            accepted=payload["accepted"],
+            score=float(score) if score is not None else None,
+            summary=summary[:2000],
+            issues=tuple(x[:500] for x in issues[:50]),
+            usage=usage,
+        )
 
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         path = self.config.status_path.format(job_id=job_id)
