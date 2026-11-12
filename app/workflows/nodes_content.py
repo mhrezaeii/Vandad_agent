@@ -1,19 +1,9 @@
-"""Content-production node handlers for the workflow engine.
+"""AI-native content-production node handlers for the workflow engine.
 
-These nodes wire the generic engine to the AI-native video-production domain:
-
-- ``content.update_project``  — persist LLM script output onto the project
-- ``content.submit_video``    — idempotent paid HeyGen submission (persisted
-  provider_job_id gates every resubmission)
-- ``content.poll_video``      — non-terminal statuses raise transient errors so
-  the engine's retry/backoff loop re-polls from the persisted job id
-- ``content.download_video``  — stream the provider video into ArtifactStorage
-- ``content.render_video``    — accept and register the AI provider's final video artifact
-
-All handlers resolve the project inside the execution's tenant: a project of
-another company reads as missing. Paid submission happens exactly once per
-project because ``provider_job_id`` has a unique constraint and is checked
-before any provider call.
+The active path generates a validated scenario, submits scene prompts to the
+selected AI video provider, polls and retrieves provider artifacts, and asks
+the provider to compose and quality-review the final video. Legacy character
+and avatar execution handlers are intentionally absent.
 """
 
 from __future__ import annotations
@@ -21,16 +11,12 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 from sqlalchemy import select
 
 from app.core.exceptions import NotFoundError
 from app.integrations.providers.base import (
-    ProviderError,
-    ProviderExecutionContext,
     ProviderPermanentError,
     ProviderTransientError,
 )
@@ -44,16 +30,9 @@ from app.models import (
     WorkflowExecution,
     WorkflowNode,
 )
-from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
 
 logger = logging.getLogger("app.content_nodes")
-
-# Content nodes reference their provider connection explicitly; this map is a
-# safety default when a node omits the provider.
-_PROVIDER_BY_OPERATION = {
-}
-
 
 async def dispatch_content_node(
     engine,  # noqa: ANN001 - WorkflowEngine (avoid circular import)
