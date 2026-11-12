@@ -8,6 +8,7 @@ from scripts.wavespeed_smoke_test import (
     _prediction_id,
     _video_url,
     _https_url,
+    build_payload,
 )
 
 
@@ -58,3 +59,45 @@ def test_rejects_unsafe_urls(url: object) -> None:
 def test_rejects_empty_output_list() -> None:
     with pytest.raises(WaveSpeedError, match="no output URL"):
         _video_url({"data": {"outputs": []}})
+
+
+def test_builds_text_only_payload_without_image_fields() -> None:
+    payload = build_payload(
+        prompt="A cinematic product reveal",
+        resolution="480p",
+        aspect_ratio="9:16",
+        duration=5,
+    )
+    assert payload == {
+        "prompt": "A cinematic product reveal",
+        "resolution": "480p",
+        "aspect_ratio": "9:16",
+        "duration": 5,
+    }
+    assert "image" not in payload
+    assert "images" not in payload
+
+
+def test_build_payload_includes_optional_seed() -> None:
+    payload = build_payload(
+        prompt="A cinematic product reveal",
+        resolution="720p",
+        aspect_ratio="16:9",
+        duration=10,
+        seed=42,
+    )
+    assert payload["seed"] == 42
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"prompt": " ", "resolution": "480p", "aspect_ratio": "9:16", "duration": 5},
+        {"prompt": "scene", "resolution": "4k", "aspect_ratio": "9:16", "duration": 5},
+        {"prompt": "scene", "resolution": "480p", "aspect_ratio": "1:1", "duration": 5},
+        {"prompt": "scene", "resolution": "480p", "aspect_ratio": "9:16", "duration": 4},
+    ],
+)
+def test_rejects_invalid_payload_options(kwargs: dict[str, object]) -> None:
+    with pytest.raises(WaveSpeedError):
+        build_payload(**kwargs)
