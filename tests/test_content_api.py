@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import uuid
 
-import httpx
 import pytest
 from sqlalchemy import select
 
-from app.integrations.providers.heygen import HeyGenProvider
 from app.models import (
     CredentialStorageType,
     Platform,
@@ -21,7 +19,6 @@ from app.models import (
 )
 from app.security.secret_value import SecretValue
 from app.services.credential_service import CredentialService
-from app.services.provider_budget_service import ProviderBudgetService
 from tests.test_worker_hardening import _keybox
 
 
@@ -52,15 +49,6 @@ async def _connection(
     )
     db_session.add(connection)
     await db_session.flush()
-    if provider == "heygen":
-        from decimal import Decimal
-
-        await ProviderBudgetService(db_session).set_budget(
-            company_id,
-            "heygen",
-            monthly_limit_usd=Decimal("50.00"),
-            per_operation_limit_usd=Decimal("10.00"),
-        )
     if with_credential:
         credential = await CredentialService(db_session, _keybox()).create_credential(
             platform_id=platform.id,
@@ -72,16 +60,6 @@ async def _connection(
         connection.credential_reference_id = credential.id
     await db_session.commit()
     return connection.id
-
-
-def _mock_heygen(app, handler) -> None:
-    app.state.provider_registry.replace(
-        HeyGenProvider(
-            client_factory=lambda timeout: httpx.AsyncClient(
-                transport=httpx.MockTransport(handler), timeout=timeout
-            )
-        )
-    )
 
 
 async def _brand_id(client, headers) -> str:
@@ -119,115 +97,6 @@ async def test_brand_bootstrap_returns_vandefence_identity(client, headers):
     assert sorted(item["name"] for item in again.json()) == sorted(
         item["name"] for item in brands
     )
-
-
-async def test_character_lifecycle_via_api(client, app, db_session, headers, company_and_platform):
-    company, _platform = company_and_platform
-    brand_id = await _brand_id(client, headers)
-
-    initial = await client.get(f"/api/v1/content/brands/{brand_id}/character", headers=headers)
-    assert initial.status_code == 200, initial.text
-    assert initial.json()["status"] == "not_created"
-    assert initial.json()["provider_avatar_id"] is None
-
-    created_avatar_ids: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        url = str(request.url)
-        if request.method == "POST" and url.endswith("/v3/avatars"):
-            created_avatar_ids.append("look-fa-1")
-            return httpx.Response(200, json={"avatar_item": {"id": "look-fa-1"}})
-        if request.method == "GET" and "/v3/avatars/looks/look-fa-1" in url:
-            return httpx.Response(
-                200,
-                json={
-                    "status": "completed",
-                    "preview_image_url": "https://cdn.heygen.ai/look.png",
-                    "supported_api_engines": ["avatar_iv"],
-                },
-            )
-        return httpx.Response(404, json={})
-
-    _mock_heygen(app, handler)
-    connection_id = await _connection(
-        db_session,
-        company.id,
-        provider="heygen",
-        configuration={"url": "https://api.heygen.com"},
-        with_credential=True,
-    )
-
-    created = await client.post(
-        f"/api/v1/content/brands/{brand_id}/character",
-        json={
-            "connection_id": str(connection_id),
-            "source_image_url": "https://vandefence.ir/portrait.jpg",
-            "voice_id": "voice-fa-1",
-        },
-        headers=headers,
-    )
-    assert created.status_code == 201, created.text
-    body = created.json()
-    assert body["status"] == "training"
-    assert body["provider_avatar_id"] == "look-fa-1"
-    assert body["avatar_kind"] == "photo_avatar"
-    assert body["voice_id"] == "voice-fa-1"
-    # No credential material is ever echoed back.
-    assert "test-key" not in created.text
-
-    # A second creation while training/active must not start another paid job.
-    duplicate = await client.post(
-        f"/api/v1/content/brands/{brand_id}/character",
-        json={
-            "connection_id": str(connection_id),
-            "source_image_url": "https://vandefence.ir/portrait.jpg",
-        },
-        headers=headers,
-    )
-    assert duplicate.status_code == 409
-    assert created_avatar_ids == ["look-fa-1"]
-
-    refreshed = await client.post(
-        f"/api/v1/content/brands/{brand_id}/character/refresh",
-        json={"connection_id": str(connection_id)},
-        headers=headers,
-    )
-    assert refreshed.status_code == 200, refreshed.text
-    assert refreshed.json()["status"] == "active"
-    assert refreshed.json()["provider_avatar_id"] == "look-fa-1"
-
-    deactivated = await client.post(
-        f"/api/v1/content/brands/{brand_id}/character/status",
-        json={"active": False},
-        headers=headers,
-    )
-    assert deactivated.status_code == 200, deactivated.text
-    assert deactivated.json()["status"] == "inactive"
-
-    reactivated = await client.post(
-        f"/api/v1/content/brands/{brand_id}/character/status",
-        json={"active": True},
-        headers=headers,
-    )
-    assert reactivated.json()["status"] == "active"
-
-
-async def test_character_creation_requires_source_image(client, app, db_session, headers, company_and_platform):
-    company, _platform = company_and_platform
-    brand_id = await _brand_id(client, headers)
-    connection_id = await _connection(
-        db_session,
-        company.id,
-        provider="heygen",
-        configuration={"url": "https://api.heygen.com"},
-    )
-    response = await client.post(
-        f"/api/v1/content/brands/{brand_id}/character",
-        json={"connection_id": str(connection_id)},
-        headers=headers,
-    )
-    assert response.status_code == 409
-    assert "source_image_url" in response.text
 
 
 async def test_project_flow_and_tenant_isolation(client, db_session, headers, company_and_platform):
@@ -320,30 +189,21 @@ async def test_generate_script_starts_workflow_execution(
     assert again.status_code == 409
 
 
-async def test_generate_video_requires_approved_script(
-    client, db_session, headers, company_and_platform
-):
-    company, _platform = company_and_platform
+async def test_character_and_legacy_avatar_routes_are_not_exposed(client, headers):
     brand_id = await _brand_id(client, headers)
-    project = (
-        await client.post(
-            "/api/v1/content/projects",
-            json={"brand_id": brand_id, "topic": "پایش متمرکز امنیتی"},
-            headers=headers,
+    response = await client.get(
+        f"/api/v1/content/brands/{brand_id}/character", headers=headers
+    )
+    assert response.status_code == 404
+    for suffix, payload in [
+        ("character", {"connection_id": str(uuid.uuid4())}),
+        ("character/refresh", {"connection_id": str(uuid.uuid4())}),
+        ("character/status", {"active": True}),
+    ]:
+        response = await client.post(
+            f"/api/v1/content/brands/{brand_id}/{suffix}", json=payload, headers=headers
         )
-    ).json()
-    heygen_connection_id = await _connection(
-        db_session,
-        company.id,
-        provider="heygen",
-        configuration={"url": "https://api.heygen.com"},
-    )
-    response = await client.post(
-        f"/api/v1/content/projects/{project['id']}/generate-video",
-        json={"connection_id": str(heygen_connection_id)},
-        headers=headers,
-    )
-    assert response.status_code == 409
+        assert response.status_code == 404
 
 
 async def test_video_endpoints_hide_unfinished_projects(client, headers):
