@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from math import gcd
 from typing import Any
 
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from app.integrations.video import (
     SceneVideoProviderRegistry,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
+    SceneVideoQualityRequest,
     SceneVideoTransientError,
 )
 from app.models import (
