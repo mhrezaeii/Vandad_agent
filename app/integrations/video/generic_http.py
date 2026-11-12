@@ -19,6 +19,7 @@ from app.integrations.video.base import (
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
     SceneVideoProvider,
+    SceneVideoHealthResult,
     SceneVideoQualityRequest,
     SceneVideoQualityResult,
     SceneVideoRequest,
@@ -211,7 +212,7 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
             )
         return str(job_id)
 
-    async def check_health(self):
+    async def check_health(self) -> SceneVideoHealthResult:
         if not self.config.health_path:
             return await super().check_health()
         started = time.perf_counter()
@@ -221,7 +222,6 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
             payload.get("healthy") is True
             or str(payload.get("status") or "").strip().lower() in {"ok", "healthy"}
         )
-        from app.integrations.video.base import SceneVideoHealthResult
         return SceneVideoHealthResult(
             provider_id=self.provider_id,
             healthy=healthy,

@@ -20,6 +20,7 @@ from app.integrations.video.base import (
     SceneJobState,
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
+    SceneVideoHealthResult,
     SceneVideoQualityRequest,
     SceneVideoQualityResult,
     SceneVideoRequest,
@@ -88,8 +89,7 @@ class MockSceneVideoProvider(InMemorySceneVideoProvider):
             self._idempotency[request.idempotency_key] = job_id
         return job_id
 
-    async def check_health(self):
-        from app.integrations.video.base import SceneVideoHealthResult
+    async def check_health(self) -> SceneVideoHealthResult:
         return SceneVideoHealthResult(
             provider_id=self.provider_id,
             healthy=True,
