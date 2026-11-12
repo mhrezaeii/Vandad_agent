@@ -1,9 +1,5 @@
-"""Content production API tests: brand bootstrap, character lifecycle, project
-flow, tenant isolation, and no secret/path leakage.
-
-Provider calls are mocked with ``httpx.MockTransport`` — these tests validate
-the HTTP surface and persistence, not live HeyGen/LLM integration.
-"""
+"""AI-native content API tests: brand bootstrap, project flow, tenant isolation,
+and retired character/avatar routes."""
 
 from __future__ import annotations
 
@@ -204,6 +200,19 @@ async def test_character_and_legacy_avatar_routes_are_not_exposed(client, header
             f"/api/v1/content/brands/{brand_id}/{suffix}", json=payload, headers=headers
         )
         assert response.status_code == 404
+
+    project = await client.post(
+        "/api/v1/content/projects",
+        json={"brand_id": brand_id, "topic": "معرفی محصول"},
+        headers=headers,
+    )
+    assert project.status_code == 201, project.text
+    legacy_video = await client.post(
+        f"/api/v1/content/projects/{project.json()['id']}/generate-video",
+        json={"connection_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    assert legacy_video.status_code == 404
 
 
 async def test_video_endpoints_hide_unfinished_projects(client, headers):
