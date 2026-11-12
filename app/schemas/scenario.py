@@ -124,8 +124,6 @@ class Scenario(BaseModel):
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     target_duration_seconds: int = Field(ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS)
     visual_style: str | None = Field(default=None, max_length=1000)
-    character_name: str | None = Field(default=None, max_length=150)
-    character_description: str | None = Field(default=None, max_length=2000)
     language: str = Field(default="fa-IR", min_length=2, max_length=20)
 
     @field_validator("title", "opening_hook", "narration")
