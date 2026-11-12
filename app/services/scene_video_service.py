@@ -30,8 +30,8 @@ from app.integrations.video import (
     SceneVideoProvider,
     SceneVideoProviderRegistry,
     SceneVideoQuotaExhaustedError,
-    SceneVideoRequest,
     SceneVideoQualityRequest,
+    SceneVideoRequest,
     SceneVideoTransientError,
 )
 from app.models import (
