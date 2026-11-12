@@ -32,6 +32,23 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
                 for host in getattr(settings, "scene_video_http_download_allowed_hosts", "").split(",")
                 if host.strip()
             ),
+            supported_modalities=tuple(
+                value.strip().lower()
+                for value in getattr(settings, "scene_video_http_supported_modalities", "video").split(",")
+                if value.strip()
+            ),
+            supported_languages=tuple(
+                value.strip()
+                for value in getattr(settings, "scene_video_http_supported_languages", "").split(",")
+                if value.strip()
+            ) or None,
+            supported_aspect_ratios=tuple(
+                value.strip()
+                for value in getattr(settings, "scene_video_http_supported_aspect_ratios", "").split(",")
+                if value.strip()
+            ) or None,
+            min_duration_seconds=getattr(settings, "scene_video_http_min_duration_seconds", None),
+            max_duration_seconds=getattr(settings, "scene_video_http_max_duration_seconds", None),
         )
 
     apimaster_config: APIMasterConfig | None = None

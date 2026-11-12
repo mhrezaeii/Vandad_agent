@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     scene_video_http_auth_scheme: str = "Bearer"
     # Comma-separated exact HTTPS hostnames allowed for provider media downloads.
     scene_video_http_download_allowed_hosts: str = ""
+    scene_video_http_supported_modalities: str = "video"
+    scene_video_http_supported_languages: str = ""
+    scene_video_http_supported_aspect_ratios: str = ""
+    scene_video_http_min_duration_seconds: float | None = Field(default=None, gt=0)
+    scene_video_http_max_duration_seconds: float | None = Field(default=None, gt=0)
 
     # --- n8n integration (configuration prepared for a later phase) ---
     n8n_base_url: str | None = None
