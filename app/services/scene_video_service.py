@@ -650,6 +650,19 @@ class SceneVideoService:
                 continue
             if not job.provider_job_id:
                 continue
+            if provider.provider_id == "wavespeed":
+                # Billing records can lag prediction completion. Reconcile once
+                # more before artifact retrieval so the budget ledger captures
+                # actual charges when they become visible.
+                latest_status = await provider.get_generation_status(job.provider_job_id)
+                latest_cost = parse_reported_cost(latest_status.raw or {})
+                if latest_cost is not None:
+                    job.cost_metadata = {
+                        **(job.cost_metadata or {}),
+                        "reported_cost_usd": str(latest_cost),
+                        "actual_cost_usd": str(latest_cost),
+                        "provider": provider.provider_id,
+                    }
             prefix = bytearray()
 
             async def _chunks(job=job, prefix=prefix):  # noqa: ANN001 - closure
@@ -700,6 +713,7 @@ class SceneVideoService:
                 },
             )
 
+        await self._record_project_video_usage(project, jobs)
         await self.session.flush()
         summary = self._summarize(jobs)
         if summary["failed"]:
