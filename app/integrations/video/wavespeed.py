@@ -175,6 +175,15 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
                 raise SceneVideoPermanentError("WaveSpeed seed must be an integer.", code="provider_invalid_seed")
             body["seed"] = request.seed
 
+        balance_payload = await self._request_json("GET", f"{self._base()}/balance")
+        balance = self._number(balance_payload.get("balance"))
+        estimated_cost = float(self.estimate_cost_usd(float(duration)))
+        if balance is None or balance < estimated_cost:
+            raise SceneVideoQuotaExhaustedError(
+                "WaveSpeed account balance is below the estimated cost for this scene.",
+                code="provider_insufficient_balance",
+            )
+
         try:
             payload = await self._request_json("POST", f"{self._base()}/{self.config.model}", json=body)
         except SceneVideoTransientError as exc:
