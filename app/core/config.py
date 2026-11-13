@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     scene_video_wavespeed_aspect_ratio: Literal["16:9", "9:16"] = "9:16"
     scene_video_wavespeed_duration_seconds: int | None = Field(default=None, ge=5, le=20)
     scene_video_wavespeed_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    scene_video_wavespeed_max_project_cost_usd: float = Field(default=0.10, gt=0, le=100)
     scene_video_wavespeed_download_allowed_hosts: str = ""
 
     # Optional generic HTTP contract for a provider the operator is authorised
