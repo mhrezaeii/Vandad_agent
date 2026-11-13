@@ -17,6 +17,18 @@ services:
       - backend
       - trusted-proxy
 
+  worker:
+    environment:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      LOG_FORMAT: json
+
+  agent-worker:
+    environment:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      LOG_FORMAT: json
+
   web:
     ports: !reset []
     expose:
