@@ -86,6 +86,7 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             model=getattr(settings, "scene_video_wavespeed_model", "wavespeed-ai/ltx-2.3/text-to-video"),
             resolution=getattr(settings, "scene_video_wavespeed_resolution", "480p"),
             aspect_ratio=getattr(settings, "scene_video_wavespeed_aspect_ratio", "9:16"),
+            duration_seconds=getattr(settings, "scene_video_wavespeed_duration_seconds", None),
             timeout_seconds=getattr(settings, "scene_video_wavespeed_timeout_seconds", 60.0),
             poll_interval_seconds=getattr(settings, "scene_video_poll_interval_seconds", 2.0),
             max_poll_attempts=getattr(settings, "scene_video_max_poll_attempts", 600),
