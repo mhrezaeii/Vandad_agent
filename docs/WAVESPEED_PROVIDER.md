@@ -83,3 +83,18 @@ response shape must match the existing generic HTTP adapter contract.
 
 All adapter contract tests use `httpx.MockTransport`; they do not contact
 WaveSpeed or spend credits. The paid smoke test is separate and opt-in.
+
+
+## Smoke-test cost guard
+
+The standalone paid smoke test defaults to one 5-second 480p clip and refuses
+to submit when the published estimate exceeds `SCENE_VIDEO_WAVESPEED_MAX_COST_USD`
+(default `0.10`). The estimate is a preflight guard, not a provider-enforced
+hard billing limit; the actual WaveSpeed charge remains authoritative. The
+smoke test also refuses to submit until an exact output CDN hostname is
+configured.
+
+Official references:
+- [WaveSpeed API authentication](https://wavespeed.ai/docs/api-authentication)
+- [WaveSpeed get started: submit and poll predictions](https://wavespeed.ai/docs/get-started-api)
+- [WaveSpeed LTX-2.3 text-to-video model](https://wavespeed.ai/models/wavespeed-ai/ltx-2.3/text-to-video)
