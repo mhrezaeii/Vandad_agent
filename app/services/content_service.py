@@ -6,6 +6,7 @@ scene generation, provider-side composition, quality review and artifact deliver
 
 from __future__ import annotations
 
+import copy
 import uuid
 from decimal import Decimal
 from math import gcd
@@ -15,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -873,7 +875,10 @@ class ContentService:
                             "Estimated WaveSpeed project cost exceeds the company's per-operation budget.",
                             details=[
                                 {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
-                                {"field": "per_operation_limit_usd", "value": str(company_budget.per_operation_limit_usd)},
+                                {
+                                    "field": "per_operation_limit_usd",
+                                    "value": str(company_budget.per_operation_limit_usd),
+                                },
                             ],
                         )
             route_order = [selected_provider] + [
@@ -919,9 +924,6 @@ class ContentService:
             }
 
         try:
-            import copy
-            from app.core.config import get_settings
-
             video_settings = get_settings()
             scene_video_graph = copy.deepcopy(SCENE_VIDEO_WORKFLOW_GRAPH)
             for graph_node in scene_video_graph["nodes"]:
