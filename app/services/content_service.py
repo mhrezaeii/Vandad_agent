@@ -793,6 +793,8 @@ class ContentService:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
         if self.scene_video_registry is None:
             raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
+        estimated_project_cost_usd: Decimal | None = None
+        estimated_cost_cap_usd: Decimal | None = None
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
             fallback_ids = (
@@ -838,8 +840,6 @@ class ContentService:
                     details=[{"field": "provider_id", "value": selected_provider}],
                 ) from exc
             selected_provider = selected.provider_id
-            estimated_project_cost_usd: Decimal | None = None
-            estimated_cost_cap_usd: Decimal | None = None
             if selected_provider == "wavespeed":
                 from app.core.config import get_settings
 
