@@ -121,8 +121,8 @@ def submit_prediction(
         raise WaveSpeedError("WaveSpeed rate limit reached; the paid submit was not retried.")
     if not 200 <= response.status_code < 300:
         raise WaveSpeedError(f"WaveSpeed task submission failed (HTTP {response.status_code}).")
-    return _prediction_id(response.json())
-
+    prediction_id = submit_prediction(...)
+    print(f"Prediction accepted: {prediction_id}")
 
 def poll_prediction(
     client: httpx.Client,
@@ -218,38 +218,80 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+
     api_key = os.environ.get("WAVESPEED_API_KEY", "").strip()
     if not api_key:
-        print("WAVESPEED_API_KEY is not set. Add it to your local .env; do not commit or paste it into chat.", file=sys.stderr)
+        print(
+            "WAVESPEED_API_KEY is not set. "
+            "Add it to your local .env; do not commit or paste it into chat.",
+            file=sys.stderr,
+        )
         return 2
+
     if args.max_wait_seconds < 30:
         print("--max-wait-seconds must be at least 30.", file=sys.stderr)
         return 2
 
-    rates_per_five_seconds = {"480p": 0.10, "720p": 0.15, "1080p": 0.20}
+    rates_per_five_seconds = {
+        "480p": 0.10,
+        "720p": 0.15,
+        "1080p": 0.20,
+    }
+
     estimate = rates_per_five_seconds[args.resolution] * (args.duration / 5)
+
     print(f"Model: {MODEL_ID}")
-    print(f"Requested output: {args.resolution}, {args.aspect_ratio}, {args.duration}s")
-    print(f"Text-only generation estimate: about ${estimate:.2f} (provider charge prevails).")
-    print("No image will be uploaded. The paid generation request will be submitted exactly once.")
+    print(
+        f"Requested output: {args.resolution}, "
+        f"{args.aspect_ratio}, {args.duration}s"
+    )
+    print(
+        f"Text-only generation estimate: about ${estimate:.2f} "
+        "(provider charge prevails)."
+    )
+    print("No image will be uploaded.")
+    print("The paid generation request will be submitted exactly once.")
 
     try:
-        with httpx.Client(timeout=60.0, follow_redirects=False) as client:
+        with httpx.Client(
+            timeout=60.0,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             prediction_id = submit_prediction(
-                client, api_key, prompt=args.prompt, resolution=args.resolution,
-                aspect_ratio=args.aspect_ratio, duration=args.duration, seed=args.seed,
+                client,
+                api_key,
+                prompt=args.prompt,
+                resolution=args.resolution,
+                aspect_ratio=args.aspect_ratio,
+                duration=args.duration,
+                seed=args.seed,
             )
+
             print(f"Prediction accepted: {prediction_id}")
+
             result = poll_prediction(
-                client, api_key, prediction_id, max_wait_seconds=args.max_wait_seconds
+                client,
+                api_key,
+                prediction_id,
+                max_wait_seconds=args.max_wait_seconds,
             )
+
             video_url = _video_url({"data": result})
             size = download_video(client, video_url, args.output)
+
         print(f"Video saved: {args.output.resolve()}")
         print(f"File size: {size:,} bytes")
         print(f"Provider prediction: {prediction_id}")
         return 0
-    except (WaveSpeedError, httpx.HTTPError, OSError, ValueError, json.JSONDecodeError) as exc:
+
+    except (
+        WaveSpeedError,
+        httpx.HTTPError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"WaveSpeed smoke test failed: {exc}", file=sys.stderr)
         return 1
 
