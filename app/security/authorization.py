@@ -67,6 +67,10 @@ def build_principal_from_settings(settings: Settings) -> Principal:
             raise ForbiddenError(
                 "AUTH_PROXY_SHARED_SECRET is required in staging/production."
             )
+    if settings.requires_proxy_auth and not raw:
+        raise ForbiddenError(
+            "PLATFORM_BOOTSTRAP_COMPANY_IDS must contain explicit UUIDs in staging/production."
+        )
     if raw == "*":
         if settings.requires_proxy_auth:
             raise ForbiddenError(
