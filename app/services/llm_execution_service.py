@@ -134,6 +134,7 @@ class LlmExecutionService:
                         "attempts": attempts,
                     },
                 )
+                await self.session.commit()
                 return ProviderResult(
                     provider_id=result.provider_id,
                     success=result.success,
@@ -158,6 +159,7 @@ class LlmExecutionService:
                 error_code=error.code or "llm_failure",
                 usage={"attempts": attempts},
             )
+            await self.session.commit()
             # Do not let the workflow engine retry an ambiguous paid request.
             raise ProviderPermanentError(
                 error.message, code=error.code or "llm_failure"
@@ -174,6 +176,7 @@ class LlmExecutionService:
                 "model": candidates[-1].model,
             },
         )
+        await self.session.commit()
         raise ProviderPermanentError(
             (
                 last_safe_error.message
