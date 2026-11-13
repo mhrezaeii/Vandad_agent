@@ -14,6 +14,7 @@ import socket
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote, urlsplit
 
