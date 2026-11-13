@@ -104,6 +104,8 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         self.model_id = config.model
         self._client_factory = client_factory
         self._composition_provider = composition_provider
+        self.supported_aspect_ratios = (config.aspect_ratio,)
+        self.supported_durations = None if config.duration_seconds is not None else (5.0, 10.0, 15.0, 20.0)
         self.supports_composition = bool(
             composition_provider and composition_provider.supports_composition
         )
