@@ -504,3 +504,48 @@ async def test_provider_telemetry_is_company_scoped_and_aggregates_latency(db_se
     assert metrics[0]["pending_30d"] == 1
     assert metrics[0]["success_rate"] == 0.5
     assert metrics[0]["average_latency_ms"] == 210.0
+
+
+
+async def test_settled_video_usage_keeps_prediction_ids_and_cost_breakdown(db_session):
+    company = Company(name="Video Prediction Ledger", slug=f"video-ledger-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        company.id,
+        "wavespeed",
+        monthly_limit_usd=Decimal("1.00"),
+        per_operation_limit_usd=Decimal("0.10"),
+    )
+    reservation = await service.reserve(
+        company.id,
+        "wavespeed",
+        "content.scene.generate_video",
+        idempotency_key=f"wavespeed-{uuid.uuid4()}",
+        require_budget=True,
+    )
+    assert reservation is not None
+    await service.settle(
+        reservation,
+        usage={
+            "cost_usd": "0.10",
+            "currency": "USD",
+            "model": "wavespeed",
+            "estimated_scene_cost_usd": "0.10",
+            "reported_scene_cost_usd": "0.10",
+            "scene_predictions": [{
+                "scene_index": 0,
+                "prediction_id": "pred-123",
+                "provider_job_id": "wavespeed:pred-123",
+                "model_id": "wavespeed-ai/ltx-2.3/text-to-video",
+                "status": "completed",
+                "estimated_cost_usd": "0.10",
+                "reported_cost_usd": "0.10",
+            }],
+        },
+    )
+    assert reservation.usage_payload["scene_predictions"][0]["prediction_id"] == "pred-123"
+    assert reservation.usage_payload["scene_predictions"][0]["model_id"] == (
+        "wavespeed-ai/ltx-2.3/text-to-video"
+    )
