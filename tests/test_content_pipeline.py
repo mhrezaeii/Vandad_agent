@@ -21,6 +21,7 @@ from app.integrations.video import (
 from app.models import (
     Company,
     ProjectStatus,
+    ProviderUsageRecord,
 )
 from app.security.authorization import CompanyScope, Principal
 from app.services.content_service import (
