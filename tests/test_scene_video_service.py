@@ -666,7 +666,7 @@ async def test_stale_wavespeed_submit_fence_becomes_unknown_without_resubmit(
     provider = MockSceneVideoProvider()
     provider.provider_id = "wavespeed"
     service = _service(db_session, provider)
-    await service.prepare_scenes(project, _scenario(count=1), provider_id="wavespeed")
+    await service.prepare_scenes(project, _single_scene_scenario(), provider_id="wavespeed")
     job = (await _jobs(db_session, project.id))[0]
     job.attempts = 1
     job.submission_metadata = {
