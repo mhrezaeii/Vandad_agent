@@ -20,7 +20,6 @@ from app.integrations.video import (
     build_scene_video_registry,
 )
 
-
 MODEL = "wavespeed-ai/ltx-2.3/text-to-video"
 MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
 
