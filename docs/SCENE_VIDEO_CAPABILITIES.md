@@ -63,8 +63,8 @@ service supports more, so the catalogue reports `max_reference_images: 1`.
 
 The `wavespeed` adapter is opt-in and implements text-to-video scene
 generation only. It supports 480p/720p/1080p, 16:9/9:16, optional seed, and
-5/10/15/20-second clips. It performs a read-only authenticated
-`GET /api/v3/models` health probe.
+5–20 second clips (integer duration). It performs a read-only authenticated
+`GET /api/v3/balance` health probe.
 
 WaveSpeed's documented model contract does not provide final storyboard
 composition or AI quality review. The adapter can delegate those two stages
