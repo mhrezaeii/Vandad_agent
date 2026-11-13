@@ -56,6 +56,7 @@ class WaveSpeedConfig:
     model: str = "wavespeed-ai/ltx-2.3/text-to-video"
     resolution: str = "480p"
     aspect_ratio: str = "9:16"
+    duration_seconds: int | None = None
     timeout_seconds: float = 60.0
     poll_interval_seconds: float = 2.0
     max_poll_attempts: int = 600
@@ -74,6 +75,8 @@ class WaveSpeedConfig:
             raise ValueError("WaveSpeed resolution must be 480p, 720p or 1080p.")
         if self.aspect_ratio not in {"16:9", "9:16"}:
             raise ValueError("WaveSpeed aspect_ratio must be 16:9 or 9:16.")
+        if self.duration_seconds is not None and self.duration_seconds not in {5, 10, 15, 20}:
+            raise ValueError("WaveSpeed duration_seconds must be 5, 10, 15, or 20 when configured.")
         if self.timeout_seconds <= 0 or self.poll_interval_seconds < 2 or self.max_poll_attempts < 1:
             raise ValueError("WaveSpeed timeout and polling settings are invalid.")
         for host in self.download_allowed_hosts:
@@ -138,7 +141,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
             )
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
-        duration = request.duration_seconds
+        duration = self.config.duration_seconds if self.config.duration_seconds is not None else request.duration_seconds
         if (isinstance(duration, bool) or not isinstance(duration, (int, float))
                 or not math.isfinite(float(duration)) or int(duration) != duration
                 or int(duration) not in {5, 10, 15, 20}):
@@ -379,7 +382,8 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
 
     def estimate_cost_usd(self, duration_seconds: float) -> str:
         """Return the published LTX-2.3 estimate; never treat it as actual spend."""
-        amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * float(duration_seconds) / 5.0
+        configured_duration = self.config.duration_seconds or duration_seconds
+        amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * float(configured_duration) / 5.0
         return f"{amount:.6f}"
 
     @staticmethod
