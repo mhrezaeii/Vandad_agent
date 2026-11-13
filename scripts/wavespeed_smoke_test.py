@@ -81,8 +81,8 @@ def build_payload(
         raise WaveSpeedError("Unsupported resolution.")
     if aspect_ratio not in {"16:9", "9:16"}:
         raise WaveSpeedError("Unsupported aspect ratio.")
-    if duration not in {5, 10, 15, 20}:
-        raise WaveSpeedError("Duration must be 5, 10, 15, or 20 seconds.")
+    if isinstance(duration, bool) or not isinstance(duration, int) or not 5 <= duration <= 20:
+        raise WaveSpeedError("Duration must be an integer from 5 through 20 seconds.")
     payload: dict[str, Any] = {
         "prompt": prompt.strip(),
         "resolution": resolution,
@@ -96,7 +96,7 @@ def build_payload(
 
 def estimate_cost_usd(resolution: str, duration: int) -> float:
     rates = {"480p": 0.10, "720p": 0.15, "1080p": 0.20}
-    if resolution not in rates or duration not in {5, 10, 15, 20}:
+    if resolution not in rates or isinstance(duration, bool) or not isinstance(duration, int) or not 5 <= duration <= 20:
         raise WaveSpeedError("Cannot estimate cost for the selected model settings.")
     return rates[resolution] * duration / 5
 
@@ -235,7 +235,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", required=True, help="Describe the complete scene and motion.")
     parser.add_argument("--resolution", choices=("480p", "720p", "1080p"), default=os.environ.get("SCENE_VIDEO_WAVESPEED_RESOLUTION", "480p"))
     parser.add_argument("--aspect-ratio", choices=("16:9", "9:16"), default=os.environ.get("SCENE_VIDEO_WAVESPEED_ASPECT_RATIO", "9:16"))
-    parser.add_argument("--duration", choices=(5, 10, 15, 20), type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_DURATION_SECONDS", "5")))
+    parser.add_argument("--duration", choices=tuple(range(5, 21)), type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_DURATION_SECONDS", "5")))
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output", type=Path, default=Path("artifacts/wavespeed/ltx23-text-to-video.mp4"))
     parser.add_argument("--max-wait-seconds", type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_WAIT_SECONDS", "900")))
