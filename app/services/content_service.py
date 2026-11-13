@@ -1177,6 +1177,7 @@ class ContentService:
                         nodes=nodes_payload,
                         edges=edges_payload,
                     )
+                    workflow.status = WorkflowDefinitionStatus.DRAFT.value
                     await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
                     await self.session.refresh(workflow)
                     return workflow
@@ -1187,6 +1188,7 @@ class ContentService:
                 nodes=bound_graph["nodes"],
                 edges=bound_graph["edges"],
             )
+            workflow.status = WorkflowDefinitionStatus.DRAFT.value
             await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
             await self.session.refresh(workflow)
             return workflow
