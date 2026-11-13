@@ -236,7 +236,7 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
             priority=50,
             input_payload={"project_id": str(project.id)},
             max_attempts=3,
-            spend_ceiling_usd=Decimal("1.50"),
+            spend_ceiling_usd=Decimal("2.50"),
         )
     )
     await db_session.commit()
