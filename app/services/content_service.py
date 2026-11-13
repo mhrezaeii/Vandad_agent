@@ -839,8 +839,6 @@ class ContentService:
                 ) from exc
             selected_provider = selected.provider_id
             if selected_provider == "wavespeed":
-                from app.core.config import get_settings
-
                 estimate_cost = getattr(selected, "estimate_cost_usd", None)
                 if callable(estimate_cost):
                     estimated_project_cost_usd = sum(
