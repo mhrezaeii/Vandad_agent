@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.integrations.providers import ProviderExecutor, ProviderRegistry
 from app.integrations.providers.base import (
     ProviderError,
@@ -289,11 +289,17 @@ class LlmExecutionService:
 
             credential = credential_type = secret_reference = None
             if connection.credential_reference_id is not None:
-                resolved = await CredentialService(
-                    self.session, self.master_key_box
-                ).resolve_credential(
-                    connection.credential_reference_id, company_id=company_id
-                )
+                try:
+                    resolved = await CredentialService(
+                        self.session, self.master_key_box
+                    ).resolve_credential(
+                        connection.credential_reference_id, company_id=company_id
+                    )
+                except (ConflictError, ForbiddenError, NotFoundError):
+                    # A broken credential makes only this candidate unusable;
+                    # the next explicitly configured tenant-owned candidate
+                    # may still be healthy.
+                    continue
                 credential = resolved.payload
                 credential_type = resolved.credential_type
                 secret_reference = resolved.secret_reference
