@@ -66,3 +66,40 @@ def test_generic_scene_video_capability_settings_reach_provider_registry():
     assert provider.max_prompt_characters == 3000
     assert provider.input_modalities == ("text",)
     assert provider.max_reference_images == 0
+
+
+
+def test_wavespeed_environment_settings_reach_registry():
+    settings = Settings(
+        environment="local",
+        scene_video_provider="wavespeed",
+        scene_video_wavespeed_api_key="test-key",
+        scene_video_wavespeed_resolution="480p",
+        scene_video_wavespeed_aspect_ratio="9:16",
+        scene_video_wavespeed_download_allowed_hosts="cdn.example.test",
+        _env_file=None,
+    )
+    provider = build_video_registry_from_settings(settings).get("wavespeed")
+    assert provider.model_id == "wavespeed-ai/ltx-2.3/text-to-video"
+    assert provider.config.resolution == "480p"
+    assert provider.config.aspect_ratio == "9:16"
+    assert provider.config.download_allowed_hosts == ("cdn.example.test",)
+    assert provider.supports_composition is False
+    assert provider.supports_quality_review is False
+
+
+def test_wavespeed_uses_explicit_generic_http_finalizer_when_both_paths_configured():
+    settings = Settings(
+        environment="local",
+        scene_video_provider="wavespeed",
+        scene_video_wavespeed_api_key="test-key",
+        scene_video_http_base_url="https://video.example.test",
+        scene_video_http_compose_path="/v1/compose",
+        scene_video_http_quality_path="/v1/quality",
+        scene_video_http_health_path="/health",
+        scene_video_http_api_key="secondary-test-key",
+        _env_file=None,
+    )
+    provider = build_video_registry_from_settings(settings).get("wavespeed")
+    assert provider.supports_composition is True
+    assert provider.supports_quality_review is True
