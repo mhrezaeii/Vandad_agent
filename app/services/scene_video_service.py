@@ -227,7 +227,6 @@ class SceneVideoService:
                 SceneVideoJobStatus.CANCELLED.value,
                 SceneVideoJobStatus.COMPLETED.value,
                 SceneVideoJobStatus.DOWNLOADED.value,
-                SceneVideoJobStatus.FAILED.value,
             )
             and job.attempts < job.max_attempts
         ]
@@ -251,7 +250,6 @@ class SceneVideoService:
                 SceneVideoJobStatus.CANCELLED.value,
                 SceneVideoJobStatus.COMPLETED.value,
                 SceneVideoJobStatus.DOWNLOADED.value,
-                SceneVideoJobStatus.FAILED.value,
             ):
                 continue
             if job.attempts >= job.max_attempts:
