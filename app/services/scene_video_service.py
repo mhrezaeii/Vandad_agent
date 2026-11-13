@@ -174,7 +174,14 @@ class SceneVideoService:
         workflow engine can retry the node with backoff.
         """
         provider = self._provider_for(project)
-        jobs = await self._jobs(project)
+        # Lock the scene rows for the entire submit decision. Concurrent workers
+        # cannot both observe a missing prediction id and issue duplicate paid POSTs.
+        jobs = list((await self.session.execute(
+            select(SceneVideoJob)
+            .where(SceneVideoJob.project_id == project.id)
+            .order_by(SceneVideoJob.scene_index)
+            .with_for_update()
+        )).scalars())
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
         pending_jobs = [
