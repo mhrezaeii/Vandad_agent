@@ -267,6 +267,15 @@ class SceneVideoService:
                 metadata={"project_id": str(project.id), "scene_index": job.scene_index},
             )
             job.attempts += 1
+            estimate = getattr(provider, "estimate_cost_usd", None)
+            if callable(estimate):
+                job.cost_metadata = {
+                    **(job.cost_metadata or {}),
+                    "provider": provider.provider_id,
+                    "model": getattr(provider, "model_id", None),
+                    "estimated_cost_usd": estimate(job.duration_seconds),
+                    "currency": "USD",
+                }
             if provider.provider_id == "wavespeed":
                 job.submission_metadata = {
                     **(job.submission_metadata or {}),
@@ -274,8 +283,10 @@ class SceneVideoService:
                     "submission_started_at": datetime.now(UTC).isoformat(),
                     "reconcile_before_retry": False,
                 }
+                await self._record_project_video_usage(project, jobs)
                 await self.session.flush()
-                # Commit the submission fence before any billable network call.
+                # Commit the submission fence and budget telemetry before any
+                # billable network call. A crash can now be reconciled safely.
                 await self.session.commit()
                 await self.session.refresh(job)
                 await self.session.refresh(project)
@@ -358,15 +369,6 @@ class SceneVideoService:
                    if str(provider_job_id).startswith("wavespeed:") else {}),
             }
             job.submission_metadata.pop("submission_started_at", None)
-            estimate = getattr(provider, "estimate_cost_usd", None)
-            if callable(estimate):
-                job.cost_metadata = {
-                    **(job.cost_metadata or {}),
-                    "provider": provider.provider_id,
-                    "model": getattr(provider, "model_id", None),
-                    "estimated_cost_usd": estimate(job.duration_seconds),
-                    "currency": "USD",
-                }
             submitted += 1
             self.audit.record(
                 event_type="scene.submitted",
