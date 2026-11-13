@@ -817,3 +817,17 @@ async def test_ordered_registry_rejects_apimaster_when_live_probe_fails():
 
     with pytest.raises(SceneVideoProviderRegistryError, match="passes a live health probe"):
         await registry.resolve_ordered_healthy(["apimaster"])
+
+
+
+def test_apimaster_native_route_exposes_verified_wide_aspect_ratio():
+    provider = APIMasterSceneVideoProvider(
+        APIMasterConfig(
+            api_key="catalog-test-key",
+            base_url="https://api.apimaster.test",
+            route="native",
+        )
+    )
+    assert "21:9" in provider.supported_aspect_ratios
+    assert provider.supported_resolutions == ("480P", "720P", "1080P")
+    assert provider.max_reference_images == 1
