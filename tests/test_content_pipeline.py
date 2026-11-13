@@ -11,7 +11,7 @@ import httpx
 import pytest
 from sqlalchemy import select, text
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, UnprocessableEntityError
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 from app.integrations.video import (
     MockSceneVideoProvider,
@@ -315,3 +315,54 @@ def test_ass_subtitle_contains_persian_and_rtl_style():
     assert "Dialogue: 0," in ass
     # Alignment=2 (bottom-centre) present in the style line
     assert ",2,60,60," in ass
+
+
+
+async def test_wavespeed_estimated_project_cap_blocks_before_reservation(
+    db_session, content_service, company_and_platform, monkeypatch
+):
+    company, _platform = company_and_platform
+
+    class WaveSpeedEstimateProvider(MockSceneVideoProvider):
+        provider_id = "wavespeed"
+        model_id = "wavespeed-ai/ltx-2.3/text-to-video"
+
+        def estimate_cost_usd(self, duration_seconds):
+            return f"{0.10 * float(duration_seconds) / 5:.6f}"
+
+    provider = WaveSpeedEstimateProvider()
+    registry = SceneVideoProviderRegistry()
+    registry.register(provider)
+    content_service.scene_video_registry = registry
+    monkeypatch.setattr(
+        "app.core.config.get_settings",
+        lambda: SimpleNamespace(
+            is_production=False,
+            scene_video_provider="mock",
+            scene_video_wavespeed_max_project_cost_usd=0.10,
+        ),
+    )
+
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    project = await content_service.create_project(
+        scope=_scope(company.id),
+        brand_id=brand.id,
+        topic="WaveSpeed project cost ceiling",
+    )
+    project.video_mode = "scene"
+    project.status = ProjectStatus.APPROVED.value
+    project.scenario = {"scenes": [{"duration_seconds": 10.0}]}
+    project.scene_options = {"requires_reference_image": False}
+    await db_session.commit()
+
+    with pytest.raises(UnprocessableEntityError, match="exceeds the configured per-project cap"):
+        await content_service.generate_scene_video(
+            project.id, scope=_scope(company.id), provider_id="wavespeed"
+        )
+
+    reservation = await db_session.scalar(
+        select(ProviderUsageRecord).where(
+            ProviderUsageRecord.idempotency_key == f"scene-video:{project.id}"
+        )
+    )
+    assert reservation is None
