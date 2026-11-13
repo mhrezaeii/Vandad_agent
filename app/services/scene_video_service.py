@@ -190,7 +190,20 @@ class SceneVideoService:
         if provider.provider_id == "wavespeed":
             for job in jobs:
                 metadata = job.submission_metadata or {}
-                if job.provider_job_id or metadata.get("submission_outcome") != "submitting":
+                if job.provider_job_id:
+                    continue
+                if metadata.get("reconcile_before_retry") is True:
+                    job.status = SceneVideoJobStatus.FAILED.value
+                    job.attempts = job.max_attempts
+                    job.error_code = "provider_submission_unknown"
+                    job.error_message = (
+                        "This scene requires WaveSpeed History reconciliation before retry."
+                    )
+                    first_permanent = first_permanent or SceneVideoPermanentError(
+                        job.error_message, code="provider_submission_unknown"
+                    )
+                    continue
+                if metadata.get("submission_outcome") != "submitting":
                     continue
                 started_raw = metadata.get("submission_started_at")
                 try:
