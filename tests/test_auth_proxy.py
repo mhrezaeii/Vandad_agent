@@ -99,7 +99,7 @@ def test_staging_rejects_wildcard_bootstrap_even_with_proxy_secret():
         bootstrap_principal_company_ids="*",
         auth_proxy_shared_secret="staging-proxy-secret-0123456789-abcdef",
     )
-    with pytest.raises(ForbiddenError, match="wildcard is not allowed"):
+    with pytest.raises(ForbiddenError, match="is not allowed in staging/production"):
         build_principal_from_settings(settings)
 
 
