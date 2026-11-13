@@ -149,7 +149,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
                 "WaveSpeed LTX-2.3 duration must be 5, 10, 15, or 20 seconds.",
                 code="provider_invalid_duration",
             )
-        if not request.prompt.strip() or len(request.prompt) > self.max_prompt_characters:
+        if not request.prompt.strip():
             raise SceneVideoPermanentError(
                 "WaveSpeed requires a non-empty prompt within the configured model limit.",
                 code="provider_invalid_prompt",
@@ -208,7 +208,6 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         raw_status = str(payload.get("status") or "").strip().lower()
         state = _STATUS_MAP.get(raw_status, SceneJobState.GENERATING.value)
         output_url = self._output_url(payload) if state == SceneJobState.COMPLETED.value else None
-        timings = payload.get("timings") if isinstance(payload.get("timings"), dict) else {}
         raw = dict(payload)
         raw["model"] = payload.get("model") or self.config.model
         reported = self._reported_cost(payload)
@@ -397,6 +396,16 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
                     continue
                 if math.isfinite(amount) and amount >= 0:
                     return str(value)
+        if str(payload.get("currency") or "").upper() == "USD":
+            for key in ("cost", "total_cost"):
+                value = payload.get(key)
+                if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                    try:
+                        amount = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(amount) and amount >= 0:
+                        return str(value)
         billing = payload.get("billing")
         if isinstance(billing, dict):
             for key in ("cost_usd", "total_cost_usd"):
