@@ -101,7 +101,7 @@ class LlmExecutionService:
 
         attempts = 0
         last_safe_error: ProviderError | None = None
-        for candidate in candidates:
+        for candidate_index, candidate in enumerate(candidates):
             context = self.executor.build_context(
                 adapter=adapter,
                 connection_id=candidate.connection_id,
@@ -142,7 +142,7 @@ class LlmExecutionService:
                     metadata={
                         **metadata,
                         "routing_attempts": attempts,
-                        "fallback_used": attempts > 1,
+                        "fallback_used": candidate_index > 0,
                     },
                 )
 
