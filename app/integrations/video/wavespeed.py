@@ -111,6 +111,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         self.model_id = config.model
         self._client_factory = client_factory
         self._composition_provider = composition_provider
+        self._status_cache: dict[str, tuple[float, SceneGenerationStatus]] = {}
         self.supported_aspect_ratios = (config.aspect_ratio,)
         self.supported_durations = None
         if config.duration_seconds is not None:
@@ -234,7 +235,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         if reported is not None:
             raw["cost_usd"] = reported
             raw["currency"] = "USD"
-        return SceneGenerationStatus(
+        status = SceneGenerationStatus(
             job_id=job_id,
             state=state,
             progress=1.0 if state == SceneJobState.COMPLETED.value else None,
@@ -244,13 +245,20 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
             error_message=str(payload.get("error") or "")[:500] or None,
             raw=raw,
         )
+        self._status_cache[prediction_id] = (time.monotonic(), status)
+        return status
 
     async def retrieve_video(self, job_id: str) -> AsyncIterator[bytes]:
         if job_id.startswith("compose:"):
             async for chunk in self._composition().retrieve_video(job_id.split(":", 1)[1]):
                 yield chunk
             return
-        status = await self.get_generation_status(job_id)
+        prediction_id = self._prediction_id(job_id)
+        cached = self._status_cache.get(prediction_id)
+        if cached is not None and time.monotonic() - cached[0] <= 10.0:
+            status = cached[1]
+        else:
+            status = await self.get_generation_status(job_id)
         if not status.is_completed or not status.video_url:
             raise SceneVideoPermanentError(
                 "WaveSpeed prediction is not completed or has no output URL.",
