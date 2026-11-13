@@ -357,6 +357,9 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     assert apimaster["model_id"] == "wan3.0-video-prime"
     assert apimaster["supports_health_check"] is True
     assert apimaster["input_modalities"] == ["text", "image"]
+    assert apimaster["supported_aspect_ratios"] == [
+        "adaptive", "16:9", "9:16", "1:1", "4:3", "3:4"
+    ]
     assert apimaster["supported_resolutions"] == ["480P", "720P", "1080P"]
     assert apimaster["supports_seed"] is True
     assert apimaster["max_prompt_characters"] == 5000
