@@ -17,8 +17,10 @@ from urllib.parse import urlsplit
 
 import httpx
 
-API_BASE = "https://api.wavespeed.ai/api/v3"
-MODEL_ID = "wavespeed-ai/ltx-2.3/text-to-video"
+API_BASE = os.environ.get("SCENE_VIDEO_WAVESPEED_BASE_URL", "https://api.wavespeed.ai/api/v3").rstrip("/")
+MODEL_ID = os.environ.get("SCENE_VIDEO_WAVESPEED_MODEL", "wavespeed-ai/ltx-2.3/text-to-video")
+TIMEOUT_SECONDS = float(os.environ.get("SCENE_VIDEO_WAVESPEED_TIMEOUT_SECONDS", "60"))
+POLL_INTERVAL_SECONDS = max(2.0, float(os.environ.get("SCENE_VIDEO_POLL_INTERVAL_SECONDS", "2")))
 TERMINAL_FAILURES = {"failed", "cancelled", "timeout", "deleted"}
 
 
@@ -105,7 +107,7 @@ def submit_prediction(
             f"{API_BASE}/{MODEL_ID}",
             headers={**_auth_headers(api_key), "Content-Type": "application/json"},
             json=body,
-            timeout=60.0,
+            timeout=TIMEOUT_SECONDS,
         )
     except httpx.TransportError as exc:
         raise WaveSpeedError(
@@ -121,8 +123,11 @@ def submit_prediction(
         raise WaveSpeedError("WaveSpeed rate limit reached; the paid submit was not retried.")
     if not 200 <= response.status_code < 300:
         raise WaveSpeedError(f"WaveSpeed task submission failed (HTTP {response.status_code}).")
-    prediction_id = submit_prediction(...)
-    print(f"Prediction accepted: {prediction_id}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise WaveSpeedError("WaveSpeed submission returned invalid JSON; check prediction history before retrying.") from exc
+    return _prediction_id(payload)
 
 def poll_prediction(
     client: httpx.Client,
@@ -130,14 +135,14 @@ def poll_prediction(
     prediction_id: str,
     *,
     max_wait_seconds: int = 900,
-    poll_interval_seconds: float = 2.0,
+    poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
 ) -> dict[str, Any]:
     result_url = f"{API_BASE}/predictions/{prediction_id}/result"
     deadline = time.monotonic() + max_wait_seconds
     delay = poll_interval_seconds
     while time.monotonic() < deadline:
         try:
-            response = client.get(result_url, headers=_auth_headers(api_key), timeout=60.0)
+            response = client.get(result_url, headers=_auth_headers(api_key), timeout=TIMEOUT_SECONDS)
         except httpx.TransportError:
             time.sleep(delay)
             delay = min(10.0, delay * 1.5)
@@ -207,19 +212,22 @@ def _parse_args() -> argparse.Namespace:
         description="Generate one paid WaveSpeed LTX-2.3 text-to-video test clip (no image input)."
     )
     parser.add_argument("--prompt", required=True, help="Describe the complete scene and motion.")
-    parser.add_argument("--resolution", choices=("480p", "720p", "1080p"), default="480p")
-    parser.add_argument("--aspect-ratio", choices=("16:9", "9:16"), default="9:16")
-    parser.add_argument("--duration", choices=(5, 10, 15, 20), type=int, default=5)
+    parser.add_argument("--resolution", choices=("480p", "720p", "1080p"), default=os.environ.get("SCENE_VIDEO_WAVESPEED_RESOLUTION", "480p"))
+    parser.add_argument("--aspect-ratio", choices=("16:9", "9:16"), default=os.environ.get("SCENE_VIDEO_WAVESPEED_ASPECT_RATIO", "9:16"))
+    parser.add_argument("--duration", choices=(5, 10, 15, 20), type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_DURATION_SECONDS", "5")))
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output", type=Path, default=Path("artifacts/wavespeed/ltx23-text-to-video.mp4"))
-    parser.add_argument("--max-wait-seconds", type=int, default=900)
+    parser.add_argument("--max-wait-seconds", type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_WAIT_SECONDS", "900")))
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
 
-    api_key = os.environ.get("WAVESPEED_API_KEY", "").strip()
+    api_key = (
+        os.environ.get("SCENE_VIDEO_WAVESPEED_API_KEY")
+        or os.environ.get("WAVESPEED_API_KEY", "")
+    ).strip()
     if not api_key:
         print(
             "WAVESPEED_API_KEY is not set. "
@@ -254,7 +262,7 @@ def main() -> int:
 
     try:
         with httpx.Client(
-            timeout=60.0,
+            timeout=TIMEOUT_SECONDS,
             follow_redirects=False,
             trust_env=False,
         ) as client:
