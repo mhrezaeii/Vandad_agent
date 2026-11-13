@@ -9,7 +9,9 @@ from app.integrations.video import (
     GenericHttpConfig,
     GenericHttpSceneVideoProvider,
     SceneJobState,
+    SceneVideoCompositionRequest,
     SceneVideoPermanentError,
+    SceneVideoQualityRequest,
     SceneVideoRequest,
     SceneVideoTransientError,
     WaveSpeedConfig,
@@ -188,3 +190,53 @@ def test_wavespeed_is_registered_only_when_configured():
     )
     assert registry.has("wavespeed")
     assert registry.get("wavespeed").model_id == MODEL
+
+
+
+async def test_wavespeed_delegates_composition_and_quality_to_configured_http_provider():
+    received = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/compose":
+            return httpx.Response(202, json={"id": "compose-42"})
+        if request.method == "POST" and request.url.path == "/quality":
+            return httpx.Response(200, json={
+                "accepted": True, "score": 0.93, "summary": "Review passed",
+                "issues": [], "usage": {"cost_usd": "0.02"},
+            })
+        return httpx.Response(404)
+
+    generic = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(
+            base_url="https://video.example.test",
+            status_path="/v1/videos/{job_id}",
+            compose_path="/compose",
+            quality_path="/quality",
+            api_key="secondary-key",
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    provider = _provider(handler, composition_provider=generic)
+    composition_id = await provider.compose_video(SceneVideoCompositionRequest(
+        project_id="project-42",
+        storyboard={"title": "Campaign"},
+        scene_video_urls=("https://cdn.example.test/a.mp4",),
+        width=1080,
+        height=1920,
+        idempotency_key="compose-key",
+    ))
+    assert composition_id == "compose:compose-42"
+
+    quality = await provider.review_video(SceneVideoQualityRequest(
+        project_id="project-42",
+        video_url="https://cdn.example.test/final.mp4",
+        storyboard={"title": "Campaign"},
+        idempotency_key="quality-key",
+    ))
+    assert quality.accepted is True
+    assert quality.usage["cost_usd"] == "0.02"
+    assert ("POST", "/compose") in received
+    assert ("POST", "/quality") in received
