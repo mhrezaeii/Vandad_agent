@@ -240,19 +240,17 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
         content_service._execution_service, "execute_workflow", fake_execute_workflow
     )
 
-    task_id = uuid.uuid4()
     updated = await content_service.generate_scene_video(
         project.id,
         scope=_scope(company.id),
         provider_id="unhealthy",
         provider_fallbacks=["healthy"],
-        task_id=task_id,
     )
 
     assert updated.scene_video_provider == "healthy"
     assert updated.scene_options["provider_route_order"] == ["healthy", "unhealthy"]
     assert updated.cost_metadata["provider_id"] == "healthy"
-    assert updated.cost_metadata["task_id"] == str(task_id)
+    assert updated.cost_metadata["task_id"] is None
     assert updated.cost_metadata["provider_route_order"] == ["healthy", "unhealthy"]
 
     reservation = await db_session.scalar(
@@ -262,7 +260,7 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
     )
     assert reservation is not None
     assert reservation.provider_id == "healthy"
-    assert reservation.task_id == task_id
+    assert reservation.task_id is None
 
 
 # ------------------------------------------------------------- subtitles
