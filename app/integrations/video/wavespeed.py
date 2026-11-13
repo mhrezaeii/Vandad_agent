@@ -145,12 +145,16 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
             )
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
-        duration = self.config.duration_seconds if self.config.duration_seconds is not None else request.duration_seconds
+        duration = (
+            self.config.duration_seconds
+            if self.config.duration_seconds is not None
+            else request.duration_seconds
+        )
         if (isinstance(duration, bool) or not isinstance(duration, (int, float))
                 or not math.isfinite(float(duration)) or int(duration) != duration
                 or not 5 <= int(duration) <= 20):
             raise SceneVideoPermanentError(
-                "WaveSpeed LTX-2.3 duration must be 5, 10, 15, or 20 seconds.",
+                "WaveSpeed LTX-2.3 duration must be an integer from 5 through 20 seconds.",
                 code="provider_invalid_duration",
             )
         if not request.prompt.strip():
@@ -212,7 +216,10 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         prediction_id = payload.get("id")
         if not isinstance(prediction_id, (str, int)) or not str(prediction_id).strip():
             raise SceneVideoTransientError(
-                "WaveSpeed accepted a response without a usable prediction ID; reconcile prediction history before retrying.",
+                (
+                    "WaveSpeed accepted a response without a usable prediction ID; "
+                    "reconcile prediction history before retrying."
+                ),
                 code="provider_submission_unknown",
             )
         return f"wavespeed:{prediction_id}"
@@ -426,17 +433,26 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
             try:
                 addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
             except OSError as exc:
-                raise SceneVideoTransientError("WaveSpeed media hostname could not be resolved.", code="provider_media_dns_failed") from exc
+                raise SceneVideoTransientError(
+                    "WaveSpeed media hostname could not be resolved.",
+                    code="provider_media_dns_failed",
+                ) from exc
             if not addresses or any(
                 not ipaddress.ip_address(item[4][0].split("%", 1)[0]).is_global for item in addresses
             ):
-                raise SceneVideoPermanentError("WaveSpeed media hostname resolves to a non-public address.", code="provider_private_media_ip")
+                raise SceneVideoPermanentError(
+                    "WaveSpeed media hostname resolves to a non-public address.",
+                    code="provider_private_media_ip",
+                )
         return value
 
     def _composition(self) -> SceneVideoProvider:
         if self._composition_provider is None:
             raise SceneVideoPermanentError(
-                "WaveSpeed generation is configured, but a separate composition and quality-review provider is not configured.",
+                (
+                    "WaveSpeed generation is configured, but a separate composition "
+                    "and quality-review provider is not configured."
+                ),
                 code="provider_composition_unsupported",
             )
         return self._composition_provider
@@ -555,7 +571,13 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
     @staticmethod
     def _error_for_status(status_code: int) -> Exception:
         if status_code == 402:
-            return SceneVideoQuotaExhaustedError("WaveSpeed account balance is insufficient.", code="provider_insufficient_balance")
+            return SceneVideoQuotaExhaustedError(
+                "WaveSpeed account balance is insufficient.", code="provider_insufficient_balance"
+            )
         if status_code == 429 or 500 <= status_code <= 599:
-            return SceneVideoTransientError(f"WaveSpeed media returned HTTP {status_code}.", code="provider_download_transient")
-        return SceneVideoPermanentError(f"WaveSpeed media download failed (HTTP {status_code}).", code="provider_download_failed")
+            return SceneVideoTransientError(
+                f"WaveSpeed media returned HTTP {status_code}.", code="provider_download_transient"
+            )
+        return SceneVideoPermanentError(
+            f"WaveSpeed media download failed (HTTP {status_code}).", code="provider_download_failed"
+        )
