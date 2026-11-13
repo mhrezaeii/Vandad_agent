@@ -261,3 +261,27 @@ async def test_wavespeed_blocks_submit_when_balance_is_below_estimate():
         await provider.generate_video(_request())
     assert error.value.code == "provider_insufficient_balance"
     assert post_calls == 0
+
+
+
+async def test_wavespeed_retries_safe_get_with_retry_after(monkeypatch):
+    calls = 0
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr("app.integrations.video.wavespeed.asyncio.sleep", fake_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "3"}, json={"message": "slow down"})
+        return httpx.Response(200, json={"data": {"balance": 5.0}})
+
+    provider = _provider(handler)
+    result = await provider._request_json("GET", "https://api.wavespeed.ai/api/v3/balance")
+    assert result["balance"] == 5.0
+    assert calls == 2
+    assert delays == [3.0]
