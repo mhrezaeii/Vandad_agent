@@ -200,7 +200,7 @@ class SceneVideoService:
                     age_seconds = (now - started_at).total_seconds()
                 except (TypeError, ValueError):
                     age_seconds = 301.0
-                if 0 <= age_seconds < 300:
+                if age_seconds < 300:
                     active_submission_ids.add(job.id)
                     continue
                 job.status = SceneVideoJobStatus.FAILED.value
@@ -298,24 +298,25 @@ class SceneVideoService:
             except SceneVideoTransientError as exc:
                 job.error_code = exc.code
                 job.error_message = exc.message
-                if provider.provider_id == "wavespeed":
-                    if exc.code in {"provider_rate_limited", "provider_preflight_transient"}:
-                        job.status = SceneVideoJobStatus.PENDING.value
-                        job.submission_metadata = {
-                            **(job.submission_metadata or {}),
-                            "submission_outcome": (
-                                "preflight_failed" if exc.code == "provider_preflight_transient" else "rejected"
-                            ),
-                        }
-                        job.submission_metadata.pop("submission_started_at", None)
-                    else:
-                        job.attempts = job.max_attempts
-                        job.status = SceneVideoJobStatus.FAILED.value
-                        job.submission_metadata = {
-                            **(job.submission_metadata or {}),
-                            "submission_outcome": "unknown",
-                            "reconcile_before_retry": True,
-                        }
+                if exc.code == "provider_submission_unknown":
+                    job.attempts = job.max_attempts
+                    job.status = SceneVideoJobStatus.FAILED.value
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "unknown",
+                        "reconcile_before_retry": True,
+                    }
+                elif provider.provider_id == "wavespeed" and exc.code in {
+                    "provider_rate_limited", "provider_preflight_transient"
+                }:
+                    job.status = SceneVideoJobStatus.PENDING.value
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": (
+                            "preflight_failed" if exc.code == "provider_preflight_transient" else "rejected"
+                        ),
+                    }
+                    job.submission_metadata.pop("submission_started_at", None)
                 elif job.attempts >= job.max_attempts:
                     job.status = SceneVideoJobStatus.FAILED.value
                 await self.session.flush()
