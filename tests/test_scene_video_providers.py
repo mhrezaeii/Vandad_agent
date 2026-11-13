@@ -404,6 +404,50 @@ async def test_generic_http_rejects_private_media_ip():
 
 
 # --------------------------------------------------------------- APIMaster
+async def test_apimaster_live_health_probe_uses_authenticated_read_only_models_endpoint():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={"object": "list", "data": [{"id": "wan3.0-video-prime"}]},
+        )
+
+    provider = _apimaster_provider(handler)
+    assert provider.supports_health_check is True
+    result = await provider.check_health()
+
+    assert result.healthy is True
+    assert result.provider_id == "apimaster"
+    assert captured["method"] == "GET"
+    assert captured["url"] == "https://api.apimaster.test/v1/models"
+    assert captured["authorization"] == "Bearer apimaster-test-secret"
+
+
+async def test_apimaster_health_probe_fails_closed_on_unauthorized_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "unauthorized"}})
+
+    result = await _apimaster_provider(handler).check_health()
+
+    assert result.healthy is False
+    assert result.provider_id == "apimaster"
+    assert "apimaster-test-secret" not in result.message
+
+
+async def test_apimaster_health_probe_rejects_unexpected_catalogue_shape():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": "list"})
+
+    result = await _apimaster_provider(handler).check_health()
+
+    assert result.healthy is False
+    assert "unexpected" in result.message.lower()
+
+
 def _apimaster_provider(handler) -> APIMasterSceneVideoProvider:
     config = APIMasterConfig(
         api_key="apimaster-test-secret",
