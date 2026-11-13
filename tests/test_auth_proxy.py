@@ -112,3 +112,22 @@ def test_staging_rejects_empty_bootstrap_company_scope():
     )
     with pytest.raises(ForbiddenError, match="PLATFORM_BOOTSTRAP_COMPANY_IDS"):
         build_principal_from_settings(settings)
+
+
+
+def test_production_identity_rejects_wrong_proxy_secret():
+    request = _request(secret="wrong-proxy-secret-0123456789-abcdef")
+    with pytest.raises(UnauthorizedError):
+        get_principal(request)
+
+
+def test_production_identity_rejects_invalid_company_membership_claim():
+    request = _request(companies=["not-a-uuid"])
+    with pytest.raises(UnauthorizedError, match="invalid company claim"):
+        get_principal(request)
+
+
+def test_production_identity_rejects_unknown_only_roles():
+    request = _request(roles="superuser,root")
+    with pytest.raises(ForbiddenError, match="no recognized platform role"):
+        get_principal(request)
