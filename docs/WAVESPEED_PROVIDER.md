@@ -17,6 +17,7 @@ SCENE_VIDEO_WAVESPEED_RESOLUTION=480p
 SCENE_VIDEO_WAVESPEED_ASPECT_RATIO=9:16
 SCENE_VIDEO_WAVESPEED_DURATION_SECONDS=5
 SCENE_VIDEO_WAVESPEED_TIMEOUT_SECONDS=60
+SCENE_VIDEO_WAVESPEED_MAX_PROJECT_COST_USD=0.10
 SCENE_VIDEO_WAVESPEED_DOWNLOAD_ALLOWED_HOSTS=exact-cdn-host.example
 SCENE_VIDEO_POLL_INTERVAL_SECONDS=2
 SCENE_VIDEO_MAX_POLL_ATTEMPTS=600
@@ -53,7 +54,11 @@ cost (when present), and the published estimate are tracked on the scene job.
 
 Published LTX-2.3 estimates are $0.10/$0.15/$0.20 per 5 seconds for
 480p/720p/1080p respectively. The adapter records an estimate using the scene's
-persisted duration. It records actual cost only when the prediction response
+persisted duration. Before the workflow is dispatched, the estimated sum for
+all WaveSpeed scene clips must fit both `SCENE_VIDEO_WAVESPEED_MAX_PROJECT_COST_USD`
+and the company's per-operation budget. The default project cap is $0.10, so
+multi-scene projects must explicitly raise the cap and company budget before
+submission. It records actual cost only when the prediction response
 explicitly reports a USD cost field. Estimates are not misrepresented as actual
 charges. If WaveSpeed omits actual per-prediction cost, the platform's existing
 budget reservation remains unknown/reserved until reconciled against provider
