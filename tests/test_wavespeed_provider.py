@@ -6,9 +6,9 @@ import httpx
 import pytest
 
 from app.integrations.video import (
-    build_scene_video_registry,
     GenericHttpConfig,
     GenericHttpSceneVideoProvider,
+    build_scene_video_registry,
     SceneJobState,
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
