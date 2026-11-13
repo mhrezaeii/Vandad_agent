@@ -12,6 +12,7 @@ from app.integrations.video import (
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
     SceneVideoQualityRequest,
+    SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
     WaveSpeedConfig,
@@ -256,7 +257,7 @@ async def test_wavespeed_blocks_submit_when_balance_is_below_estimate():
         return httpx.Response(404)
 
     provider = _provider(handler)
-    with pytest.raises(Exception) as error:
+    with pytest.raises(SceneVideoQuotaExhaustedError) as error:
         await provider.generate_video(_request())
-    assert getattr(error.value, "code", None) == "provider_insufficient_balance"
+    assert error.value.code == "provider_insufficient_balance"
     assert post_calls == 0
