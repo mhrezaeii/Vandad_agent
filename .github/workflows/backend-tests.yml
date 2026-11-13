@@ -57,6 +57,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Validate staging Compose overlay
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.staging.yml --profile ui config --quiet
+          rm .env
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

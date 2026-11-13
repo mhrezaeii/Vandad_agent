@@ -20,18 +20,15 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
 from app.integrations.providers import ProviderExecutor, ProviderRegistry
-from app.integrations.providers.base import ProviderError, ProviderExecutionContext
-from app.models import PlatformConnection
+from app.integrations.providers.base import ProviderError
 from app.schemas.scenario import (
     Scenario,
     ScenarioRequest,
     normalize_scenario,
 )
 from app.security.crypto import MasterKeyBox
-from app.services.credential_service import CredentialService
-from app.services.provider_budget_service import ProviderBudgetService
+from app.services.llm_execution_service import LlmExecutionService
 
 _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
 
@@ -213,82 +210,30 @@ class ScenarioService:
                 return raw
             return {"content": raw}
 
-        adapter = self.registry.get("llm_openai")
-        connection = await self.session.get(PlatformConnection, connection_id)
-        if connection is None or connection.company_id != company_id:
-            raise NotFoundError(
-                "LLM connection not found.",
-                details=[{"field": "connection_id", "value": str(connection_id)}],
-            )
-
-        credential = None
-        credential_type = None
-        secret_reference = None
-        if connection.credential_reference_id is not None:
-            resolved = await CredentialService(self.session, self._keys).resolve_credential(
-                connection.credential_reference_id, company_id=company_id
-            )
-            credential = resolved.payload
-            credential_type = resolved.credential_type
-            secret_reference = resolved.secret_reference
-
-        context = ProviderExecutionContext(
-            provider_id="llm_openai",
-            connection_id=connection.id,
-            company_id=company_id,
-            platform_id=connection.platform_id,
-            configuration={
-                **connection.configuration,
-                "params": {"system": system, "user": user},
-                "response_format": "json_object",
-                "temperature": 0.4,
-                "max_tokens": 2000,
-            },
-            credential=credential,
-            credential_type=credential_type,
-            secret_reference=secret_reference,
-            timeout_seconds=timeout_seconds,
-            operation=operation,
-        )
         budget_key = idempotency_key or hashlib.sha256(
             f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode()
         ).hexdigest()
-        budget_service = ProviderBudgetService(self.session)
-        reservation = await budget_service.reserve(
-            company_id,
-            adapter.provider_id,
-            operation,
-            idempotency_key=f"llm:{budget_key}",
-            model=str(context.configuration.get("model") or "") or None,
-            require_budget=True,
-            task_id=task_id,
-        )
-        # Persist the spend ceiling before crossing the provider boundary. If
-        # this process dies mid-request, the reservation remains visible.
-        await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
-        if not outcome.success:
-            error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
-            failed_result = getattr(outcome, "result", None)
-            failure_usage = {"attempts": outcome.attempts}
-            failed_latency = getattr(failed_result, "latency_ms", None)
-            if failed_latency is not None:
-                failure_usage["latency_ms"] = failed_latency
-            await budget_service.settle(
-                reservation, error_code=error.code or "llm_failure", usage=failure_usage
+        try:
+            result = await LlmExecutionService(
+                self.session, self.registry, self.executor, self._keys
+            ).execute(
+                company_id=company_id,
+                connection_id=connection_id,
+                configuration_overrides={
+                    "params": {"system": system, "user": user},
+                    "response_format": "json_object",
+                    "temperature": 0.4,
+                    "max_tokens": 2000,
+                },
+                timeout_seconds=timeout_seconds,
+                operation=operation,
+                idempotency_key=f"llm:{budget_key}",
+                task_id=task_id,
             )
+        except ProviderError as error:
             raise ScenarioGenerationError(
-                error.message, code=error.code or "llm_failure", retryable=error.is_transient
-            )
-        metadata = outcome.result.metadata or {}
-        usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
-        await budget_service.settle(
-            reservation,
-            usage={
-                **usage,
-                "model": metadata.get("model") or context.configuration.get("model"),
-                "latency_ms": outcome.result.latency_ms,
-                "attempts": outcome.attempts,
-            },
-        )
-        return metadata
+                error.message,
+                code=error.code or "llm_failure",
+                retryable=error.is_transient,
+            ) from error
+        return result.metadata or {}

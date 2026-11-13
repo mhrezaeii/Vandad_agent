@@ -48,6 +48,13 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
                 for value in getattr(settings, "scene_video_http_supported_aspect_ratios", "").split(",")
                 if value.strip()
             ) or None,
+            supported_resolutions=tuple(
+                value.strip()
+                for value in getattr(settings, "scene_video_http_supported_resolutions", "").split(",")
+                if value.strip()
+            ) or None,
+            supports_seed=bool(getattr(settings, "scene_video_http_supports_seed", False)),
+            max_prompt_characters=getattr(settings, "scene_video_http_max_prompt_characters", None),
             min_duration_seconds=getattr(settings, "scene_video_http_min_duration_seconds", None),
             max_duration_seconds=getattr(settings, "scene_video_http_max_duration_seconds", None),
         )

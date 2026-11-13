@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,9 +13,17 @@ from sqlalchemy import select, text
 
 from app.core.exceptions import NotFoundError
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
+from app.integrations.video import (
+    MockSceneVideoProvider,
+    SceneVideoHealthResult,
+    SceneVideoProviderRegistry,
+)
 from app.models import (
+    AgentTask,
     Company,
     ProjectStatus,
+    ProviderUsageRecord,
+    WorkflowExecution,
 )
 from app.security.authorization import CompanyScope, Principal
 from app.services.content_service import (
@@ -160,6 +169,124 @@ async def test_content_tenant_isolation(db_session, content_service, workflow_fa
         await content_service.get_job_status(
             project.script_workflow_execution_id, company_id=stranger.id
         )
+
+
+# ------------------------------------------------------- scene video routing
+async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_route(
+    db_session, content_service, company_and_platform, monkeypatch
+):
+    company, _platform = company_and_platform
+
+    class UnhealthyProvider(MockSceneVideoProvider):
+        provider_id = "unhealthy"
+
+        async def check_health(self):
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message="provider unavailable",
+            )
+
+    class HealthyProvider(MockSceneVideoProvider):
+        provider_id = "healthy"
+
+        async def check_health(self):
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=True,
+                message="provider ready",
+            )
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(UnhealthyProvider())
+    registry.register(HealthyProvider())
+    content_service.scene_video_registry = registry
+
+    from app.models import CompanyProviderBudget
+
+    db_session.add(
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="healthy",
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("2.00"),
+            enabled=True,
+        )
+    )
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    project = await content_service.create_project(
+        scope=_scope(company.id),
+        brand_id=brand.id,
+        topic="Ordered scene provider routing",
+    )
+    project.video_mode = "scene"
+    project.status = ProjectStatus.APPROVED.value
+    project.scenario = {
+        "scenes": [{"duration_seconds": 5.0}],
+    }
+    project.scene_options = {"requires_reference_image": False}
+    task_id = uuid.uuid4()
+    db_session.add(
+        AgentTask(
+            id=task_id,
+            company_id=company.id,
+            agent_key="video_production",
+            capability="video.scene.generate",
+            title="Ordered provider fallback test",
+            status="running",
+            priority=50,
+            input_payload={"project_id": str(project.id)},
+            max_attempts=3,
+            spend_ceiling_usd=Decimal("2.50"),
+        )
+    )
+    await db_session.commit()
+
+    async def fake_ensure_workflow(*args, **kwargs):
+        return None
+
+    async def fake_require_published(*args, **kwargs):
+        return SimpleNamespace(id=uuid.uuid4())
+
+    async def fake_execute_workflow(*args, **kwargs):
+        execution = WorkflowExecution(
+            company_id=company.id,
+            workflow_name="scene-video-routing-test",
+            workflow_type="video_production",
+            status="running",
+        )
+        db_session.add(execution)
+        await db_session.flush()
+        return execution, True
+
+    monkeypatch.setattr(content_service, "ensure_workflow", fake_ensure_workflow)
+    monkeypatch.setattr(content_service, "_require_published", fake_require_published)
+    monkeypatch.setattr(
+        content_service._execution_service, "execute_workflow", fake_execute_workflow
+    )
+
+    updated = await content_service.generate_scene_video(
+        project.id,
+        scope=_scope(company.id),
+        provider_id="unhealthy",
+        provider_fallbacks=["healthy"],
+        task_id=task_id,
+    )
+
+    assert updated.scene_video_provider == "healthy"
+    assert updated.scene_options["provider_route_order"] == ["healthy", "unhealthy"]
+    assert updated.cost_metadata["provider_id"] == "healthy"
+    assert updated.cost_metadata["task_id"] == str(task_id)
+    assert updated.cost_metadata["provider_route_order"] == ["healthy", "unhealthy"]
+
+    reservation = await db_session.scalar(
+        select(ProviderUsageRecord).where(
+            ProviderUsageRecord.idempotency_key == f"scene-video:{project.id}"
+        )
+    )
+    assert reservation is not None
+    assert reservation.provider_id == "healthy"
+    assert reservation.task_id == task_id
 
 
 # ------------------------------------------------------------- subtitles

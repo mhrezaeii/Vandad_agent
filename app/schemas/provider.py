@@ -112,9 +112,14 @@ class SceneVideoModelRead(BaseModel):
     supports_composition: bool
     supports_quality_review: bool = False
     supports_health_check: bool = False
+    input_modalities: list[str] = Field(default_factory=lambda: ["text"])
     supported_modalities: list[str] = Field(default_factory=lambda: ["video"])
     supported_languages: list[str] | None = None
     supported_aspect_ratios: list[str] | None = None
+    supported_resolutions: list[str] | None = None
+    supports_seed: bool = False
+    max_prompt_characters: int | None = None
+    max_reference_images: int | None = 0
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
 

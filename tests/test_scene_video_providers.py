@@ -403,7 +403,143 @@ async def test_generic_http_rejects_private_media_ip():
     assert exc.value.code == "provider_private_media_ip"
 
 
+async def test_generic_http_capability_contract_controls_seed_and_resolution():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(201, json={"id": "generic-job"})
+
+    provider = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(
+            base_url="https://video.example.test",
+            supported_resolutions=("1080x1920",),
+            supports_seed=True,
+            max_prompt_characters=100,
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    assert provider.input_modalities == ("text",)
+    assert provider.supported_resolutions == ("1080x1920",)
+    assert provider.supports_seed is True
+    assert provider.max_prompt_characters == 100
+    assert provider.max_reference_images == 0
+
+    await provider.generate_video(
+        SceneVideoRequest(
+            scene_id="p:0",
+            prompt="A short test prompt.",
+            duration_seconds=5,
+            width=1080,
+            height=1920,
+            aspect_ratio="9:16",
+            seed=7,
+        )
+    )
+    assert captured["body"]["seed"] == 7
+
+
+async def test_generic_http_rejects_seed_when_contract_does_not_declare_support():
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(201, json={"id": "unexpected"})
+
+    provider = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(base_url="https://video.example.test"),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    with pytest.raises(SceneVideoPermanentError, match="does not declare seed support"):
+        await provider.generate_video(
+            SceneVideoRequest(
+                scene_id="p:0",
+                prompt="A short test prompt.",
+                duration_seconds=5,
+                seed=7,
+            )
+        )
+    assert requested == []
+
+
+async def test_generic_http_rejects_undeclared_resolution_before_request():
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(201, json={"id": "unexpected"})
+
+    provider = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(
+            base_url="https://video.example.test",
+            supported_resolutions=("720x1280",),
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    with pytest.raises(SceneVideoPermanentError, match="dimensions are not supported"):
+        await provider.generate_video(
+            SceneVideoRequest(
+                scene_id="p:0",
+                prompt="A short test prompt.",
+                duration_seconds=5,
+                width=1080,
+                height=1920,
+            )
+        )
+    assert requested == []
+
+
 # --------------------------------------------------------------- APIMaster
+async def test_apimaster_live_health_probe_uses_authenticated_read_only_models_endpoint():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={"object": "list", "data": [{"id": "wan3.0-video-prime"}]},
+        )
+
+    provider = _apimaster_provider(handler)
+    assert provider.supports_health_check is True
+    result = await provider.check_health()
+
+    assert result.healthy is True
+    assert result.provider_id == "apimaster"
+    assert captured["method"] == "GET"
+    assert captured["url"] == "https://api.apimaster.test/v1/models"
+    assert captured["authorization"] == "Bearer apimaster-test-secret"
+
+
+async def test_apimaster_health_probe_fails_closed_on_unauthorized_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "unauthorized"}})
+
+    result = await _apimaster_provider(handler).check_health()
+
+    assert result.healthy is False
+    assert result.provider_id == "apimaster"
+    assert "apimaster-test-secret" not in result.message
+
+
+async def test_apimaster_health_probe_rejects_unexpected_catalogue_shape():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": "list"})
+
+    result = await _apimaster_provider(handler).check_health()
+
+    assert result.healthy is False
+    assert "unexpected" in result.message.lower()
+
+
 def _apimaster_provider(handler) -> APIMasterSceneVideoProvider:
     config = APIMasterConfig(
         api_key="apimaster-test-secret",
@@ -651,3 +787,47 @@ async def test_ordered_healthy_registry_skips_unhealthy_provider():
         require_quality_review=True,
     )
     assert selected.provider_id == "mock"
+
+
+
+async def test_ordered_registry_selects_apimaster_only_after_live_health_probe():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"object": "list", "data": [{"id": "wan3.0-video-prime"}]},
+        )
+
+    provider = _apimaster_provider(handler)
+    registry = SceneVideoProviderRegistry()
+    registry.register(provider)
+
+    selected = await registry.resolve_ordered_healthy(
+        ["apimaster"], require_reference_image=True
+    )
+
+    assert selected is provider
+
+
+async def test_ordered_registry_rejects_apimaster_when_live_probe_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "unauthorized"}})
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(_apimaster_provider(handler))
+
+    with pytest.raises(SceneVideoProviderRegistryError, match="passes a live health probe"):
+        await registry.resolve_ordered_healthy(["apimaster"])
+
+
+
+def test_apimaster_native_route_exposes_verified_wide_aspect_ratio():
+    provider = APIMasterSceneVideoProvider(
+        APIMasterConfig(
+            api_key="catalog-test-key",
+            base_url="https://api.apimaster.test",
+            route="native",
+        )
+    )
+    assert "21:9" in provider.supported_aspect_ratios
+    assert provider.supported_resolutions == ("480P", "720P", "1080P")
+    assert provider.max_reference_images == 1

@@ -38,11 +38,18 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "prompt_tokens", "completion_tokens", "total_tokens",
         "input_tokens", "output_tokens", "total_cost", "cost",
         "total_cost_usd", "cost_usd", "model", "latency_ms",
-        "attempts", "provider_request_id", "currency",
+        "attempts", "provider_request_id", "currency", "routing_attempts",
+        "fallback_used",
     }
     safe: dict[str, Any] = {}
     for key, value in payload.items():
-        if key not in allowed or isinstance(value, bool):
+        if key not in allowed:
+            continue
+        if key == "fallback_used":
+            if isinstance(value, bool):
+                safe[key] = value
+            continue
+        if isinstance(value, bool):
             continue
         if isinstance(value, str):
             safe[key] = redact_text(value)[:160]

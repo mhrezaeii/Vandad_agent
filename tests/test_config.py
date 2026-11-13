@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.integrations.video.factory import build_video_registry_from_settings
 
 
 def test_settings_defaults_are_valid(monkeypatch):
@@ -45,3 +46,23 @@ def test_settings_ignores_compose_only_variables(monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "irrelevant-in-app-settings")
     settings = Settings(_env_file=None)
     assert not hasattr(settings, "postgres_password")
+
+
+
+def test_generic_scene_video_capability_settings_reach_provider_registry():
+    settings = Settings(
+        environment="local",
+        scene_video_provider="generic_http",
+        scene_video_http_base_url="https://video.example.test",
+        scene_video_http_supported_resolutions="720x1280,1080x1920",
+        scene_video_http_supports_seed=True,
+        scene_video_http_max_prompt_characters=3000,
+        _env_file=None,
+    )
+    provider = build_video_registry_from_settings(settings).get("generic_http")
+
+    assert provider.supported_resolutions == ("720x1280", "1080x1920")
+    assert provider.supports_seed is True
+    assert provider.max_prompt_characters == 3000
+    assert provider.input_modalities == ("text",)
+    assert provider.max_reference_images == 0

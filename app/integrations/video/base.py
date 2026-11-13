@@ -183,9 +183,14 @@ class SceneVideoProvider(ABC):
     supports_composition: bool = False
     supports_quality_review: bool = False
     supports_health_check: bool = False
+    input_modalities: tuple[str, ...] = ("text",)
     supported_modalities: tuple[str, ...] = ("video",)
     supported_languages: tuple[str, ...] | None = None
     supported_aspect_ratios: tuple[str, ...] | None = None
+    supported_resolutions: tuple[str, ...] | None = None
+    supports_seed: bool = False
+    max_prompt_characters: int | None = None
+    max_reference_images: int | None = 0
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
 

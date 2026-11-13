@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from decimal import Decimal
 
@@ -223,6 +224,61 @@ async def test_task_budget_is_tenant_scoped(db_session):
         )
 
 
+async def test_task_spend_ceiling_is_atomic_across_concurrent_providers(session_factory):
+    company_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    async with session_factory() as session:
+        company = Company(
+            id=company_id,
+            name="Concurrent Task Budget",
+            slug=f"concurrent-task-budget-{uuid.uuid4().hex[:8]}",
+        )
+        session.add(company)
+        await session.flush()
+        task = AgentTask(
+            id=task_id,
+            company_id=company.id,
+            agent_key="content",
+            capability="content.scenario.generate",
+            title="Concurrent bounded task",
+            spend_ceiling_usd=Decimal("1.00"),
+        )
+        session.add(task)
+        await session.flush()
+        service = ProviderBudgetService(session)
+        for provider_id in ("llm_openai", "apimaster"):
+            await service.set_budget(
+                company.id,
+                provider_id,
+                monthly_limit_usd=Decimal("5.00"),
+                per_operation_limit_usd=Decimal("0.75"),
+            )
+        await session.commit()
+
+    async def reserve(provider_id: str):
+        async with session_factory() as session:
+            try:
+                record = await ProviderBudgetService(session).reserve(
+                    company_id,
+                    provider_id,
+                    "concurrent-operation",
+                    idempotency_key=f"concurrent-{provider_id}-{uuid.uuid4()}",
+                    require_budget=True,
+                    task_id=task_id,
+                )
+                await session.commit()
+                return record
+            except ConflictError:
+                await session.rollback()
+                return None
+
+    results = await asyncio.gather(
+        reserve("llm_openai"),
+        reserve("apimaster"),
+    )
+    assert sum(record is not None for record in results) == 1
+
+
 async def test_paid_operation_fails_closed_without_company_budget(db_session):
     company = Company(name="No Budget", slug=f"no-budget-{uuid.uuid4().hex[:8]}")
     db_session.add(company)
@@ -263,8 +319,27 @@ def test_cost_parser_only_accepts_usd_denominated_values():
     assert parse_reported_cost({"cost": "0.42"}) is None
 
 
+async def test_scene_video_model_capability_catalog_is_exposed(client, app):
+    from app.integrations.video import (
+        APIMasterConfig,
+        APIMasterSceneVideoProvider,
+        MockSceneVideoProvider,
+        SceneVideoProviderRegistry,
+    )
 
-async def test_scene_video_model_capability_catalog_is_exposed(client):
+    registry = SceneVideoProviderRegistry()
+    registry.register(MockSceneVideoProvider())
+    registry.register(
+        APIMasterSceneVideoProvider(
+            APIMasterConfig(
+                api_key="catalog-test-key",
+                base_url="https://api.apimaster.test",
+                model="wan3.0-video-prime",
+            )
+        )
+    )
+    app.state.scene_video_registry = registry
+
     response = await client.get("/api/v1/providers/scene-video/models")
     assert response.status_code == 200, response.text
     models = response.json()
@@ -273,6 +348,24 @@ async def test_scene_video_model_capability_catalog_is_exposed(client):
     assert mock["supports_composition"] is True
     assert mock["supported_languages"] is None
     assert mock["max_duration_seconds"] is None
+    assert mock["input_modalities"] == ["text"]
+    assert mock["supported_resolutions"] is None
+    assert mock["supports_seed"] is False
+    assert mock["max_reference_images"] == 0
+
+    apimaster = next(item for item in models if item["provider_id"] == "apimaster")
+    assert apimaster["model_id"] == "wan3.0-video-prime"
+    assert apimaster["supports_health_check"] is True
+    assert apimaster["input_modalities"] == ["text", "image"]
+    assert apimaster["supported_aspect_ratios"] == [
+        "adaptive", "16:9", "9:16", "1:1", "4:3", "3:4"
+    ]
+    assert apimaster["supported_resolutions"] == ["480P", "720P", "1080P"]
+    assert apimaster["supports_seed"] is True
+    assert apimaster["max_prompt_characters"] == 5000
+    assert apimaster["max_reference_images"] == 1
+    assert apimaster["min_duration_seconds"] == 2
+    assert apimaster["max_duration_seconds"] == 30
 
 
 async def test_budget_api_is_company_scoped(client, db_session):

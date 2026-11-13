@@ -1,0 +1,43 @@
+name: vandad-agent
+
+# Staging overlay for an externally managed OIDC reverse proxy.
+# Requires Docker Compose v2.24+ for the !reset tag and an existing
+# trusted-proxy Docker network shared with the proxy container.
+
+services:
+  api:
+    environment:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      LOG_FORMAT: json
+    ports: !reset []
+    expose:
+      - "8000"
+    networks:
+      - backend
+      - trusted-proxy
+
+  worker:
+    environment:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      LOG_FORMAT: json
+
+  agent-worker:
+    environment:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      LOG_FORMAT: json
+
+  web:
+    ports: !reset []
+    expose:
+      - "3000"
+    networks:
+      - backend
+      - trusted-proxy
+
+networks:
+  trusted-proxy:
+    external: true
+    name: ${TRUSTED_PROXY_NETWORK:-trusted-proxy}

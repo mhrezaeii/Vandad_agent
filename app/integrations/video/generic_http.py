@@ -87,12 +87,21 @@ class GenericHttpConfig:
     supported_modalities: tuple[str, ...] = ("video",)
     supported_languages: tuple[str, ...] | None = None
     supported_aspect_ratios: tuple[str, ...] | None = None
+    supported_resolutions: tuple[str, ...] | None = None
+    supports_seed: bool = False
+    max_prompt_characters: int | None = None
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not self.supported_modalities or any(not item.strip() for item in self.supported_modalities):
             raise ValueError("supported_modalities must contain at least one non-empty value.")
+        if self.supported_resolutions is not None and (
+            not self.supported_resolutions or any(not item.strip() for item in self.supported_resolutions)
+        ):
+            raise ValueError("supported_resolutions must contain non-empty values when configured.")
+        if self.max_prompt_characters is not None and self.max_prompt_characters <= 0:
+            raise ValueError("max_prompt_characters must be positive when configured.")
         parsed = urlsplit(self.base_url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("GenericHttpConfig.base_url must be an HTTPS URL without userinfo.")
@@ -157,10 +166,36 @@ class GenericHttpSceneVideoProvider(SceneVideoProvider):
         self.supported_modalities = tuple(config.supported_modalities)
         self.supported_languages = config.supported_languages
         self.supported_aspect_ratios = config.supported_aspect_ratios
+        self.supported_resolutions = config.supported_resolutions
+        self.supports_seed = config.supports_seed
+        self.max_prompt_characters = config.max_prompt_characters
         self.min_duration_seconds = config.min_duration_seconds
         self.max_duration_seconds = config.max_duration_seconds
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
+        if (
+            self.config.max_prompt_characters is not None
+            and len(request.prompt) > self.config.max_prompt_characters
+        ):
+            raise SceneVideoPermanentError(
+                "The prompt exceeds the configured provider limit.",
+                code="provider_invalid_prompt",
+            )
+        requested_resolution = f"{request.width}x{request.height}"
+        if (
+            self.config.supported_resolutions is not None
+            and requested_resolution not in self.config.supported_resolutions
+        ):
+            raise SceneVideoPermanentError(
+                "The requested dimensions are not supported by this provider contract.",
+                code="provider_invalid_resolution",
+            )
+        if request.seed is not None and not self.config.supports_seed:
+            raise SceneVideoPermanentError(
+                "The configured provider contract does not declare seed support.",
+                code="provider_seed_unsupported",
+            )
+
         body: dict[str, Any] = {
             "prompt": request.prompt,
             "duration": request.duration_seconds,

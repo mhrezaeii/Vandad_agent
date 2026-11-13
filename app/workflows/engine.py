@@ -413,16 +413,13 @@ class WorkflowEngine:
         node = spec.node
         connection_id = node.configuration.get("connection_id")
         operation = node.configuration.get("operation", "execute")
-        connection = await self.session.get(PlatformConnection, uuid.UUID(str(connection_id)))
+        connection = await self.session.get(
+            PlatformConnection, uuid.UUID(str(connection_id))
+        )
         if connection is None or connection.company_id != execution.company_id:
             raise ProviderError(
                 "Connection does not exist or belongs to another company.",
                 code="invalid_connection_reference",
-            )
-        if connection.status not in (ConnectionStatus.CONNECTED.value, ConnectionStatus.CONFIGURED.value):
-            raise ProviderError(
-                f"Connection is not usable (status '{connection.status}').",
-                code="connection_not_ready",
             )
 
         adapter = self.registry.get(connection.provider)
@@ -432,46 +429,10 @@ class WorkflowEngine:
                 code="operation_unsupported",
             )
 
-        credential = None
-        credential_type = None
-        secret_reference = None
-        if connection.credential_reference_id is not None:
-            resolved = await CredentialService(self.session, self._keys).resolve_credential(
-                connection.credential_reference_id, company_id=execution.company_id
-            )
-            credential, credential_type, secret_reference = (
-                resolved.payload,
-                resolved.credential_type,
-                resolved.secret_reference,
-            )
-
         reserved = {"connection_id", "operation"}
         action_params = {key: value for key, value in params.items() if key not in reserved}
-        # Dotted keys ("params.value") address nested configuration entries and
-        # are deep-merged over the connection's static configuration.
-        node_configuration = _deep_merge(connection.configuration, _expand_dotted(action_params))
-        context = self.executor.build_context(
-            adapter=adapter,
-            connection_id=connection.id,
-            company_id=execution.company_id,
-            platform_id=connection.platform_id,
-            configuration=node_configuration,
-            credential=credential,
-            credential_type=credential_type,
-            secret_reference=secret_reference,
-            operation=operation,
-            timeout_seconds=timeout_seconds,
-        )
-        operation_callable = {
-            "execute": adapter.execute,
-            "validate_connection": adapter.validate_connection,
-            "check_health": adapter.check_health,
-        }[operation]
-        budget_service = None
-        budget_reservation = None
-        if adapter.provider_id == "llm_openai" and operation == "execute":
-            from app.services.provider_budget_service import ProviderBudgetService  # noqa: PLC0415
 
+        if adapter.provider_id == "llm_openai" and operation == "execute":
             raw_task_id = (execution.input_metadata or {}).get("agent_task_id")
             try:
                 task_id = uuid.UUID(str(raw_task_id)) if raw_task_id else None
@@ -480,55 +441,84 @@ class WorkflowEngine:
                     "The workflow contains an invalid agent task budget reference.",
                     code="invalid_task_budget_context",
                 ) from exc
-            budget_service = ProviderBudgetService(self.session)
-            budget_reservation = await budget_service.reserve(
-                execution.company_id,
-                adapter.provider_id,
-                "workflow.llm.execute",
+
+            # The endpoint and credentials belong to the saved connection, not
+            # to workflow input. Only prompt/model options may override them.
+            llm_overrides = _expand_dotted(action_params)
+            llm_overrides.pop("url", None)
+            llm_overrides.pop("llm_fallbacks", None)
+            from app.services.llm_execution_service import LlmExecutionService
+
+            result = await LlmExecutionService(
+                self.session, self.registry, self.executor, self._keys
+            ).execute(
+                company_id=execution.company_id,
+                connection_id=connection.id,
+                configuration_overrides=llm_overrides,
+                timeout_seconds=timeout_seconds,
+                operation="workflow.llm.execute",
                 idempotency_key=f"workflow:{execution.id}:{node.node_key}",
-                model=str(context.configuration.get("model") or "") or None,
-                require_budget=True,
                 task_id=task_id,
             )
-            # Commit the reservation before crossing a potentially billable
-            # provider boundary; crashes remain visible as reserved/unknown.
-            await self.session.commit()
-
-        # LLM completions are billable and do not carry a provider-enforced
-        # idempotency key here; never transparently retry an ambiguous request.
-        provider_idempotent = spec.idempotent and adapter.provider_id != "llm_openai"
-        outcome = await self.executor.run(
-            adapter, context, operation_callable, idempotent=provider_idempotent
-        )
-        if not outcome.success:
-            error = outcome.error or ProviderError("The provider operation failed.")
-            if budget_service is not None and budget_reservation is not None:
-                await budget_service.settle(
-                    budget_reservation,
-                    error_code=error.code,
-                    usage={"attempts": outcome.attempts},
+        else:
+            if connection.status not in (
+                ConnectionStatus.CONNECTED.value,
+                ConnectionStatus.CONFIGURED.value,
+            ):
+                raise ProviderError(
+                    f"Connection is not usable (status '{connection.status}').",
+                    code="connection_not_ready",
                 )
-            raise error
-        result = outcome.result
-        if budget_service is not None and budget_reservation is not None:
-            usage = {
-                **(result.metadata or {}),
-                **(
-                    result.metadata.get("usage")
-                    if isinstance((result.metadata or {}).get("usage"), dict)
-                    else {}
-                ),
-            }
-            await budget_service.settle(
-                budget_reservation,
-                usage={
-                    **usage,
-                    "model": (result.metadata or {}).get("model")
-                    or context.configuration.get("model"),
-                    "latency_ms": result.latency_ms,
-                    "attempts": outcome.attempts,
-                },
+
+            credential = None
+            credential_type = None
+            secret_reference = None
+            if connection.credential_reference_id is not None:
+                resolved = await CredentialService(
+                    self.session, self._keys
+                ).resolve_credential(
+                    connection.credential_reference_id,
+                    company_id=execution.company_id,
+                )
+                credential, credential_type, secret_reference = (
+                    resolved.payload,
+                    resolved.credential_type,
+                    resolved.secret_reference,
+                )
+
+            # Dotted keys (params.value) address nested configuration entries.
+            node_configuration = _deep_merge(
+                connection.configuration, _expand_dotted(action_params)
             )
+            context = self.executor.build_context(
+                adapter=adapter,
+                connection_id=connection.id,
+                company_id=execution.company_id,
+                platform_id=connection.platform_id,
+                configuration=node_configuration,
+                credential=credential,
+                credential_type=credential_type,
+                secret_reference=secret_reference,
+                operation=operation,
+                timeout_seconds=timeout_seconds,
+            )
+            operation_callable = {
+                "execute": adapter.execute,
+                "validate_connection": adapter.validate_connection,
+                "check_health": adapter.check_health,
+            }[operation]
+            outcome = await self.executor.run(
+                adapter,
+                context,
+                operation_callable,
+                idempotent=spec.idempotent,
+            )
+            if not outcome.success or outcome.result is None:
+                raise outcome.error or ProviderError(
+                    "The provider operation failed.", code="provider_failure"
+                )
+            result = outcome.result
+
         raw_output = {
             "message": result.message,
             "latency_ms": result.latency_ms,
