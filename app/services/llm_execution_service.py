@@ -269,10 +269,11 @@ class LlmExecutionService:
             configured_model = base_configuration.get("model")
             override_model = overrides.get("model") if is_primary else None
             model = model_override or override_model or configured_model
-            if not isinstance(model, str) or not model.strip():
+            if not isinstance(model, str) or not model.strip() or len(model) > 200:
                 # A misconfigured primary must not prevent a later, valid
                 # explicitly configured fallback from being considered.
                 continue
+            model = model.strip()
             identity = (connection.id, model)
             if identity in seen:
                 continue
