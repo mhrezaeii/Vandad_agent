@@ -12,12 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.integrations.providers import ProviderExecutor, ProviderRegistry
-from app.integrations.providers.base import ProviderError, ProviderExecutionContext
-from app.models import Platform, PlatformConnection, PlatformKnowledgeSnapshot, PlatformSourceDocument
+from app.integrations.providers.base import ProviderError
+from app.models import Platform, PlatformKnowledgeSnapshot, PlatformSourceDocument
 from app.schemas.platform_knowledge import PlatformKnowledgePayload
 from app.security.crypto import MasterKeyBox
-from app.services.credential_service import CredentialService
-from app.services.provider_budget_service import ProviderBudgetService
+from app.services.llm_execution_service import LlmExecutionService
 
 
 class PlatformKnowledgeExtractionError(Exception):
@@ -136,87 +135,37 @@ class PlatformKnowledgeService:
                 "No discovered source documents exist. Run platform discovery first.",
                 code="knowledge_sources_missing",
             )
-        connection = await self.session.get(PlatformConnection, connection_id)
-        if connection is None or connection.company_id != platform.company_id:
+        if connection_id is None:
             raise NotFoundError("LLM connection not found.")
-        if connection.provider != "llm_openai":
-            raise PlatformKnowledgeExtractionError(
-                "The selected connection must use the llm_openai provider.",
-                code="knowledge_connection_provider_invalid",
-            )
-        if connection.status not in {"connected", "degraded"}:
-            raise PlatformKnowledgeExtractionError(
-                "The selected LLM connection must be validated before extraction.",
-                code="knowledge_connection_not_ready",
-            )
+
         system, user = build_knowledge_prompt(platform, documents)
-        credential = credential_type = secret_reference = None
-        if connection.credential_reference_id is not None:
-            resolved = await CredentialService(self.session, self._keys).resolve_credential(
-                connection.credential_reference_id, company_id=platform.company_id
-            )
-            credential = resolved.payload
-            credential_type = resolved.credential_type
-            secret_reference = resolved.secret_reference
-        adapter = self.registry.get("llm_openai")
-        context = ProviderExecutionContext(
-            provider_id="llm_openai",
-            connection_id=connection.id,
-            company_id=platform.company_id,
-            platform_id=connection.platform_id,
-            configuration={
-                **connection.configuration,
-                "params": {"system": system, "user": user},
-                "response_format": "json_object",
-                "temperature": 0.1,
-                "max_tokens": 5000,
-            },
-            credential=credential,
-            credential_type=credential_type,
-            secret_reference=secret_reference,
-            timeout_seconds=180.0,
-            operation="execute",
-        )
         budget_key = hashlib.sha256(
             f"{platform.company_id}:{platform.id}:{connection_id}:{system}:{user}".encode()
         ).hexdigest()
-        budget_service = ProviderBudgetService(self.session)
-        reservation = await budget_service.reserve(
-            platform.company_id,
-            adapter.provider_id,
-            "platform.knowledge.extract",
-            idempotency_key=f"knowledge:{budget_key}",
-            model=str(context.configuration.get("model") or "") or None,
-            require_budget=True,
-            task_id=task_id,
-        )
-        # The provider may bill even if this worker exits before settlement.
-        await self.session.commit()
-        outcome = await self.executor.run(adapter, context, adapter.execute, idempotent=False)
-        if not outcome.success:
-            error = outcome.error or ProviderError("The text API request failed.", code="llm_failure")
-            failed_result = getattr(outcome, "result", None)
-            failure_usage = {"attempts": outcome.attempts}
-            failed_latency = getattr(failed_result, "latency_ms", None)
-            if failed_latency is not None:
-                failure_usage["latency_ms"] = failed_latency
-            await budget_service.settle(
-                reservation, error_code=error.code or "llm_failure", usage=failure_usage
+        try:
+            result = await LlmExecutionService(
+                self.session, self.registry, self.executor, self._keys
+            ).execute(
+                company_id=platform.company_id,
+                connection_id=connection_id,
+                configuration_overrides={
+                    "params": {"system": system, "user": user},
+                    "response_format": "json_object",
+                    "temperature": 0.1,
+                    "max_tokens": 5000,
+                },
+                timeout_seconds=180.0,
+                operation="platform.knowledge.extract",
+                idempotency_key=f"knowledge:{budget_key}",
+                task_id=task_id,
             )
+        except ProviderError as error:
             raise PlatformKnowledgeExtractionError(
-                error.message, code=error.code or "llm_failure", retryable=error.is_transient
-            )
-        metadata = outcome.result.metadata or {}
-        usage = {**metadata, **(metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {})}
-        await budget_service.settle(
-            reservation,
-            usage={
-                **usage,
-                "model": metadata.get("model") or context.configuration.get("model"),
-                "latency_ms": outcome.result.latency_ms,
-                "attempts": outcome.attempts,
-            },
-        )
+                error.message,
+                code=error.code or "llm_failure",
+                retryable=error.is_transient,
+            ) from error
+        metadata = result.metadata or {}
         raw = metadata.get("content")
         allowed_urls = {document.url for document in documents}
         knowledge = _parse_payload(raw, allowed_urls)
