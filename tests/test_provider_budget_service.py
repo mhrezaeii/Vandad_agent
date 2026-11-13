@@ -329,8 +329,13 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
         WaveSpeedSceneVideoProvider,
     )
 
+    class DiscreteDurationMockProvider(MockSceneVideoProvider):
+        provider_id = "mock-discrete"
+        supported_durations = (5.0, 10.0)
+
     registry = SceneVideoProviderRegistry()
     registry.register(MockSceneVideoProvider())
+    registry.register(DiscreteDurationMockProvider())
     registry.register(
         WaveSpeedSceneVideoProvider(
             WaveSpeedConfig(api_key="catalog-wavespeed-test-key")
@@ -350,6 +355,9 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     response = await client.get("/api/v1/providers/scene-video/models")
     assert response.status_code == 200, response.text
     models = response.json()
+    discrete_mock = next(item for item in models if item["provider_id"] == "mock-discrete")
+    assert discrete_mock["supported_durations"] == [5.0, 10.0]
+
     mock = next(item for item in models if item["provider_id"] == "mock")
     assert mock["model_id"] == "mock-fixture"
     assert mock["supports_composition"] is True
