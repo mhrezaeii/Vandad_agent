@@ -190,12 +190,12 @@ def poll_prediction(
 
 
 def download_video(
-    client: httpx.Client, video_url: str, output_path: Path, *, allowed_hosts: set[str]
+    client: httpx.Client, video_url: str, output_path: Path, *, allowed_hosts: set[str] | None = None
 ) -> int:
     url = _https_url(video_url, label="video output")
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
-    if not host or host not in {item.lower().rstrip(".") for item in allowed_hosts}:
-        raise WaveSpeedError("Video output host is not in the exact configured download allowlist.")
+    if allowed_hosts and host not in {item.lower().rstrip(".") for item in allowed_hosts}:
+        raise WaveSpeedError("Video output host is not in the configured download allowlist.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".part")
     try:
@@ -262,13 +262,7 @@ def main() -> int:
         item.strip().lower().rstrip(".")
         for item in os.environ.get("SCENE_VIDEO_WAVESPEED_DOWNLOAD_ALLOWED_HOSTS", "").split(",")
         if item.strip()
-    }
-    if not allowed_hosts:
-        print(
-            "Set SCENE_VIDEO_WAVESPEED_DOWNLOAD_ALLOWED_HOSTS to the exact output CDN hostname(s) before paid generation.",
-            file=sys.stderr,
-        )
-        return 2
+    } or None
 
     if args.max_wait_seconds < 30:
         print("--max-wait-seconds must be at least 30.", file=sys.stderr)
