@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -91,6 +92,13 @@ def build_payload(
     if seed is not None:
         payload["seed"] = seed
     return payload
+
+
+def estimate_cost_usd(resolution: str, duration: int) -> float:
+    rates = {"480p": 0.10, "720p": 0.15, "1080p": 0.20}
+    if resolution not in rates or duration not in {5, 10, 15, 20}:
+        raise WaveSpeedError("Cannot estimate cost for the selected model settings.")
+    return rates[resolution] * duration / 5
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:
@@ -226,6 +234,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output", type=Path, default=Path("artifacts/wavespeed/ltx23-text-to-video.mp4"))
     parser.add_argument("--max-wait-seconds", type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_WAIT_SECONDS", "900")))
+    parser.add_argument("--max-cost-usd", type=float, default=float(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_COST_USD", "0.10")))
     return parser.parse_args()
 
 
@@ -248,13 +257,18 @@ def main() -> int:
         print("--max-wait-seconds must be at least 30.", file=sys.stderr)
         return 2
 
-    rates_per_five_seconds = {
-        "480p": 0.10,
-        "720p": 0.15,
-        "1080p": 0.20,
-    }
+    if not math.isfinite(args.max_cost_usd) or args.max_cost_usd <= 0:
+        print("--max-cost-usd must be a positive finite amount.", file=sys.stderr)
+        return 2
 
-    estimate = rates_per_five_seconds[args.resolution] * (args.duration / 5)
+    estimate = estimate_cost_usd(args.resolution, args.duration)
+    if estimate > args.max_cost_usd:
+        print(
+            f"Estimated charge ${estimate:.2f} exceeds the approved cap "
+            f"${args.max_cost_usd:.2f}; no prediction was submitted.",
+            file=sys.stderr,
+        )
+        return 2
 
     print(f"Model: {MODEL_ID}")
     print(
@@ -262,8 +276,8 @@ def main() -> int:
         f"{args.aspect_ratio}, {args.duration}s"
     )
     print(
-        f"Text-only generation estimate: about ${estimate:.2f} "
-        "(provider charge prevails)."
+        f"Text-only generation estimate: about ${estimate:.2f}; "
+        f"approved estimated cap: ${args.max_cost_usd:.2f} (provider charge prevails)."
     )
     print("No image will be uploaded.")
     print("The paid generation request will be submitted exactly once.")
