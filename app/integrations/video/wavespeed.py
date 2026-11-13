@@ -75,8 +75,12 @@ class WaveSpeedConfig:
             raise ValueError("WaveSpeed resolution must be 480p, 720p or 1080p.")
         if self.aspect_ratio not in {"16:9", "9:16"}:
             raise ValueError("WaveSpeed aspect_ratio must be 16:9 or 9:16.")
-        if self.duration_seconds is not None and self.duration_seconds not in {5, 10, 15, 20}:
-            raise ValueError("WaveSpeed duration_seconds must be 5, 10, 15, or 20 when configured.")
+        if self.duration_seconds is not None and (
+            isinstance(self.duration_seconds, bool)
+            or not isinstance(self.duration_seconds, int)
+            or not 5 <= self.duration_seconds <= 20
+        ):
+            raise ValueError("WaveSpeed duration_seconds must be an integer from 5 through 20.")
         if self.timeout_seconds <= 0 or self.poll_interval_seconds < 2 or self.max_poll_attempts < 1:
             raise ValueError("WaveSpeed timeout and polling settings are invalid.")
         for host in self.download_allowed_hosts:
@@ -105,7 +109,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         self._client_factory = client_factory
         self._composition_provider = composition_provider
         self.supported_aspect_ratios = (config.aspect_ratio,)
-        self.supported_durations = None if config.duration_seconds is not None else (5.0, 10.0, 15.0, 20.0)
+        self.supported_durations = None
         self.supports_composition = bool(
             composition_provider and composition_provider.supports_composition
         )
@@ -116,24 +120,14 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
     async def check_health(self) -> SceneVideoHealthResult:
         started = time.perf_counter()
         try:
-            payload = await self._request_json("GET", f"{self._base()}/models")
-            models = payload if isinstance(payload, list) else payload.get("data")
-            if not isinstance(models, list):
+            payload = await self._request_json("GET", f"{self._base()}/balance")
+            balance = self._number(payload.get("balance"))
+            if balance is None or balance < 0:
                 raise SceneVideoPermanentError(
-                    "WaveSpeed returned an invalid model catalogue.", code="provider_bad_response"
-                )
-            available = any(
-                isinstance(item, dict)
-                and (item.get("model_id") == self.config.model or item.get("name") == self.config.model)
-                for item in models
-            )
-            if not available:
-                return SceneVideoHealthResult(
-                    self.provider_id, False, "Configured WaveSpeed model was not found in the model catalogue.",
-                    round((time.perf_counter() - started) * 1000, 2),
+                    "WaveSpeed returned an invalid account-balance response.", code="provider_bad_response"
                 )
             return SceneVideoHealthResult(
-                self.provider_id, True, "WaveSpeed authenticated model catalogue is reachable.",
+                self.provider_id, True, "WaveSpeed authenticated balance probe succeeded.",
                 round((time.perf_counter() - started) * 1000, 2),
             )
         except (SceneVideoTransientError, SceneVideoPermanentError) as exc:
@@ -146,7 +140,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         duration = self.config.duration_seconds if self.config.duration_seconds is not None else request.duration_seconds
         if (isinstance(duration, bool) or not isinstance(duration, (int, float))
                 or not math.isfinite(float(duration)) or int(duration) != duration
-                or int(duration) not in {5, 10, 15, 20}):
+                or not 5 <= int(duration) <= 20):
             raise SceneVideoPermanentError(
                 "WaveSpeed LTX-2.3 duration must be 5, 10, 15, or 20 seconds.",
                 code="provider_invalid_duration",
