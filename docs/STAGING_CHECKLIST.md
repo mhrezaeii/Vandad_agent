@@ -12,7 +12,7 @@ Set these in the API environment before starting with ENVIRONMENT=staging:
 - AUTH_PROXY_SHARED_SECRET: at least 32 characters; generate with
   openssl rand -hex 32.
 - PLATFORM_BOOTSTRAP_COMPANY_IDS: explicit comma-separated company UUIDs;
-  empty values and * are rejected in staging/production.
+  empty values and wildcard scope are rejected in staging/production.
 - CORS_ALLOWED_ORIGINS: exact trusted browser origin(s), never *.
 - DATABASE_URL and REDIS_URL: staging-only services and credentials.
 - CREDENTIAL_MASTER_KEYS and CREDENTIAL_ACTIVE_KEY_VERSION: staging-only
@@ -68,7 +68,7 @@ external proxy is their only intended ingress.
 1. Start the API with ENVIRONMENT=staging and no proxy secret: startup must
    fail.
 2. Start with AUTH_PROXY_SHARED_SECRET missing, an empty bootstrap company
-   list, or wildcard *: startup must fail.
+   list, or wildcard scope: startup must fail.
 3. Send a request without the proxy secret: expect 401.
 4. Send a wrong proxy secret: expect 401.
 5. Send a valid proxy identity without a company membership: expect 401.
