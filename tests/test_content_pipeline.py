@@ -94,7 +94,10 @@ async def test_script_generation_persists_llm_output(
     script_json = json.dumps({
         "title": "پایش متمرکز امنیتی",
         "script": "شبکه سازمان شما هر ثانیه رویداد تولید می‌کند. (۲۵ ثانیه توضیح فنی)",
-        "segments": ["شبکه سازمان شما هر ثانیه رویداد تولید می‌کند.", "پایش متمرکز یعنی دیدن همین رویدادها در یک نقطه."],
+        "segments": [
+            "شبکه سازمان شما هر ثانیه رویداد تولید می‌کند.",
+            "پایش متمرکز یعنی دیدن همین رویدادها در یک نقطه.",
+        ],
         "cta": "با تیم Vandefence صحبت کنید.",
     }, ensure_ascii=False)
     llm_routes = [("POST", "/chat/completions", {
