@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import math
+import re
 import socket
 import time
 from collections.abc import AsyncIterator
@@ -69,7 +70,7 @@ class WaveSpeedConfig:
             raise ValueError("WaveSpeed base_url must be HTTPS without userinfo, query or fragment.")
         if not self.api_key.strip():
             raise ValueError("WaveSpeed api_key must not be blank.")
-        if not self.model or self.model.startswith("/") or ".." in self.model.split("/"):
+        if not re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){1,2}", self.model):
             raise ValueError("WaveSpeed model must be a valid model identifier.")
         if self.resolution not in _PRICE_PER_FIVE_SECONDS:
             raise ValueError("WaveSpeed resolution must be 480p, 720p or 1080p.")
@@ -84,7 +85,7 @@ class WaveSpeedConfig:
         if self.timeout_seconds <= 0 or self.poll_interval_seconds < 2 or self.max_poll_attempts < 1:
             raise ValueError("WaveSpeed timeout and polling settings are invalid.")
         for host in self.download_allowed_hosts:
-            if not host or host != host.strip() or "/" in host or ":" in host:
+            if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
                 raise ValueError("WaveSpeed download allowlist must contain exact hostnames.")
 
 
@@ -327,8 +328,14 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         parsed = urlsplit(value)
         host = (parsed.hostname or "").lower().rstrip(".")
         allowed = {item.lower().rstrip(".") for item in self.config.download_allowed_hosts}
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise SceneVideoPermanentError(
+                "WaveSpeed media URL contains an invalid port.", code="provider_unsafe_media_url"
+            ) from exc
         if (parsed.scheme != "https" or not host or parsed.username or parsed.password
-                or parsed.port not in (None, 443) or parsed.fragment or host not in allowed):
+                or port not in (None, 443) or parsed.fragment or host not in allowed):
             raise SceneVideoPermanentError(
                 "WaveSpeed media host is not in the exact HTTPS download allowlist.",
                 code="provider_media_host_denied",
