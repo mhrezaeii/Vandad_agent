@@ -1168,8 +1168,13 @@ class ContentService:
                                 node_payload["execution_settings"][key] = desired_poll_settings.get(key)
                         nodes_payload.append(node_payload)
                     edges_payload = [
-                        {"from_key": source, "to_key": target, "condition_expression": condition}
-                        for source, target, condition in current_edges
+                        {
+                            "from_key": source,
+                            "to_key": target,
+                            "condition_expression": condition,
+                            "edge_order": index,
+                        }
+                        for index, (source, target, condition) in enumerate(current_edges)
                     ]
                     await self._workflow_service.update_workflow(
                         workflow.id,
