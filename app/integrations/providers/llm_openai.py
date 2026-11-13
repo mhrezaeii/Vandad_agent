@@ -85,13 +85,19 @@ class LlmOpenAiProvider(ProviderAdapter):
 
         if status == 429:
             raise ProviderTransientError("LLM rate limit reached.", code="llm_rate_limited")
+        if status == 408:
+            raise ProviderTransientError(
+                "LLM endpoint timed out while processing the request.",
+                code="llm_request_timeout",
+            )
         if 500 <= status <= 599:
             raise ProviderTransientError(
                 f"LLM endpoint responded with status {status}.", code="llm_server_error"
             )
         if status != 200:
             raise ProviderPermanentError(
-                f"LLM endpoint responded with status {status}.", code="llm_client_error"
+                f"LLM endpoint rejected the request with status {status}.",
+                code=f"llm_http_{status}",
             )
 
         try:
@@ -207,13 +213,20 @@ class LlmOpenAiProvider(ProviderAdapter):
         try:
             async with client as http_client:
                 response = await http_client.request(method, url, content=body or None, headers=headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            raise ProviderTransientError(
+                "LLM endpoint could not be reached before the request was sent.",
+                code="provider_unreachable",
+            ) from exc
         except httpx.TimeoutException as exc:
             raise ProviderTransientError(
-                f"LLM request timed out after {context.timeout_seconds:.0f}s.", code="provider_timeout"
+                f"LLM request timed out after {context.timeout_seconds:.0f}s.",
+                code="provider_timeout",
             ) from exc
         except httpx.TransportError as exc:
             raise ProviderTransientError(
-                "LLM endpoint could not be reached.", code="provider_unreachable"
+                "LLM transport failed after request dispatch; billing status is unknown.",
+                code="provider_transport_ambiguous",
             ) from exc
         if response.status_code == 200 or method == "GET":
             try:
