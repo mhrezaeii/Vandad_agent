@@ -109,7 +109,7 @@ class Settings(BaseSettings):
     scene_video_wavespeed_model: str = "wavespeed-ai/ltx-2.3/text-to-video"
     scene_video_wavespeed_resolution: Literal["480p", "720p", "1080p"] = "480p"
     scene_video_wavespeed_aspect_ratio: Literal["16:9", "9:16"] = "9:16"
-    scene_video_wavespeed_duration_seconds: Literal[5, 10, 15, 20] | None = None
+    scene_video_wavespeed_duration_seconds: int | None = Field(default=None, ge=5, le=20)
     scene_video_wavespeed_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     scene_video_wavespeed_download_allowed_hosts: str = ""
 
