@@ -836,8 +836,12 @@ class ContentService:
                     details=[{"field": "provider_id", "value": selected_provider}],
                 ) from exc
             selected_provider = selected.provider_id
+            route_order = [selected_provider] + [
+                candidate for candidate in ordered_ids if candidate != selected_provider
+            ]
             project.scene_video_provider = selected_provider
             options["provider_id"] = selected_provider
+            options["provider_route_order"] = route_order
             project.scene_options = options
         if selected_provider:
             options["provider_id"] = selected_provider
@@ -857,11 +861,18 @@ class ContentService:
             project.cost_metadata = {
                 "provider_id": selected_provider,
                 "budget_reservation_id": str(reservation.id) if reservation else None,
+                "task_id": str(task_id) if task_id else None,
+                "provider_route_order": list(options.get("provider_route_order", [selected_provider])),
                 "status": "reserved",
             }
             await self.session.commit()
         else:
-            project.cost_metadata = {"provider_id": "mock", "status": "not_billable"}
+            project.cost_metadata = {
+                "provider_id": "mock",
+                "task_id": str(task_id) if task_id else None,
+                "provider_route_order": list(options.get("provider_route_order", [selected_provider])),
+                "status": "not_billable",
+            }
 
         try:
             await self.ensure_workflow(
