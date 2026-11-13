@@ -37,7 +37,7 @@ class _LlmCandidate:
     platform_id: uuid.UUID
     model: str
     is_primary: bool
-    configuration: dict[str, Any>
+    configuration: dict[str, Any]
     credential: Any
     credential_type: str | None
     secret_reference: str | None
