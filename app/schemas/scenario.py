@@ -17,9 +17,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Scene-count envelope. The lower bound keeps a video from collapsing into a
-# single static shot; the upper bound keeps generation cost and pacing sane.
-MIN_SCENES = 3
+# Scene-count envelope. A single-scene project is allowed because the provider's
+# one clip is itself a complete deliverable and needs no composition stage; the
+# upper bound keeps generation cost and pacing sane.
+MIN_SCENES = 1
 MAX_SCENES = 12
 # ~5-6 scenes per 30s is the target pacing.
 SCENES_PER_30_SECONDS = 5.5

@@ -58,6 +58,59 @@ async def dispatch_content_node(
     return await handler(engine, execution, node, params, timeout_seconds)
 
 
+async def sync_project_workflow_failure(engine, execution: WorkflowExecution) -> None:
+    """Mirror a terminal workflow failure onto the owning content project.
+
+    Without this sync, a project whose script/video workflow failed stays in
+    its in-flight status forever (e.g. ``script_generating``), so the product
+    API rejects every retry with 409. Only the matching in-flight status is
+    advanced, so a late-arriving stale execution can never clobber newer
+    project state.
+    """
+    from app.services.content_service import (  # noqa: PLC0415 - avoid import cycle
+        SCENE_SCRIPT_WORKFLOW_NAME,
+        SCENE_VIDEO_WORKFLOW_NAME,
+        SCRIPT_WORKFLOW_NAME,
+    )
+
+    project_id_raw = (execution.input_metadata or {}).get("project_id")
+    if not project_id_raw:
+        return
+    try:
+        project_id = uuid.UUID(str(project_id_raw))
+    except ValueError:
+        return
+    project = await engine.session.get(ContentProject, project_id)
+    if project is None or project.company_id != execution.company_id:
+        return
+
+    detail = f"Workflow '{execution.workflow_name}' ended with status '{execution.status}'."
+    if execution.workflow_name in (SCRIPT_WORKFLOW_NAME, SCENE_SCRIPT_WORKFLOW_NAME):
+        if project.status != ProjectStatus.SCRIPT_GENERATING.value:
+            return
+        project.status = ProjectStatus.SCRIPT_FAILED.value
+        project.error_message = detail
+    elif execution.workflow_name == SCENE_VIDEO_WORKFLOW_NAME:
+        if project.status not in (
+            ProjectStatus.VIDEO_GENERATION_PENDING.value,
+            ProjectStatus.VIDEO_GENERATING.value,
+            ProjectStatus.ASSEMBLING.value,
+        ):
+            return
+        # The approved scenario is intact; reverting keeps video generation
+        # retryable through the product API.
+        project.status = ProjectStatus.APPROVED.value
+        project.error_message = detail
+    else:
+        return
+    engine._log(  # noqa: SLF001 - engine-provided logger context
+        execution,
+        "warning",
+        f"Project {project_id} moved to '{project.status}' after workflow failure.",
+    )
+    await engine.session.flush()
+
+
 # ----------------------------------------------------------------- helpers
 def _project_id(params: dict[str, Any], node: WorkflowNode) -> uuid.UUID:
     raw = params.get("project_id") or node.configuration.get("project_id")
@@ -317,13 +370,38 @@ async def _generate_scenario(
             "The workflow contains an invalid agent task budget reference.",
             code="invalid_task_budget_context",
         ) from exc
-    scenario, metadata = await service.generate(
-        company_id=execution.company_id,
-        connection_id=uuid.UUID(str(connection_id)),
-        request=request,
-        timeout_seconds=min(timeout_seconds, 180.0),
-        task_id=task_id,
+    from app.services.scenario_service import ScenarioGenerationError  # noqa: PLC0415
+
+    try:
+        scenario, metadata = await service.generate(
+            company_id=execution.company_id,
+            connection_id=uuid.UUID(str(connection_id)),
+            request=request,
+            timeout_seconds=min(timeout_seconds, 180.0),
+            task_id=task_id,
+        )
+    except ScenarioGenerationError as exc:
+        # Translate so the engine records a clean node failure instead of
+        # crashing on a non-Provider exception.
+        if exc.retryable:
+            raise ProviderTransientError(exc.message, code=exc.code) from exc
+        raise ProviderPermanentError(exc.message, code=exc.code) from exc
+
+    # Deterministic quality gate (چک کردن سناریو): the LLM output is
+    # stochastic, so a review failure is retryable — the engine regenerates
+    # before the workflow is allowed to fail.
+    from app.services.scenario_review import review_scenario  # noqa: PLC0415
+
+    review_issues = review_scenario(
+        scenario,
+        target_duration_seconds=request.target_duration_seconds,
+        language=brand.language or "fa",
     )
+    if review_issues:
+        raise ProviderTransientError(
+            "Scenario review failed: " + " | ".join(review_issues[:8]),
+            code="scenario_review_failed",
+        )
 
     project.scenario = scenario.model_dump(mode="json")
     project.script_text = scenario.narration
@@ -536,11 +614,12 @@ async def _assemble_scenes(
         resource_id=project.id,
         metadata={"artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
                   "provider": metadata.get("provider"),
-                  "provider_job_id": metadata.get("provider_job_id")},
+                  "provider_job_id": metadata.get("provider_job_id"),
+                  "production_path": metadata.get("production_path")},
     )
     await engine.session.flush()
     engine._log(execution, "info",
-        f"AI provider final video stored as artifact {artifact.id}; no local assembly performed.",
+        f"Provider final video stored as artifact {artifact.id}; no local assembly performed.",
         node_key=node.node_key)
     return {"artifact_id": str(artifact.id), "size_bytes": artifact.size_bytes,
             "sha256": artifact.sha256, "provider": metadata.get("provider"),

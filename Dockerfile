@@ -22,10 +22,16 @@ RUN python -m venv /opt/venv \
 FROM python:3.12-slim AS runtime
 
 # Creative media generation/editing is performed by configured AI providers.
+# ffmpeg is required for the deterministic local scene-clip assembly
+# (concatenating provider clips into the final storyboard video).
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user
 RUN groupadd --gid 1000 appgroup \

@@ -110,9 +110,14 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         '  "caption": "کپشن فارسی",\n'
         '  "hashtags": ["#هشتگ"]\n'
         "}\n\n"
-        "ترتیب روایی پیشنهادی: problem → product_demo و b_roll یا motion_graphic → cta. "
-        "حداقل یک صحنه محصول و یک صحنه CTA لازم است. "
-        "مجموع زمان صحنه‌ها باید دقیقاً با مدت هدف هماهنگ شود."
+        + (
+            "این پروژه تک‌صحنه است: در همان یک صحنه، محصول و دعوت به اقدام را در یک لحظهٔ "
+            "واحد و منسجم ترکیب کن؛ صحنهٔ جداگانهٔ محصول یا CTA نساز. "
+            if scene_count == 1
+            else "ترتیب روایی پیشنهادی: problem → product_demo و b_roll یا motion_graphic → cta. "
+            "حداقل یک صحنه محصول و یک صحنه CTA لازم است. "
+        )
+        + "مجموع زمان صحنه‌ها باید دقیقاً با مدت هدف هماهنگ شود."
     )
     return system, user
 

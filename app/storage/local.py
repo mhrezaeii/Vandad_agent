@@ -116,3 +116,7 @@ class LocalArtifactStorage(ArtifactStorage):
 
     async def exists(self, key: str) -> bool:
         return self._resolve(key).is_file()
+
+    def local_path(self, key: str) -> Path | None:
+        path = self._resolve(key)
+        return path if path.is_file() else None

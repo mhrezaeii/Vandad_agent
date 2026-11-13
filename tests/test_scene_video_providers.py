@@ -801,9 +801,7 @@ async def test_ordered_registry_selects_apimaster_only_after_live_health_probe()
     registry = SceneVideoProviderRegistry()
     registry.register(provider)
 
-    selected = await registry.resolve_ordered_healthy(
-        ["apimaster"], require_reference_image=True
-    )
+    selected = await registry.resolve_ordered_healthy(["apimaster"])
 
     assert selected is provider
 

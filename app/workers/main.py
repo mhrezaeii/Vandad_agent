@@ -102,6 +102,7 @@ class WorkflowWorker:
 
         scheduler_task = asyncio.create_task(self._scheduler_loop())
         recovery_task = asyncio.create_task(self._recovery_loop())
+        monitoring_task = asyncio.create_task(self._monitoring_loop())
         consumers = [asyncio.create_task(self._consume_loop(i)) for i in range(self.concurrency)]
 
         await self._stopping.wait()
@@ -111,7 +112,8 @@ class WorkflowWorker:
         await asyncio.gather(*consumers, return_exceptions=True)
         scheduler_task.cancel()
         recovery_task.cancel()
-        await asyncio.gather(scheduler_task, recovery_task, return_exceptions=True)
+        monitoring_task.cancel()
+        await asyncio.gather(scheduler_task, recovery_task, monitoring_task, return_exceptions=True)
         if self._inflight:
             await asyncio.gather(*self._inflight, return_exceptions=True)
         await self.redis_manager.close()
@@ -327,6 +329,33 @@ class WorkflowWorker:
                 await self._recover_abandoned()
             except Exception:  # noqa: BLE001
                 logger.exception("abandoned-execution recovery failed")
+
+    async def _monitoring_loop(self) -> None:
+        """Scheduled platform monitoring: observe platforms, never generate.
+
+        Sleeps first so a worker restart does not immediately crawl every
+        platform; content generation is never triggered from here.
+        """
+        if not self.settings.platform_monitor_enabled:
+            return
+        interval = int(self.settings.platform_monitor_interval_seconds)
+        logger.info("platform monitoring enabled (interval=%ds)", interval)
+        while not self._stopping.is_set():
+            await asyncio.sleep(interval)
+            try:
+                from app.services.platform_monitor_service import PlatformMonitorService  # noqa: PLC0415
+
+                async with self.session_factory() as session:
+                    results = await PlatformMonitorService(
+                        session, self.registry, self.executor, self.master_key_box
+                    ).run_cycle()
+                    monitored = [item for item in results if item.get("status") == "ok"]
+                    logger.info(
+                        "platform monitoring cycle finished: %d platform(s), %d refreshed",
+                        len(results), len(monitored),
+                    )
+            except Exception:  # noqa: BLE001 - the cycle must never kill the worker
+                logger.exception("platform monitoring cycle failed")
 
     async def _scheduler_loop(self) -> None:
         from app.services.workflow_schedule_service import WorkflowScheduleService  # noqa: PLC0415

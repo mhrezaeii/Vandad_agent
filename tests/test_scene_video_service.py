@@ -48,7 +48,7 @@ def content_service(db_session, engine_pair, redis_manager):
 
 
 def _single_scene_scenario(duration: float = 5.0) -> Scenario:
-    """Build a one-job fixture while respecting the public three-scene schema."""
+    """Build a one-job fixture for the single-clip passthrough mode."""
     scenario = _scenario()
     return scenario.model_copy(
         update={"scenes": scenario.scenes[:1], "target_duration_seconds": int(duration)}
@@ -192,6 +192,127 @@ async def test_poll_and_retrieve_completed_scenes(
     assert all(job.artifact_id is not None for job in jobs)
     assert all(job.cost_metadata["size_bytes"] > 0 for job in jobs)
 
+
+
+async def test_single_scene_project_finalizes_as_provider_passthrough(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    from app.storage.local import LocalArtifactStorage
+
+    class GenerationOnlyMockProvider(MockSceneVideoProvider):
+        provider_id = "genonly"
+        supports_composition = False
+        supports_quality_review = False
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="single-scene-passthrough-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.commit()
+
+    provider = GenerationOnlyMockProvider(poll_steps=1)
+    storage = LocalArtifactStorage(tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024)
+    service = _service(db_session, provider, storage=storage)
+
+    await service.prepare_scenes(
+        project, _single_scene_scenario(), provider_id="genonly"
+    )
+    await service.submit_pending(project)
+    await db_session.commit()
+    summary = await service.poll_jobs(project)
+    assert summary["completed"] == 1
+    retrieved = await service.retrieve_completed(project, execution_id=execution.id)
+    await db_session.commit()
+    assert retrieved["downloaded"] == 1
+
+    artifact, metadata = await service.finalize_project_video(
+        project, execution_id=execution.id, width=1080, height=1920
+    )
+    await db_session.commit()
+
+    assert project.status == "completed"
+    assert project.final_artifact_id == artifact.id
+    assert metadata["mode"] == "single_scene_passthrough"
+    assert metadata["production_path"] == "provider_single_scene"
+    assert metadata["provider"] == "genonly"
+    assert metadata["scene_artifact_id"] == str(artifact.id)
+    assert metadata["quality_review"]["status"] == "not_applicable"
+    # Only the scene generation job exists; no composition job was submitted.
+    assert len(provider.jobs) == 1
+    assert artifact.content_type == "video/mp4"
+    assert artifact.size_bytes > 0
+
+
+async def test_single_scene_passthrough_settles_budget_reservation(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    from decimal import Decimal
+
+    from app.storage.local import LocalArtifactStorage
+
+    class GenerationOnlyMockProvider(MockSceneVideoProvider):
+        provider_id = "genonly"
+        supports_composition = False
+        supports_quality_review = False
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    reservation = ProviderUsageRecord(
+        company_id=company.id,
+        provider_id="genonly",
+        operation="content.scene.generate_video",
+        status="reserved",
+        idempotency_key=f"single-scene-cost-{project.id}",
+        reserved_amount_usd=Decimal("0.10"),
+        usage_payload={},
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    project.cost_metadata = {
+        "provider_id": "genonly",
+        "budget_reservation_id": str(reservation.id),
+        "status": "reserved",
+    }
+    execution = WorkflowExecution(
+        company_id=company.id,
+        workflow_name="single-scene-budget-test",
+        workflow_type="video_production",
+        status="running",
+    )
+    db_session.add(execution)
+    await db_session.commit()
+
+    provider = GenerationOnlyMockProvider(poll_steps=1)
+    storage = LocalArtifactStorage(tmp_path / "artifacts", max_size_bytes=4 * 1024 * 1024)
+    service = _service(db_session, provider, storage=storage)
+    await service.prepare_scenes(
+        project, _single_scene_scenario(), provider_id="genonly"
+    )
+    await service.submit_pending(project)
+    await service.poll_jobs(project)
+    await service.retrieve_completed(project, execution_id=execution.id)
+    jobs = await _jobs(db_session, project.id)
+    assert len(jobs) == 1
+    # Simulate the provider reporting the billed amount for the single clip.
+    jobs[0].cost_metadata = {**(jobs[0].cost_metadata or {}), "reported_cost_usd": "0.10"}
+    await db_session.commit()
+
+    await service.finalize_project_video(
+        project, execution_id=execution.id, width=1080, height=1920
+    )
+    await db_session.commit()
+    await db_session.refresh(reservation)
+    await db_session.refresh(project)
+
+    assert reservation.status == "settled"
+    assert reservation.actual_cost_usd == Decimal("0.10")
+    assert project.cost_metadata["status"] == "settled"
+    assert project.cost_metadata["actual_cost_usd"] == "0.10"
 
 
 async def test_final_video_is_composed_by_ai_provider_and_retried_idempotently(

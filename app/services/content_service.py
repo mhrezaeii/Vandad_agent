@@ -627,7 +627,6 @@ class ContentService:
         target_duration_seconds: int = 30,
         scene_count: int | None = None,
         provider_id: str | None = None,
-        narration_artifact_id: uuid.UUID | None = None,
     ) -> ContentProject:
         """Create a non-avatar project that will be built from scene clips."""
         from app.schemas.scenario import MAX_TARGET_DURATION_SECONDS, MIN_TARGET_DURATION_SECONDS
@@ -654,9 +653,6 @@ class ContentService:
                 "target_duration_seconds": target_duration_seconds,
                 "scene_count": scene_count,
                 "provider_id": provider_id,
-                "narration_artifact_id": (
-                    str(narration_artifact_id) if narration_artifact_id else None
-                ),
             },
             scene_video_provider=provider_id,
         )
@@ -795,6 +791,13 @@ class ContentService:
         estimated_cost_cap_usd: Decimal | None = None
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
+            # Scene clips always come from the selected provider; the final
+            # storyboard video is assembled locally with FFmpeg (or, when the
+            # provider offers it, by provider-side AI composition decided at
+            # finalization time). No provider composition capability is
+            # required up front, so text-to-video providers stay usable.
+            requires_provider_composition = False
+            requires_provider_quality_review = False
             fallback_ids = (
                 provider_fallbacks
                 if provider_fallbacks is not None
@@ -825,9 +828,8 @@ class ContentService:
             try:
                 selected = await self.scene_video_registry.resolve_ordered_healthy(
                     ordered_ids,
-                    require_composition=True,
-                    require_reference_image=bool(options.get("requires_reference_image", False)),
-                    require_quality_review=True,
+                    require_composition=requires_provider_composition,
+                    require_quality_review=requires_provider_quality_review,
                     required_durations=required_durations,
                     required_aspect_ratio=required_aspect_ratio,
                     required_language=brand.language,
@@ -881,6 +883,9 @@ class ContentService:
             project.scene_video_provider = selected_provider
             options["provider_id"] = selected_provider
             options["provider_route_order"] = route_order
+            options["production_mode"] = (
+                "single_scene_passthrough" if len(scenario_scenes) <= 1 else "local_composition"
+            )
             project.scene_options = options
         if selected_provider:
             options["provider_id"] = selected_provider
@@ -944,7 +949,6 @@ class ContentService:
                     "project_id": str(project.id),
                     "provider_id": selected_provider,
                     "agent_task_id": str(task_id) if task_id else None,
-                    "narration_artifact_id": options.get("narration_artifact_id"),
                 },
                 idempotency_key=f"scene-video:{project.id}",
                 trigger_type=WorkflowTriggerType.API,

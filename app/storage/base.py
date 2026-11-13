@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -75,3 +76,11 @@ class ArtifactStorage(ABC):
     @abstractmethod
     async def exists(self, key: str) -> bool:
         """True when *key* is stored."""
+
+    def local_path(self, key: str) -> Path | None:
+        """Filesystem path for *key* when the backend is local, else None.
+
+        Local deterministic assembly (FFmpeg concat) needs real files; remote
+        backends intentionally return None so callers fail closed.
+        """
+        return None

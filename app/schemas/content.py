@@ -114,15 +114,12 @@ class SceneProjectCreate(BaseModel):
     brand_id: uuid.UUID
     topic: str = Field(min_length=3, max_length=2000)
     target_duration_seconds: int = Field(default=30, ge=5, le=120)
-    scene_count: int | None = Field(default=None, ge=3, le=12)
+    # A one-scene project is the supported single-clip passthrough mode.
+    scene_count: int | None = Field(default=None, ge=1, le=12)
     provider_id: str | None = Field(
         default=None,
         max_length=50,
         description="Scene-video provider id; defaults to the platform setting.",
-    )
-    narration_artifact_id: uuid.UUID | None = Field(
-        default=None,
-        description="Optional pre-generated Persian narration audio artifact.",
     )
 
 

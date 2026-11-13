@@ -13,20 +13,42 @@ from app.integrations.video import (
 )
 
 
+def _optional_text(value: Any) -> str | None:
+    """Treat blank or whitespace-only settings as unset."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return value
+
+
 def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegistry:
     """Build configured scene-video providers and fail closed on bad selection."""
     http_config: GenericHttpConfig | None = None
-    base_url = getattr(settings, "scene_video_http_base_url", None)
+    base_url = _optional_text(getattr(settings, "scene_video_http_base_url", None))
     if base_url:
         http_config = GenericHttpConfig(
             base_url=base_url,
-            generate_path=getattr(settings, "scene_video_http_generate_path", "/v1/videos"),
-            status_path=getattr(settings, "scene_video_http_status_path", "/v1/videos/{job_id}"),
-            retrieve_path=getattr(settings, "scene_video_http_retrieve_path", None),
-            compose_path=getattr(settings, "scene_video_http_compose_path", None),
-            quality_path=getattr(settings, "scene_video_http_quality_path", None),
-            health_path=getattr(settings, "scene_video_http_health_path", None),
-            api_key=getattr(settings, "scene_video_http_api_key", None),
+            generate_path=(
+                _optional_text(getattr(settings, "scene_video_http_generate_path", None))
+                or "/v1/videos"
+            ),
+            status_path=(
+                _optional_text(getattr(settings, "scene_video_http_status_path", None))
+                or "/v1/videos/{job_id}"
+            ),
+            retrieve_path=_optional_text(
+                getattr(settings, "scene_video_http_retrieve_path", None)
+            ),
+            compose_path=_optional_text(
+                getattr(settings, "scene_video_http_compose_path", None)
+            ),
+            quality_path=_optional_text(
+                getattr(settings, "scene_video_http_quality_path", None)
+            ),
+            health_path=_optional_text(
+                getattr(settings, "scene_video_http_health_path", None)
+            ),
+            api_key=_optional_text(getattr(settings, "scene_video_http_api_key", None)),
             auth_header=getattr(settings, "scene_video_http_auth_header", "Authorization"),
             auth_scheme=getattr(settings, "scene_video_http_auth_scheme", "Bearer"),
             download_allowed_hosts=tuple(

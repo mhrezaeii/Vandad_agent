@@ -45,7 +45,8 @@ def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
 
 def test_expected_scene_count_matches_social_pacing():
     assert expected_scene_count(30) == 6
-    assert expected_scene_count(15) == MIN_SCENES
+    assert expected_scene_count(15) == 3
+    assert expected_scene_count(5) == MIN_SCENES
     assert expected_scene_count(120) == MAX_SCENES
 
 
@@ -83,10 +84,19 @@ def test_normalize_deduplicates_hashtags_and_falls_back_to_request_values():
     assert scenario.hashtags == ["#سه"]
 
 
-def test_normalize_rejects_too_few_scenes():
+def test_normalize_rejects_empty_scenes():
     request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
     with pytest.raises(ValueError):
-        normalize_scenario(_raw_scenario(count=2), request)
+        normalize_scenario(_raw_scenario(count=0), request)
+
+
+def test_normalize_accepts_single_scene_passthrough():
+    request = ScenarioRequest(
+        topic="موضوع تست", target_duration_seconds=5, scene_count=1
+    )
+    scenario = normalize_scenario(_raw_scenario(count=1, duration=5.0), request)
+    assert len(scenario.scenes) == 1
+    assert scenario.total_duration_seconds == pytest.approx(5.0, abs=0.01)
 
 
 def test_normalize_rejects_scene_without_visual_prompt():
@@ -156,6 +166,20 @@ def test_storyboard_prompt_is_ai_native_and_character_free():
     assert "problem → product_demo" in user
 
 
+def test_storyboard_prompt_supports_single_scene_passthrough():
+    request = ScenarioRequest(
+        topic="معرفی قابلیت امنیتی",
+        target_duration_seconds=5,
+        scene_count=1,
+    )
+    _system, user = build_scenario_prompt(request)
+
+    assert "دقیقاً 1" in user
+    assert "این پروژه تک‌صحنه است" in user
+    assert "problem → product_demo" not in user
+    assert "حداقل یک صحنه محصول و یک صحنه CTA لازم است" not in user
+
+
 def test_storyboard_prompt_includes_verified_platform_knowledge_without_inventing_facts():
     request = ScenarioRequest(
         topic="معرفی خدمات",
@@ -164,3 +188,25 @@ def test_storyboard_prompt_includes_verified_platform_knowledge_without_inventin
     system, user = build_scenario_prompt(request)
     assert "قیمت مشخص نیست" in user
     assert "از اطلاعات دانش پلتفرم فقط به‌عنوان مرجع استفاده کن" in system
+
+
+def test_review_scenario_passes_valid_and_flags_problems():
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    scenario = normalize_scenario(_raw_scenario(count=5, duration=6.0), request)
+    assert review_scenario(scenario, target_duration_seconds=30) == []
+
+    overclaiming = normalize_scenario(
+        {**_raw_scenario(count=2, duration=15.0), "cta": "تضمین کامل امنیت"},
+        request,
+    )
+    issues = review_scenario(overclaiming, target_duration_seconds=30)
+    assert any("forbidden claim" in issue for issue in issues)
+
+    non_persian = normalize_scenario(
+        {**_raw_scenario(count=2, duration=15.0), "title": "English only title"},
+        request,
+    )
+    issues = review_scenario(non_persian, target_duration_seconds=30)
+    assert any("Persian" in issue for issue in issues)

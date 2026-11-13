@@ -62,6 +62,44 @@ def build_knowledge_prompt(platform: Platform, documents: list[PlatformSourceDoc
     return system, user
 
 
+def _fact_to_text(value: Any) -> str | None:
+    """Flatten a string or a fact object into plain text."""
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        for key in ("name", "description", "summary", "text"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return None
+
+
+def _normalise_knowledge_shape(raw: dict[str, Any]) -> dict[str, Any]:
+    """Coerce common model shape deviations before strict validation.
+
+    Models sometimes return ``summary`` as a list of fact objects and
+    ``unknowns``/``content_opportunities`` as fact objects instead of plain
+    strings. The evidence-bearing fact groups stay strict; these free-text
+    keys are flattened deterministically instead of failing the extraction.
+    """
+    normalised = dict(raw)
+    summary = normalised.get("summary")
+    if isinstance(summary, list):
+        parts = [text for text in (_fact_to_text(item) for item in summary) if text]
+        normalised["summary"] = "\n".join(parts)[:5000]
+    elif not isinstance(summary, str):
+        normalised["summary"] = ""
+    for key, limit in (("unknowns", 50), ("content_opportunities", 30)):
+        items = normalised.get(key)
+        if isinstance(items, list):
+            normalised[key] = [
+                text for text in (_fact_to_text(item) for item in items) if text
+            ][:limit]
+        elif not isinstance(items, list):
+            normalised[key] = []
+    return normalised
+
+
 def _parse_payload(raw: Any, allowed_urls: set[str]) -> PlatformKnowledgePayload:
     if isinstance(raw, str):
         try:
@@ -73,7 +111,7 @@ def _parse_payload(raw: Any, allowed_urls: set[str]) -> PlatformKnowledgePayload
     if not isinstance(raw, dict):
         raise PlatformKnowledgeExtractionError("The text provider returned an unsupported payload.")
     try:
-        payload = PlatformKnowledgePayload.model_validate(raw)
+        payload = PlatformKnowledgePayload.model_validate(_normalise_knowledge_shape(raw))
     except Exception as exc:
         raise PlatformKnowledgeExtractionError(
             "The extracted knowledge did not match the required schema.", code="knowledge_invalid_schema"
@@ -91,11 +129,35 @@ def _parse_payload(raw: Any, allowed_urls: set[str]) -> PlatformKnowledgePayload
     return payload
 
 
+def normalise_evidence_text(text: str) -> str:
+    """Unicode-normalise Persian text for verbatim evidence comparison.
+
+    The crawler text and the model's excerpt may differ in half-space (ZWNJ),
+    bidi marks, Arabic/Persian digit forms, kaf/yeh variants, or whitespace
+    without any of them being a paraphrase. Both sides are normalised the
+    same way before comparison; this is not a weakening of the check.
+    """
+    text = text.casefold()
+    for mark in ("‌", "‍", "‎", "‏", "﻿"):
+        text = text.replace(mark, "")
+    table = str.maketrans({
+        "ي": "ی",  # arabic yeh -> persian yeh
+        "ك": "ک",  # arabic kaf -> persian kaf
+        **{chr(0x06F0 + i): str(i) for i in range(10)},
+        **{chr(0x0660 + i): str(i) for i in range(10)},
+    })
+    text = text.translate(table)
+    return " ".join(text.split())
+
+
 def validate_knowledge_evidence(
     payload: PlatformKnowledgePayload, documents: list[PlatformSourceDocument]
 ) -> None:
     """Reject model-generated facts whose cited URL or evidence is not in source text."""
-    source_text = {document.url: (document.content_text or "").casefold() for document in documents}
+    source_text = {
+        document.url: normalise_evidence_text(document.content_text or "")
+        for document in documents
+    }
     groups = (
         payload.products_and_services, payload.capabilities, payload.workflows,
         payload.target_audiences, payload.differentiators,
@@ -103,9 +165,10 @@ def validate_knowledge_evidence(
     for group in groups:
         for fact in group:
             source = source_text.get(fact.source_url)
-            if source is None or fact.evidence.casefold() not in source:
+            if source is None or normalise_evidence_text(fact.evidence) not in source:
                 raise PlatformKnowledgeExtractionError(
-                    "A knowledge fact contained evidence not found in its cited source.",
+                    f"A knowledge fact contained evidence not found in its cited source "
+                    f"(fact: {fact.name[:80]}).",
                     code="knowledge_evidence_mismatch",
                 )
 

@@ -73,6 +73,11 @@ to an explicitly configured `generic_http` provider only when both
 present. Otherwise, generation remains available while finalization fails
 closed. See [WAVESPEED_PROVIDER.md](WAVESPEED_PROVIDER.md).
 
+A one-scene project is the exception: its single provider clip is the final
+deliverable, so the scene is finalized as a passthrough artifact
+(`production_path=provider_single_scene`) without composition or quality
+review. Multi-scene projects still require both capabilities.
+
 The adapter stores prediction IDs, provider status, reported USD cost when
 available, and a separately labelled published-price estimate. Missing actual
 cost never becomes zero: the existing project budget reservation remains

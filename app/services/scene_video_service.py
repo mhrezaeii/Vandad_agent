@@ -12,10 +12,13 @@ beyond what the provider or operator configured.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from math import gcd
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -42,12 +45,14 @@ from app.models import (
     ProviderUsageRecord,
     SceneVideoJob,
     SceneVideoJobStatus,
+    WorkflowArtifact,
 )
 from app.schemas.scenario import Scenario
 from app.security.redaction import redact_text
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
+from app.services.video_assembly import concat_scene_clips
 from app.storage.base import ArtifactStorage
 
 _SCENE_RESOURCE = "scene_video_job"
@@ -762,13 +767,56 @@ class SceneVideoService:
             return artifact, dict(project.assembly_metadata or {})
 
         provider = self._provider_for(project)
-        if not provider.supports_quality_review:
-            raise SceneVideoPermanentError(
-                "The selected AI provider cannot review final-video quality.",
-                code="provider_quality_review_unsupported",
-            )
         jobs = sorted(await self._jobs(project), key=lambda item: item.scene_index)
-        if not jobs or any(not job.video_url for job in jobs):
+        if not jobs:
+            raise ConflictError("No scenes have been prepared for this project.")
+
+        if len(jobs) == 1:
+            # Single-clip passthrough: the provider's one validated clip is the
+            # complete deliverable. There is nothing to compose, so provider
+            # composition and quality-review capabilities are not required.
+            job = jobs[0]
+            if job.artifact_id is None:
+                raise ConflictError(
+                    "The single scene must be downloaded before it can be finalized."
+                )
+            artifact = await artifact_service.get_artifact(
+                job.artifact_id, company_id=project.company_id
+            )
+            # Passthrough mode bills no composition or quality-review call, so
+            # the project reservation settles from the scene's reported cost.
+            await self._settle_project_video_budget(
+                project,
+                jobs,
+                composition_cost_usd=Decimal("0"),
+                quality_cost_usd=Decimal("0"),
+            )
+            metadata = {
+                "service": "provider",
+                "mode": "single_scene_passthrough",
+                "production_path": "provider_single_scene",
+                "provider": provider.provider_id,
+                "scene_job_id": str(job.id),
+                "scene_artifact_id": str(artifact.id),
+                "quality_review": {
+                    "status": "not_applicable",
+                    "reason": "single_provider_clip_is_final_deliverable",
+                },
+            }
+            project.final_artifact_id = artifact.id
+            project.assembly_metadata = metadata
+            project.status = ProjectStatus.COMPLETED.value
+            project.error_message = None
+            await self.session.flush()
+            return artifact, metadata
+
+        if not (provider.supports_composition and provider.supports_quality_review):
+            # The provider generated the validated scene clips but cannot
+            # compose the final storyboard video itself: assemble locally.
+            return await self._finalize_local_assembly(
+                project, jobs, execution_id=execution_id, width=width, height=height,
+            )
+        if any(not job.video_url for job in jobs):
             raise ConflictError(
                 "Every scene must have a provider-hosted video URL before AI composition."
             )
@@ -979,6 +1027,128 @@ class SceneVideoService:
                 "artifact_id": str(artifact.id),
                 "provider": provider.provider_id,
                 "provider_job_id": str(composition_job_id),
+                "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256,
+            },
+        )
+        await self.session.flush()
+        return artifact, metadata
+
+    async def _finalize_local_assembly(
+        self,
+        project: ContentProject,
+        jobs: list[SceneVideoJob],
+        *,
+        execution_id: uuid.UUID,
+        width: int,
+        height: int,
+    ) -> tuple[WorkflowArtifact, dict[str, Any]]:
+        """Concatenate the validated scene clips locally with FFmpeg.
+
+        Used when the provider generated the scene clips but cannot compose
+        the final storyboard video itself (e.g. WaveSpeed text-to-video).
+        Deterministic media stitching only — no creative generation.
+        """
+        artifact_service = ArtifactService(
+            self.session, self.storage, max_size_bytes=self.max_size_bytes
+        )
+        clip_paths: list[Path] = []
+        for job in sorted(jobs, key=lambda item: item.scene_index):
+            if job.artifact_id is None:
+                raise SceneVideoPermanentError(
+                    "Every scene must be downloaded before local assembly.",
+                    code="local_assembly_missing_clips",
+                )
+            artifact = await artifact_service.get_artifact(
+                job.artifact_id, company_id=project.company_id
+            )
+            path = self.storage.local_path(artifact.storage_key) if self.storage else None
+            if path is None:
+                raise SceneVideoPermanentError(
+                    "Scene clips are not available on local storage; local assembly is unavailable.",
+                    code="local_assembly_storage_unavailable",
+                )
+            clip_paths.append(path)
+
+        output_dir = Path(tempfile.mkdtemp(prefix="vandad-assembly-"))
+        try:
+            output_path = output_dir / f"vandad-final-{project.id}.mp4"
+            await concat_scene_clips(
+                tuple(clip_paths), output_path=output_path, width=width, height=height
+            )
+            preview = bytearray()
+
+            async def chunks():
+                with output_path.open("rb") as handle:
+                    while True:
+                        block = handle.read(1024 * 1024)
+                        if not block:
+                            break
+                        if len(preview) < _PREVIEW_BYTES:
+                            preview.extend(block[: _PREVIEW_BYTES - len(preview)])
+                        yield block
+
+            artifact = await artifact_service.store_artifact(
+                execution_id,
+                company_id=project.company_id,
+                kind=ArtifactKind.VIDEO.value,
+                content_type="video/mp4",
+                chunks=chunks(),
+                filename=output_path.name,
+            )
+            provider = self._provider_for(project)
+            validation = await provider.validate_output(bytes(preview), content_type="video/mp4")
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+        if not validation.ok:
+            await artifact_service.delete_artifact(artifact.id, company_id=project.company_id)
+            project.status = ProjectStatus.FAILED.value
+            project.error_message = "The assembled final video failed validation."
+            await self.session.flush()
+            raise SceneVideoPermanentError(
+                "The assembled final video failed validation.",
+                code="invalid_final_video",
+            )
+
+        # Local assembly bills no composition or quality-review call, so the
+        # project reservation settles from the scenes' reported cost.
+        await self._settle_project_video_budget(
+            project,
+            jobs,
+            composition_cost_usd=Decimal("0"),
+            quality_cost_usd=Decimal("0"),
+        )
+        metadata = {
+            "service": "local_ffmpeg",
+            "mode": "local_composition",
+            "production_path": "local_ffmpeg_concat",
+            "provider": provider.provider_id,
+            "scene_count": len(jobs),
+            "width": width,
+            "height": height,
+            "artifact_id": str(artifact.id),
+            "size_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256,
+            "scene_artifact_ids": [str(job.artifact_id) for job in jobs],
+            "quality_review": {
+                "status": "not_applicable",
+                "reason": "local_deterministic_assembly",
+            },
+        }
+        project.final_artifact_id = artifact.id
+        project.assembly_metadata = metadata
+        project.status = ProjectStatus.COMPLETED.value
+        project.error_message = None
+        self.audit.record(
+            event_type="scene.locally_assembled",
+            action="assemble",
+            company_id=project.company_id,
+            resource_type="content_project",
+            resource_id=project.id,
+            metadata={
+                "artifact_id": str(artifact.id),
+                "scene_count": len(jobs),
                 "size_bytes": artifact.size_bytes,
                 "sha256": artifact.sha256,
             },

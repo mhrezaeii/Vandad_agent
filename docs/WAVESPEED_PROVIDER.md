@@ -71,8 +71,14 @@ model page instructs users to edit multiple clips together and does not define
 a final-video composition or AI quality-review operation. The adapter does not
 invent either endpoint.
 
-To use the existing finalization pipeline, configure an authorised secondary
-HTTP provider with explicit composition and quality endpoints:
+A **one-scene project** is the supported single-clip passthrough mode: the
+provider's one validated clip is the complete deliverable, so no provider-side
+composition or quality-review stage is required. The final artifact is the
+same stored scene artifact, tagged `production_path=provider_single_scene`.
+Nothing is assembled locally and no mock provider is involved.
+
+For multi-scene projects, configure an authorised secondary HTTP provider with
+explicit composition and quality endpoints:
 
 ```dotenv
 SCENE_VIDEO_HTTP_BASE_URL=https://your-authorised-video-service.example

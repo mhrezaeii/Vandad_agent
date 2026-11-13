@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     scene_video_provider: str = "mock"
     scene_video_daily_quota: int | None = Field(default=None, ge=0)
     scene_video_max_scene_attempts: int = Field(default=3, ge=1, le=10)
+    # Scheduled platform monitoring observes configured platforms (crawl +
+    # knowledge refresh) but never generates content; scenario/video
+    # production stays an explicit, billable, operator-initiated request.
+    platform_monitor_enabled: bool = True
+    platform_monitor_interval_seconds: int = Field(default=21600, ge=60)
     scene_video_poll_interval_seconds: float = Field(default=30.0, gt=0, le=3600)
     scene_video_max_poll_attempts: int = Field(default=60, ge=1, le=600)
     scene_video_output_width: int = Field(default=1080, ge=1, le=8192)

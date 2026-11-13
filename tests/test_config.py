@@ -69,6 +69,23 @@ def test_generic_scene_video_capability_settings_reach_provider_registry():
 
 
 
+def test_blank_optional_http_settings_are_treated_as_unset():
+    settings = Settings(
+        environment="local",
+        scene_video_provider="generic_http",
+        scene_video_http_base_url="https://video.example.test",
+        scene_video_http_retrieve_path="",
+        scene_video_http_compose_path="  ",
+        scene_video_http_quality_path="",
+        _env_file=None,
+    )
+    provider = build_video_registry_from_settings(settings).get("generic_http")
+
+    assert provider.supports_composition is False
+    assert provider.supports_quality_review is False
+
+
+
 def test_wavespeed_environment_settings_reach_registry():
     settings = Settings(
         environment="local",
