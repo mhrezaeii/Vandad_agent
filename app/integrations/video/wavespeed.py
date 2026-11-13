@@ -208,7 +208,6 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         timings = payload.get("timings") if isinstance(payload.get("timings"), dict) else {}
         raw = dict(payload)
         raw["model"] = payload.get("model") or self.config.model
-        raw["estimated_cost_usd"] = self._estimate_cost(payload)
         reported = self._reported_cost(payload)
         if reported is not None:
             raw["cost_usd"] = reported
@@ -382,10 +381,6 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         """Return the published LTX-2.3 estimate; never treat it as actual spend."""
         amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * float(duration_seconds) / 5.0
         return f"{amount:.6f}"
-
-    def _estimate_cost(self, payload: dict[str, Any]) -> str:
-        duration = self._number(payload.get("duration")) or 5.0
-        return self.estimate_cost_usd(duration)
 
     @staticmethod
     def _reported_cost(payload: dict[str, Any]) -> str | None:
