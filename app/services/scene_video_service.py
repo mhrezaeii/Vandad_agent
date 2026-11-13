@@ -275,6 +275,20 @@ class SceneVideoService:
             job.started_at = datetime.now(UTC)
             job.error_code = None
             job.error_message = None
+            job.submission_metadata = {
+                **(job.submission_metadata or {}),
+                **({"prediction_id": str(provider_job_id).split(":", 1)[1]}
+                   if str(provider_job_id).startswith("wavespeed:") else {}),
+            }
+            estimate = getattr(provider, "estimate_cost_usd", None)
+            if callable(estimate):
+                job.cost_metadata = {
+                    **(job.cost_metadata or {}),
+                    "provider": provider.provider_id,
+                    "model": getattr(provider, "model_id", None),
+                    "estimated_cost_usd": estimate(job.duration_seconds),
+                    "currency": "USD",
+                }
             submitted += 1
             self.audit.record(
                 event_type="scene.submitted",
@@ -328,7 +342,14 @@ class SceneVideoService:
                 job.cost_metadata = {
                     **(job.cost_metadata or {}),
                     "reported_cost_usd": str(reported_cost),
+                    "actual_cost_usd": str(reported_cost),
                     "provider": provider.provider_id,
+                }
+            if (status.raw or {}).get("estimated_cost_usd") is not None:
+                job.cost_metadata = {
+                    **(job.cost_metadata or {}),
+                    "estimated_cost_usd": str(status.raw["estimated_cost_usd"]),
+                    "currency": "USD",
                 }
             if status.video_url:
                 job.video_url = status.video_url
