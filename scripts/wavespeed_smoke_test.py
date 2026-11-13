@@ -96,7 +96,12 @@ def build_payload(
 
 def estimate_cost_usd(resolution: str, duration: int) -> float:
     rates = {"480p": 0.10, "720p": 0.15, "1080p": 0.20}
-    if resolution not in rates or isinstance(duration, bool) or not isinstance(duration, int) or not 5 <= duration <= 20:
+    if (
+        resolution not in rates
+        or isinstance(duration, bool)
+        or not isinstance(duration, int)
+        or not 5 <= duration <= 20
+    ):
         raise WaveSpeedError("Cannot estimate cost for the selected model settings.")
     return rates[resolution] * duration / 5
 
@@ -155,7 +160,9 @@ def submit_prediction(
     try:
         payload = response.json()
     except ValueError as exc:
-        raise WaveSpeedError("WaveSpeed submission returned invalid JSON; check prediction history before retrying.") from exc
+        raise WaveSpeedError(
+            "WaveSpeed submission returned invalid JSON; check prediction history before retrying."
+        ) from exc
     return _prediction_id(payload)
 
 def poll_prediction(
@@ -246,13 +253,28 @@ def _parse_args() -> argparse.Namespace:
         description="Generate one paid WaveSpeed LTX-2.3 text-to-video test clip (no image input)."
     )
     parser.add_argument("--prompt", required=True, help="Describe the complete scene and motion.")
-    parser.add_argument("--resolution", choices=("480p", "720p", "1080p"), default=os.environ.get("SCENE_VIDEO_WAVESPEED_RESOLUTION", "480p"))
-    parser.add_argument("--aspect-ratio", choices=("16:9", "9:16"), default=os.environ.get("SCENE_VIDEO_WAVESPEED_ASPECT_RATIO", "9:16"))
-    parser.add_argument("--duration", choices=tuple(range(5, 21)), type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_DURATION_SECONDS", "5")))
+    parser.add_argument(
+        "--resolution", choices=("480p", "720p", "1080p"),
+        default=os.environ.get("SCENE_VIDEO_WAVESPEED_RESOLUTION", "480p"),
+    )
+    parser.add_argument(
+        "--aspect-ratio", choices=("16:9", "9:16"),
+        default=os.environ.get("SCENE_VIDEO_WAVESPEED_ASPECT_RATIO", "9:16"),
+    )
+    parser.add_argument(
+        "--duration", choices=tuple(range(5, 21)), type=int,
+        default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_DURATION_SECONDS", "5")),
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output", type=Path, default=Path("artifacts/wavespeed/ltx23-text-to-video.mp4"))
-    parser.add_argument("--max-wait-seconds", type=int, default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_WAIT_SECONDS", "900")))
-    parser.add_argument("--max-cost-usd", type=float, default=float(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_COST_USD", "0.10")))
+    parser.add_argument(
+        "--max-wait-seconds", type=int,
+        default=int(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_WAIT_SECONDS", "900")),
+    )
+    parser.add_argument(
+        "--max-cost-usd", type=float,
+        default=float(os.environ.get("SCENE_VIDEO_WAVESPEED_MAX_COST_USD", "0.10")),
+    )
     return parser.parse_args()
 
 
@@ -315,7 +337,10 @@ def main() -> int:
             balance = check_balance(client, api_key)
             if balance < estimate:
                 print(
-                    f"WaveSpeed balance ${balance:.2f} is below the estimated charge ${estimate:.2f}; no prediction was submitted.",
+                    (
+                        f"WaveSpeed balance ${balance:.2f} is below the estimated charge "
+                        f"${estimate:.2f}; no prediction was submitted."
+                    ),
                     file=sys.stderr,
                 )
                 return 2
