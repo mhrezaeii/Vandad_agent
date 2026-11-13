@@ -6,7 +6,8 @@ for `wavespeed-ai/ltx-2.3/text-to-video`.
 
 ## Configuration
 
-The provider is opt-in:
+The provider is opt-in. Its read-only health probe uses the documented
+`GET /api/v3/balance` endpoint; it does not submit a prediction:
 
 ```dotenv
 SCENE_VIDEO_PROVIDER=wavespeed
@@ -14,6 +15,7 @@ SCENE_VIDEO_WAVESPEED_API_KEY=...
 SCENE_VIDEO_WAVESPEED_MODEL=wavespeed-ai/ltx-2.3/text-to-video
 SCENE_VIDEO_WAVESPEED_RESOLUTION=480p
 SCENE_VIDEO_WAVESPEED_ASPECT_RATIO=9:16
+SCENE_VIDEO_WAVESPEED_DURATION_SECONDS=5
 SCENE_VIDEO_WAVESPEED_TIMEOUT_SECONDS=60
 SCENE_VIDEO_WAVESPEED_DOWNLOAD_ALLOWED_HOSTS=exact-cdn-host.example
 SCENE_VIDEO_POLL_INTERVAL_SECONDS=2
@@ -25,8 +27,8 @@ Use exact HTTPS hostnames observed in the returned output URL for
 userinfo, non-HTTPS URLs, unlisted hosts, and non-public resolved IP addresses.
 It does not forward the API key to the media host.
 
-Supported LTX-2.3 settings are 480p/720p/1080p, 16:9/9:16, and 5–20 seconds (integer duration)
-seconds. Seed is optional. Reference images are rejected because this is the
+Supported LTX-2.3 settings are 480p/720p/1080p, 16:9/9:16, and integer
+clip durations from 5 to 20 seconds. Seed is optional. Reference images are rejected because this is the
 text-to-video model, not the image-to-video endpoint.
 
 ## Submission safety
