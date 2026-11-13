@@ -228,6 +228,8 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         raw = dict(payload)
         raw["model"] = payload.get("model") or self.config.model
         reported = self._reported_cost(payload)
+        if reported is None and state == SceneJobState.COMPLETED.value:
+            reported = await self._get_billings_cost(prediction_id)
         if reported is not None:
             raw["cost_usd"] = reported
             raw["currency"] = "USD"
@@ -452,6 +454,50 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         configured_duration = self.config.duration_seconds or duration_seconds
         amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * float(configured_duration) / 5.0
         return f"{amount:.6f}"
+
+    async def _get_billings_cost(self, prediction_id: str) -> str | None:
+        """Read actual itemized USD charges when the key has billing permission."""
+        payload = {"prediction_uuids": [prediction_id], "page": 1, "page_size": 100}
+        for attempt, delay in enumerate((0.0, 2.0, 5.0)):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                data = await self._request_json(
+                    "POST", f"{self._base()}/billings/search", json=payload
+                )
+            except SceneVideoPermanentError as exc:
+                if exc.code == "provider_unauthorized":
+                    # Developer keys may run predictions but cannot read itemized billing.
+                    return None
+                raise
+            except SceneVideoTransientError:
+                if attempt == 2:
+                    return None
+                continue
+            items = data.get("items") if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                return None
+            total = Decimal("0")
+            found = False
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                prediction = item.get("prediction")
+                if not isinstance(prediction, dict) or str(prediction.get("uuid")) != prediction_id:
+                    continue
+                price = self._number(item.get("price"))
+                if price is None:
+                    continue
+                billing_type = str(item.get("billing_type") or "").lower()
+                if billing_type == "deduct":
+                    total += Decimal(str(price))
+                    found = True
+                elif billing_type in {"refund", "credit"}:
+                    total -= Decimal(str(price))
+                    found = True
+            if found:
+                return f"{max(total, Decimal('0')):.6f}"
+        return None
 
     @staticmethod
     def _reported_cost(payload: dict[str, Any]) -> str | None:
