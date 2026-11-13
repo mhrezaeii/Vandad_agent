@@ -6,6 +6,7 @@ explicitly configured generic HTTP provider exposes both capabilities.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import math
 import re
@@ -279,44 +280,89 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         return await self._composition().review_video(request)
 
     async def _request_json(self, method: str, url: str, *, json: Any = None) -> Any:
-        client = self._client()
-        try:
-            async with client:
-                response = await client.request(
-                    method, url, json=json,
-                    headers={
-                        "Authorization": f"Bearer {self.config.api_key}",
-                        "Accept": "application/json",
-                        **({"Content-Type": "application/json"} if json is not None else {}),
-                    },
-                )
-        except httpx.TimeoutException as exc:
-            raise SceneVideoTransientError("WaveSpeed request timed out.", code="provider_timeout") from exc
-        except httpx.TransportError as exc:
-            raise SceneVideoTransientError("WaveSpeed could not be reached.", code="provider_unreachable") from exc
+        method = method.upper()
+        max_get_attempts = 5 if method == "GET" else 1
+        delay = self.config.poll_interval_seconds
+        response: httpx.Response | None = None
 
+        for attempt in range(max_get_attempts):
+            client = self._client()
+            try:
+                async with client:
+                    response = await client.request(
+                        method, url, json=json,
+                        headers={
+                            "Authorization": f"Bearer {self.config.api_key}",
+                            "Accept": "application/json",
+                            **({"Content-Type": "application/json"} if json is not None else {}),
+                        },
+                    )
+            except httpx.TimeoutException as exc:
+                if method == "GET" and attempt + 1 < max_get_attempts:
+                    await asyncio.sleep(min(delay, 30.0))
+                    delay = min(30.0, delay * 2)
+                    continue
+                raise SceneVideoTransientError(
+                    "WaveSpeed request timed out.", code="provider_timeout"
+                ) from exc
+            except httpx.TransportError as exc:
+                if method == "GET" and attempt + 1 < max_get_attempts:
+                    await asyncio.sleep(min(delay, 30.0))
+                    delay = min(30.0, delay * 2)
+                    continue
+                raise SceneVideoTransientError(
+                    "WaveSpeed could not be reached.", code="provider_unreachable"
+                ) from exc
+
+            if method == "GET" and (
+                response.status_code == 429 or response.status_code in (500, 502, 503, 504)
+            ) and attempt + 1 < max_get_attempts:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    delay = min(30.0, max(2.0, float(retry_after))) if retry_after else min(30.0, delay * 2)
+                except ValueError:
+                    delay = min(30.0, delay * 2)
+                await asyncio.sleep(delay)
+                continue
+            break
+
+        assert response is not None
         if response.status_code == 402:
-            raise SceneVideoQuotaExhaustedError("WaveSpeed reports insufficient account balance.", code="provider_insufficient_balance")
+            raise SceneVideoQuotaExhaustedError(
+                "WaveSpeed reports insufficient account balance.", code="provider_insufficient_balance"
+            )
         if response.status_code == 429 or 500 <= response.status_code <= 599:
             raise SceneVideoTransientError(
                 f"WaveSpeed returned HTTP {response.status_code}.",
                 code="provider_rate_limited" if response.status_code == 429 else "provider_server_error",
             )
         if response.status_code in (401, 403):
-            raise SceneVideoPermanentError("WaveSpeed rejected the API credential or IP allowlist.", code="provider_unauthorized")
+            raise SceneVideoPermanentError(
+                "WaveSpeed rejected the API credential or IP allowlist.", code="provider_unauthorized"
+            )
         if not 200 <= response.status_code < 300:
-            raise SceneVideoPermanentError(f"WaveSpeed request failed (HTTP {response.status_code}).", code="provider_request_failed")
+            raise SceneVideoPermanentError(
+                f"WaveSpeed request failed (HTTP {response.status_code}).", code="provider_request_failed"
+            )
         try:
             body = response.json()
         except ValueError as exc:
-            raise SceneVideoPermanentError("WaveSpeed returned invalid JSON.", code="provider_bad_response") from exc
+            raise SceneVideoPermanentError(
+                "WaveSpeed returned invalid JSON.", code="provider_bad_response"
+            ) from exc
         if not isinstance(body, dict):
-            raise SceneVideoPermanentError("WaveSpeed returned an unexpected response.", code="provider_bad_response")
+            raise SceneVideoPermanentError(
+                "WaveSpeed returned an unexpected response.", code="provider_bad_response"
+            )
         if body.get("code") not in (None, 200):
-            raise SceneVideoPermanentError("WaveSpeed returned an API-level error.", code="provider_request_failed")
+            raise SceneVideoPermanentError(
+                "WaveSpeed returned an API-level error.", code="provider_request_failed"
+            )
         data = body.get("data", body)
         if not isinstance(data, (dict, list)):
-            raise SceneVideoPermanentError("WaveSpeed response data is invalid.", code="provider_bad_response")
+            raise SceneVideoPermanentError(
+                "WaveSpeed response data is invalid.", code="provider_bad_response"
+            )
         return data
 
     def _output_url(self, payload: dict[str, Any]) -> str | None:
