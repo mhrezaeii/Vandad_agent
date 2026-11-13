@@ -189,8 +189,13 @@ def poll_prediction(
     )
 
 
-def download_video(client: httpx.Client, video_url: str, output_path: Path) -> int:
+def download_video(
+    client: httpx.Client, video_url: str, output_path: Path, *, allowed_hosts: set[str]
+) -> int:
     url = _https_url(video_url, label="video output")
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if not host or host not in {item.lower().rstrip(".") for item in allowed_hosts}:
+        raise WaveSpeedError("Video output host is not in the exact configured download allowlist.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".part")
     try:
@@ -253,6 +258,18 @@ def main() -> int:
         )
         return 2
 
+    allowed_hosts = {
+        item.strip().lower().rstrip(".")
+        for item in os.environ.get("SCENE_VIDEO_WAVESPEED_DOWNLOAD_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    }
+    if not allowed_hosts:
+        print(
+            "Set SCENE_VIDEO_WAVESPEED_DOWNLOAD_ALLOWED_HOSTS to the exact output CDN hostname(s) before paid generation.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.max_wait_seconds < 30:
         print("--max-wait-seconds must be at least 30.", file=sys.stderr)
         return 2
@@ -308,7 +325,7 @@ def main() -> int:
             )
 
             video_url = _video_url({"data": result})
-            size = download_video(client, video_url, args.output)
+            size = download_video(client, video_url, args.output, allowed_hosts=allowed_hosts)
 
         print(f"Video saved: {args.output.resolve()}")
         print(f"File size: {size:,} bytes")
