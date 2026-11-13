@@ -9,9 +9,9 @@ import pytest
 from starlette.requests import Request
 
 from app.api.deps import company_scope, get_principal, require_company_admin
-from app.security.authorization import build_principal_from_settings
 from app.core.config import Settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError, UnprocessableEntityError
+from app.security.authorization import build_principal_from_settings
 
 
 def _request(
