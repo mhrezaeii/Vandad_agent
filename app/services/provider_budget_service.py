@@ -58,7 +58,7 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
                         continue
                     safe_item: dict[str, Any] = {}
                     for field in (
-                        "scene_index", "prediction_id", "provider_job_id", "status",
+                        "scene_index", "prediction_id", "provider_job_id", "model_id", "status",
                         "estimated_cost_usd", "reported_cost_usd", "submission_outcome",
                     ):
                         field_value = item.get(field)
