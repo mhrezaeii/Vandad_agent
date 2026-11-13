@@ -101,10 +101,11 @@ async def test_llm_auth_failure_is_permanent():
         return httpx.Response(401, json={"error": {"message": "bad key"}})
 
     adapter = LlmOpenAiProvider(client_factory=_mock_factory(handler))
-    with pytest.raises(ProviderPermanentError):
+    with pytest.raises(ProviderPermanentError) as exc_info:
         await adapter.execute(_context("execute", {
             "url": "https://llm.example.com/v1", "model": "m", "params": {"user": "x"},
         }))
+    assert exc_info.value.code == "llm_http_401"
 
 
 async def test_llm_missing_model_is_permanent():
@@ -113,3 +114,52 @@ async def test_llm_missing_model_is_permanent():
         await adapter.execute(_context("execute", {"url": "https://llm.example.com/v1"}))
 
 
+
+
+
+async def test_llm_connect_error_is_safe_to_fallback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    adapter = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    with pytest.raises(ProviderTransientError) as exc_info:
+        await adapter.execute(_context("execute", {
+            "url": "https://llm.example.com/v1", "model": "m", "params": {"user": "x"},
+        }))
+    assert exc_info.value.code == "provider_unreachable"
+
+
+async def test_llm_read_timeout_is_ambiguous_and_not_safe_to_fallback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("response timed out", request=request)
+
+    adapter = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    with pytest.raises(ProviderTransientError) as exc_info:
+        await adapter.execute(_context("execute", {
+            "url": "https://llm.example.com/v1", "model": "m", "params": {"user": "x"},
+        }))
+    assert exc_info.value.code == "provider_timeout"
+
+
+async def test_llm_server_error_is_ambiguous():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": {"message": "temporarily unavailable"}})
+
+    adapter = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    with pytest.raises(ProviderTransientError) as exc_info:
+        await adapter.execute(_context("execute", {
+            "url": "https://llm.example.com/v1", "model": "m", "params": {"user": "x"},
+        }))
+    assert exc_info.value.code == "llm_server_error"
+
+
+async def test_llm_model_not_found_is_a_definitive_rejection():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"message": "model not found"}})
+
+    adapter = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    with pytest.raises(ProviderPermanentError) as exc_info:
+        await adapter.execute(_context("execute", {
+            "url": "https://llm.example.com/v1", "model": "missing", "params": {"user": "x"},
+        }))
+    assert exc_info.value.code == "llm_http_404"
