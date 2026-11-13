@@ -18,6 +18,33 @@ from app.models import ConnectionStatus
 StorageTypeLiteral = Literal["reference", "encrypted"]
 
 
+def _validate_connection_configuration(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return value
+    fallbacks = value.get("llm_fallbacks")
+    if fallbacks is None:
+        return value
+    if not isinstance(fallbacks, list) or len(fallbacks) > 5:
+        raise ValueError("llm_fallbacks must be a list with at most 5 entries.")
+    for item in fallbacks:
+        if not isinstance(item, dict) or set(item) - {"connection_id", "model"}:
+            raise ValueError("Each LLM fallback must contain only connection_id and model.")
+        connection_id = item.get("connection_id")
+        model = item.get("model")
+        if connection_id is None and model is None:
+            raise ValueError("Each LLM fallback must specify a connection_id or model.")
+        if connection_id is not None:
+            try:
+                uuid.UUID(str(connection_id))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("LLM fallback connection_id must be a UUID.") from exc
+        if model is not None and (
+            not isinstance(model, str) or not model.strip() or len(model) > 200
+        ):
+            raise ValueError("LLM fallback model must contain 1 to 200 characters.")
+    return value
+
+
 class ConnectionCredentialInput(BaseModel):
     """Inline credential supplied while creating a connection (write-only)."""
 
@@ -55,12 +82,22 @@ class ConnectionCreate(BaseModel):
     credential_reference_id: uuid.UUID | None = None
     credential: ConnectionCredentialInput | None = None
 
+    @field_validator("configuration")
+    @classmethod
+    def _validate_configuration(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_connection_configuration(value) or {}
+
 
 class ConnectionUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     configuration: dict[str, Any] | None = None
+
+    @field_validator("configuration")
+    @classmethod
+    def _validate_configuration(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_connection_configuration(value)
 
 
 class ConnectionRead(BaseModel):
