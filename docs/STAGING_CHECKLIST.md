@@ -42,6 +42,27 @@ The proxy must not expose its shared secret to the browser. Serve the UI and API
 on one site where possible; otherwise configure exact CORS origins and
 credential support.
 
+## Private-network Compose overlay
+
+The staging overlay removes host-published API and web ports and attaches both
+services to an existing external Docker network shared with the OIDC proxy.
+It does not install or configure the identity provider itself.
+
+1. Create the trusted network once: docker network create trusted-proxy
+2. Set TRUSTED_PROXY_NETWORK to that network name.
+3. Set NEXT_PUBLIC_API_BASE_URL to the browser-facing HTTPS API URL, for example
+   https://agent.example.com/api/v1.
+4. Set CORS_ALLOWED_ORIGINS to the exact browser origin.
+5. Configure the external proxy to route /api/ to http://api:8000 and / to
+   http://web:3000. The proxy container must join the trusted-proxy network.
+6. Validate and start with:
+   docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile ui config
+   docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile ui up -d --build
+
+The overlay uses the Compose !reset tag and requires Docker Compose v2.24+.
+The API and web containers have no host-published ports in this mode; the
+external proxy is their only intended ingress.
+
 ## Verification sequence
 
 1. Start the API with ENVIRONMENT=staging and no proxy secret: startup must
