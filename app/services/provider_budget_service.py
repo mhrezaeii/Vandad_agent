@@ -65,7 +65,11 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
                         if isinstance(field_value, bool) or field_value is None:
                             continue
                         if isinstance(field_value, (str, int, float)):
-                            safe_item[field] = redact_text(str(field_value))[:160] if isinstance(field_value, str) else field_value
+                            safe_item[field] = (
+                                redact_text(str(field_value))[:160]
+                                if isinstance(field_value, str)
+                                else field_value
+                            )
                     safe_predictions.append(safe_item)
                 safe[key] = safe_predictions
             continue
