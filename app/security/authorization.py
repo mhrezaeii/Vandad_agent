@@ -61,6 +61,12 @@ def authorize_company_access(principal: Principal, company_id: uuid.UUID) -> Com
 def build_principal_from_settings(settings: Settings) -> Principal:
     """Build the bootstrap principal. Production never accepts the wildcard."""
     raw = settings.bootstrap_principal_company_ids.strip()
+    if settings.requires_proxy_auth:
+        configured_secret = settings.auth_proxy_shared_secret
+        if configured_secret is None or not configured_secret.get_secret_value():
+            raise ForbiddenError(
+                "AUTH_PROXY_SHARED_SECRET is required in staging/production."
+            )
     if raw == "*":
         if settings.requires_proxy_auth:
             raise ForbiddenError(
