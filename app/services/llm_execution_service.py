@@ -36,7 +36,8 @@ class _LlmCandidate:
     connection_id: uuid.UUID
     platform_id: uuid.UUID
     model: str
-    configuration: dict[str, Any]
+    is_primary: bool
+    configuration: dict[str, Any>
     credential: Any
     credential_type: str | None
     secret_reference: str | None
@@ -101,7 +102,7 @@ class LlmExecutionService:
 
         attempts = 0
         last_safe_error: ProviderError | None = None
-        for candidate_index, candidate in enumerate(candidates):
+        for candidate in candidates:
             context = self.executor.build_context(
                 adapter=adapter,
                 connection_id=candidate.connection_id,
@@ -133,7 +134,7 @@ class LlmExecutionService:
                         "latency_ms": result.latency_ms,
                         "attempts": attempts,
                         "routing_attempts": attempts,
-                        "fallback_used": candidate_index > 0,
+                        "fallback_used": not candidate.is_primary,
                     },
                 )
                 await self.session.commit()
@@ -145,7 +146,7 @@ class LlmExecutionService:
                     metadata={
                         **metadata,
                         "routing_attempts": attempts,
-                        "fallback_used": candidate_index > 0,
+                        "fallback_used": not candidate.is_primary,
                     },
                 )
 
@@ -180,7 +181,7 @@ class LlmExecutionService:
                 "currency": "USD",
                 "attempts": attempts,
                 "routing_attempts": attempts,
-                "fallback_used": len(candidates) > 1,
+                "fallback_used": any(not candidate.is_primary for candidate in candidates),
                 "model": candidates[-1].model,
             },
         )
@@ -320,6 +321,7 @@ class LlmExecutionService:
                     connection_id=connection.id,
                     platform_id=connection.platform_id,
                     model=model,
+                    is_primary=is_primary,
                     configuration=configuration,
                     credential=credential,
                     credential_type=credential_type,
