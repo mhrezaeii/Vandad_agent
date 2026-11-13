@@ -338,7 +338,7 @@ async def test_wavespeed_estimated_project_cap_blocks_before_reservation(
     registry.register(provider)
     content_service.scene_video_registry = registry
     monkeypatch.setattr(
-        "app.core.config.get_settings",
+        "app.services.content_service.get_settings",
         lambda: SimpleNamespace(
             is_production=False,
             scene_video_provider="mock",

@@ -325,10 +325,22 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
         APIMasterSceneVideoProvider,
         MockSceneVideoProvider,
         SceneVideoProviderRegistry,
+        WaveSpeedConfig,
+        WaveSpeedSceneVideoProvider,
     )
+
+    class DiscreteDurationMockProvider(MockSceneVideoProvider):
+        provider_id = "mock-discrete"
+        supported_durations = (5.0, 10.0)
 
     registry = SceneVideoProviderRegistry()
     registry.register(MockSceneVideoProvider())
+    registry.register(DiscreteDurationMockProvider())
+    registry.register(
+        WaveSpeedSceneVideoProvider(
+            WaveSpeedConfig(api_key="catalog-wavespeed-test-key")
+        )
+    )
     registry.register(
         APIMasterSceneVideoProvider(
             APIMasterConfig(
@@ -343,6 +355,9 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     response = await client.get("/api/v1/providers/scene-video/models")
     assert response.status_code == 200, response.text
     models = response.json()
+    discrete_mock = next(item for item in models if item["provider_id"] == "mock-discrete")
+    assert discrete_mock["supported_durations"] == [5.0, 10.0]
+
     mock = next(item for item in models if item["provider_id"] == "mock")
     assert mock["model_id"] == "mock-fixture"
     assert mock["supports_composition"] is True
@@ -366,6 +381,19 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     assert apimaster["max_reference_images"] == 1
     assert apimaster["min_duration_seconds"] == 2
     assert apimaster["max_duration_seconds"] == 30
+
+    wavespeed = next(item for item in models if item["provider_id"] == "wavespeed")
+    assert wavespeed["model_id"] == "wavespeed-ai/ltx-2.3/text-to-video"
+    assert wavespeed["supports_health_check"] is True
+    assert wavespeed["input_modalities"] == ["text"]
+    assert wavespeed["supported_modalities"] == ["video"]
+    assert wavespeed["supported_aspect_ratios"] == ["9:16"]
+    assert wavespeed["supported_resolutions"] == ["480p", "720p", "1080p"]
+    assert wavespeed["supports_seed"] is True
+    assert wavespeed["max_reference_images"] == 0
+    assert wavespeed["min_duration_seconds"] == 5
+    assert wavespeed["max_duration_seconds"] == 20
+    assert wavespeed["supported_durations"] is None
 
 
 async def test_budget_api_is_company_scoped(client, db_session):

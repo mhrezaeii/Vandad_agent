@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 from app.integrations.video import (
-    build_scene_video_registry,
     GenericHttpConfig,
     GenericHttpSceneVideoProvider,
     SceneJobState,
@@ -18,8 +17,8 @@ from app.integrations.video import (
     SceneVideoTransientError,
     WaveSpeedConfig,
     WaveSpeedSceneVideoProvider,
+    build_scene_video_registry,
 )
-
 
 MODEL = "wavespeed-ai/ltx-2.3/text-to-video"
 MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 128
@@ -130,7 +129,9 @@ async def test_wavespeed_explicit_rate_limit_is_retryable_not_ambiguous():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
             return httpx.Response(429, json={"message": "rate limited"})
-        return httpx.Response(200, json={"data": [{"model_id": MODEL}]})
+        if request.method == "GET" and request.url.path.endswith("/balance"):
+            return httpx.Response(200, json={"data": {"balance": 5.0}})
+        return httpx.Response(404)
 
     provider = _provider(handler)
     with pytest.raises(SceneVideoTransientError) as error:

@@ -122,6 +122,7 @@ class SceneVideoModelRead(BaseModel):
     max_reference_images: int | None = 0
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
+    supported_durations: list[float] | None = None
 
 
 class ProviderUsageReconcile(BaseModel):

@@ -47,6 +47,14 @@ def content_service(db_session, engine_pair, redis_manager):
     )
 
 
+def _single_scene_scenario(duration: float = 5.0) -> Scenario:
+    """Build a one-job fixture while respecting the public three-scene schema."""
+    scenario = _scenario()
+    return scenario.model_copy(
+        update={"scenes": scenario.scenes[:1], "target_duration_seconds": int(duration)}
+    )
+
+
 def _scenario(count: int = 3, duration: float = 5.0) -> Scenario:
     return Scenario(
         title="سناریوی تست",
@@ -608,7 +616,7 @@ async def test_ambiguous_provider_submit_is_marked_unknown_and_never_retried(
 
     provider.generate_video = ambiguous_submit
     service = _service(db_session, provider)
-    await service.prepare_scenes(project, _scenario(count=1), provider_id="mock")
+    await service.prepare_scenes(project, _single_scene_scenario(), provider_id="mock")
 
     with pytest.raises(SceneVideoTransientError):
         await service.submit_pending(project)
@@ -635,7 +643,7 @@ async def test_recent_wavespeed_submit_fence_skips_second_worker(
     provider = MockSceneVideoProvider()
     provider.provider_id = "wavespeed"
     service = _service(db_session, provider)
-    await service.prepare_scenes(project, _scenario(count=1), provider_id="wavespeed")
+    await service.prepare_scenes(project, _single_scene_scenario(), provider_id="wavespeed")
     job = (await _jobs(db_session, project.id))[0]
     job.attempts = 1
     job.submission_metadata = {
@@ -658,7 +666,7 @@ async def test_stale_wavespeed_submit_fence_becomes_unknown_without_resubmit(
     provider = MockSceneVideoProvider()
     provider.provider_id = "wavespeed"
     service = _service(db_session, provider)
-    await service.prepare_scenes(project, _scenario(count=1), provider_id="wavespeed")
+    await service.prepare_scenes(project, _single_scene_scenario(), provider_id="wavespeed")
     job = (await _jobs(db_session, project.id))[0]
     job.attempts = 1
     job.submission_metadata = {

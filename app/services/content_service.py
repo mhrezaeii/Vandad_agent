@@ -785,12 +785,8 @@ class ContentService:
         options = dict(project.scene_options or {})
         selected_provider = provider_id or options.get("provider_id") or project.scene_video_provider
         if not selected_provider:
-            from app.core.config import get_settings
-
             selected_provider = get_settings().scene_video_provider
         if selected_provider == "mock":
-            from app.core.config import get_settings
-
             if get_settings().is_production:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
         if self.scene_video_registry is None:
@@ -843,8 +839,6 @@ class ContentService:
                 ) from exc
             selected_provider = selected.provider_id
             if selected_provider == "wavespeed":
-                from app.core.config import get_settings
-
                 estimate_cost = getattr(selected, "estimate_cost_usd", None)
                 if callable(estimate_cost):
                     estimated_project_cost_usd = sum(
