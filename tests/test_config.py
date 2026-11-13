@@ -76,6 +76,7 @@ def test_wavespeed_environment_settings_reach_registry():
         scene_video_wavespeed_api_key="test-key",
         scene_video_wavespeed_resolution="480p",
         scene_video_wavespeed_aspect_ratio="9:16",
+        scene_video_wavespeed_duration_seconds=10,
         scene_video_wavespeed_download_allowed_hosts="cdn.example.test",
         _env_file=None,
     )
@@ -83,6 +84,7 @@ def test_wavespeed_environment_settings_reach_registry():
     assert provider.model_id == "wavespeed-ai/ltx-2.3/text-to-video"
     assert provider.config.resolution == "480p"
     assert provider.config.aspect_ratio == "9:16"
+    assert provider.config.duration_seconds == 10
     assert provider.config.download_allowed_hosts == ("cdn.example.test",)
     assert provider.supports_composition is False
     assert provider.supports_quality_review is False
