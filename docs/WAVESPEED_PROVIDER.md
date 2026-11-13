@@ -36,11 +36,14 @@ text-to-video model, not the image-to-video endpoint.
 WaveSpeed does not document an idempotency-key contract for this endpoint.
 The adapter therefore does not claim upstream idempotency and never retries a
 submit POST after a timeout, dropped connection, server error, or malformed
-accepted response. The scene service locks persisted scene rows while deciding
-whether to submit. An ambiguous submit is marked failed/unknown, its automatic
-attempt budget is exhausted, and the operator must reconcile WaveSpeed History
-before any manual retry. A documented HTTP 429 is treated as an explicit
-rejection and remains retryable.
+accepted response. The scene service locks persisted scene rows while deciding whether to submit
+and commits a durable `submitting` fence before the billable POST. A second
+worker skips a recent fence; a fence older than five minutes becomes
+failed/unknown and cannot be retried automatically. This also covers a worker
+crash after WaveSpeed accepts a prediction but before the ID is persisted. The
+operator must reconcile WaveSpeed History before any manual retry. A documented
+HTTP 429 and a failed balance preflight are explicit non-submission outcomes
+and remain retryable.
 
 Prediction IDs are stored as the provider job ID (with a `wavespeed:` prefix)
 and in submission metadata. Provider state, output URL, model, timing, reported
