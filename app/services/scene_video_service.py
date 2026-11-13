@@ -167,15 +167,8 @@ class SceneVideoService:
     async def submit_pending(
         self, project: ContentProject, *, execution_id: uuid.UUID | None = None
     ) -> dict[str, Any]:
-        """Submit every not-yet-submitted scene exactly once.
-
-        Jobs that already carry a ``provider_job_id`` are skipped. Transient
-        provider failures are re-raised after persisting the attempt so the
-        workflow engine can retry the node with backoff.
-        """
+        """Submit pending scenes with a durable pre-submit fence for WaveSpeed."""
         provider = self._provider_for(project)
-        # Lock the scene rows for the entire submit decision. Concurrent workers
-        # cannot both observe a missing prediction id and issue duplicate paid POSTs.
         jobs = list((await self.session.execute(
             select(SceneVideoJob)
             .where(SceneVideoJob.project_id == project.id)
@@ -184,13 +177,57 @@ class SceneVideoService:
         )).scalars())
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+
+        submitted = 0
+        first_transient: Exception | None = None
+        first_permanent: SceneVideoPermanentError | None = None
+        active_submission_ids: set[uuid.UUID] = set()
+        now = datetime.now(UTC)
+
+        # A WaveSpeed submit is fenced durably before the external POST. If a
+        # worker dies after WaveSpeed accepts the request but before the ID is
+        # saved, a later worker must reconcile rather than issue a duplicate.
+        if provider.provider_id == "wavespeed":
+            for job in jobs:
+                metadata = job.submission_metadata or {}
+                if job.provider_job_id or metadata.get("submission_outcome") != "submitting":
+                    continue
+                started_raw = metadata.get("submission_started_at")
+                try:
+                    started_at = datetime.fromisoformat(str(started_raw))
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=UTC)
+                    age_seconds = (now - started_at).total_seconds()
+                except (TypeError, ValueError):
+                    age_seconds = 301.0
+                if 0 <= age_seconds < 300:
+                    active_submission_ids.add(job.id)
+                    continue
+                job.status = SceneVideoJobStatus.FAILED.value
+                job.attempts = job.max_attempts
+                job.error_code = "provider_submission_unknown"
+                job.error_message = (
+                    "A previous WaveSpeed submit was interrupted. Check prediction history "
+                    "before any manual retry."
+                )
+                job.submission_metadata = {
+                    **metadata,
+                    "submission_outcome": "unknown",
+                    "reconcile_before_retry": True,
+                }
+                first_permanent = first_permanent or SceneVideoPermanentError(
+                    job.error_message, code="provider_submission_unknown"
+                )
+
         pending_jobs = [
             job for job in jobs
-            if job.provider_job_id is None
+            if job.id not in active_submission_ids
+            and job.provider_job_id is None
             and job.status not in (
                 SceneVideoJobStatus.CANCELLED.value,
                 SceneVideoJobStatus.COMPLETED.value,
                 SceneVideoJobStatus.DOWNLOADED.value,
+                SceneVideoJobStatus.FAILED.value,
             )
             and job.attempts < job.max_attempts
         ]
@@ -207,16 +244,14 @@ class SceneVideoService:
                     code="provider_unhealthy",
                 )
 
-        submitted = 0
-        first_transient: Exception | None = None
-        first_permanent: SceneVideoPermanentError | None = None
         for job in jobs:
-            if job.provider_job_id is not None:
+            if job.provider_job_id is not None or job.id in active_submission_ids:
                 continue
             if job.status in (
                 SceneVideoJobStatus.CANCELLED.value,
                 SceneVideoJobStatus.COMPLETED.value,
                 SceneVideoJobStatus.DOWNLOADED.value,
+                SceneVideoJobStatus.FAILED.value,
             ):
                 continue
             if job.attempts >= job.max_attempts:
@@ -234,28 +269,53 @@ class SceneVideoService:
                 metadata={"project_id": str(project.id), "scene_index": job.scene_index},
             )
             job.attempts += 1
+            if provider.provider_id == "wavespeed":
+                job.submission_metadata = {
+                    **(job.submission_metadata or {}),
+                    "submission_outcome": "submitting",
+                    "submission_started_at": datetime.now(UTC).isoformat(),
+                    "reconcile_before_retry": False,
+                }
+                await self.session.flush()
+                # Commit the submission fence before any billable network call.
+                await self.session.commit()
+                await self.session.refresh(job)
+                await self.session.refresh(project)
+
             try:
                 provider_job_id = await provider.generate_video(request)
             except SceneVideoQuotaExhaustedError as exc:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = exc.code
                 job.error_message = exc.message
+                if provider.provider_id == "wavespeed":
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "rejected",
+                    }
                 await self.session.flush()
                 raise
             except SceneVideoTransientError as exc:
                 job.error_code = exc.code
                 job.error_message = exc.message
-                if exc.code == "provider_submission_unknown":
-                    # No upstream idempotency contract exists. Persist an
-                    # operator-reconciliation state and exhaust automatic
-                    # retries so a lost POST response cannot double-bill.
-                    job.attempts = job.max_attempts
-                    job.status = SceneVideoJobStatus.FAILED.value
-                    job.submission_metadata = {
-                        **(job.submission_metadata or {}),
-                        "submission_outcome": "unknown",
-                        "reconcile_before_retry": True,
-                    }
+                if provider.provider_id == "wavespeed":
+                    if exc.code in {"provider_rate_limited", "provider_preflight_transient"}:
+                        job.status = SceneVideoJobStatus.PENDING.value
+                        job.submission_metadata = {
+                            **(job.submission_metadata or {}),
+                            "submission_outcome": (
+                                "preflight_failed" if exc.code == "provider_preflight_transient" else "rejected"
+                            ),
+                        }
+                        job.submission_metadata.pop("submission_started_at", None)
+                    else:
+                        job.attempts = job.max_attempts
+                        job.status = SceneVideoJobStatus.FAILED.value
+                        job.submission_metadata = {
+                            **(job.submission_metadata or {}),
+                            "submission_outcome": "unknown",
+                            "reconcile_before_retry": True,
+                        }
                 elif job.attempts >= job.max_attempts:
                     job.status = SceneVideoJobStatus.FAILED.value
                 await self.session.flush()
@@ -265,15 +325,25 @@ class SceneVideoService:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = exc.code
                 job.error_message = exc.message
+                if provider.provider_id == "wavespeed":
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "rejected",
+                    }
                 await self.session.flush()
-                # Scenes are independent: preserve this failure but continue
-                # submitting the remaining scenes in the same storyboard.
                 first_permanent = first_permanent or exc
                 continue
-            except Exception as exc:  # unexpected provider failure
+            except Exception as exc:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = getattr(exc, "code", "provider_error")
                 job.error_message = getattr(exc, "message", str(exc))
+                if provider.provider_id == "wavespeed":
+                    job.attempts = job.max_attempts
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "unknown",
+                        "reconcile_before_retry": True,
+                    }
                 await self.session.flush()
                 raise
 
@@ -284,9 +354,11 @@ class SceneVideoService:
             job.error_message = None
             job.submission_metadata = {
                 **(job.submission_metadata or {}),
+                "submission_outcome": "submitted",
                 **({"prediction_id": str(provider_job_id).split(":", 1)[1]}
                    if str(provider_job_id).startswith("wavespeed:") else {}),
             }
+            job.submission_metadata.pop("submission_started_at", None)
             estimate = getattr(provider, "estimate_cost_usd", None)
             if callable(estimate):
                 job.cost_metadata = {
