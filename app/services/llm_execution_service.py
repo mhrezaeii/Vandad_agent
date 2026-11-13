@@ -247,11 +247,16 @@ class LlmExecutionService:
                     code="llm_fallback_config_invalid",
                 ) from exc
 
-            candidate = (
-                primary
-                if candidate_id == primary.id
-                else await self._get_connection(candidate_id, company_id)
-            )
+            if candidate_id == primary.id:
+                candidate = primary
+            else:
+                try:
+                    candidate = await self._get_connection(candidate_id, company_id)
+                except NotFoundError as exc:
+                    raise ProviderPermanentError(
+                        "An LLM fallback connection is unavailable for this company.",
+                        code="llm_fallback_connection_invalid",
+                    ) from exc
             if candidate.provider != "llm_openai":
                 raise ProviderPermanentError(
                     "Every LLM fallback connection must use llm_openai.",
