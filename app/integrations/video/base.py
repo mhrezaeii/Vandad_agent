@@ -193,6 +193,7 @@ class SceneVideoProvider(ABC):
     max_reference_images: int | None = 0
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
+    supported_durations: tuple[float, ...] | None = None
 
     @abstractmethod
     async def generate_video(self, request: SceneVideoRequest) -> str:

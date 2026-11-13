@@ -102,10 +102,9 @@ class SceneVideoService:
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
-        if not provider.supports_quality_review:
-            raise ConflictError(
-                "The selected AI provider must support final-video quality review before generation."
-            )
+        # Scene generation and final quality review are separate capabilities.
+        # A generation-only provider may prepare and submit clips; finalization
+        # still fails closed unless composition and quality review are configured.
         existing = {
             job.scene_index: job
             for job in (
@@ -168,19 +167,75 @@ class SceneVideoService:
     async def submit_pending(
         self, project: ContentProject, *, execution_id: uuid.UUID | None = None
     ) -> dict[str, Any]:
-        """Submit every not-yet-submitted scene exactly once.
-
-        Jobs that already carry a ``provider_job_id`` are skipped. Transient
-        provider failures are re-raised after persisting the attempt so the
-        workflow engine can retry the node with backoff.
-        """
+        """Submit pending scenes with a durable pre-submit fence for WaveSpeed."""
         provider = self._provider_for(project)
-        jobs = await self._jobs(project)
+        jobs = list((await self.session.execute(
+            select(SceneVideoJob)
+            .where(SceneVideoJob.project_id == project.id)
+            .order_by(SceneVideoJob.scene_index)
+            .with_for_update()
+        )).scalars())
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+
+        submitted = 0
+        first_transient: Exception | None = None
+        first_permanent: SceneVideoPermanentError | None = None
+        active_submission_ids: set[uuid.UUID] = set()
+        now = datetime.now(UTC)
+
+        # A WaveSpeed submit is fenced durably before the external POST. If a
+        # worker dies after WaveSpeed accepts the request but before the ID is
+        # saved, a later worker must reconcile rather than issue a duplicate.
+        if provider.provider_id == "wavespeed":
+            for job in jobs:
+                metadata = job.submission_metadata or {}
+                if job.provider_job_id:
+                    continue
+                if metadata.get("reconcile_before_retry") is True:
+                    job.status = SceneVideoJobStatus.FAILED.value
+                    job.attempts = job.max_attempts
+                    job.error_code = "provider_submission_unknown"
+                    job.error_message = (
+                        "This scene requires WaveSpeed History reconciliation before retry."
+                    )
+                    first_permanent = first_permanent or SceneVideoPermanentError(
+                        job.error_message, code="provider_submission_unknown"
+                    )
+                    continue
+                if metadata.get("submission_outcome") != "submitting":
+                    continue
+                started_raw = metadata.get("submission_started_at")
+                try:
+                    started_at = datetime.fromisoformat(str(started_raw))
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=UTC)
+                    age_seconds = (now - started_at).total_seconds()
+                except (TypeError, ValueError):
+                    age_seconds = 301.0
+                if age_seconds < 300:
+                    active_submission_ids.add(job.id)
+                    continue
+                job.status = SceneVideoJobStatus.FAILED.value
+                job.attempts = job.max_attempts
+                job.error_code = "provider_submission_unknown"
+                job.error_message = (
+                    "A previous WaveSpeed submit was interrupted. Check prediction history "
+                    "before any manual retry."
+                )
+                job.submission_metadata = {
+                    **metadata,
+                    "submission_outcome": "unknown",
+                    "reconcile_before_retry": True,
+                }
+                first_permanent = first_permanent or SceneVideoPermanentError(
+                    job.error_message, code="provider_submission_unknown"
+                )
+
         pending_jobs = [
             job for job in jobs
-            if job.provider_job_id is None
+            if job.id not in active_submission_ids
+            and job.provider_job_id is None
             and job.status not in (
                 SceneVideoJobStatus.CANCELLED.value,
                 SceneVideoJobStatus.COMPLETED.value,
@@ -201,11 +256,8 @@ class SceneVideoService:
                     code="provider_unhealthy",
                 )
 
-        submitted = 0
-        first_transient: Exception | None = None
-        first_permanent: SceneVideoPermanentError | None = None
         for job in jobs:
-            if job.provider_job_id is not None:
+            if job.provider_job_id is not None or job.id in active_submission_ids:
                 continue
             if job.status in (
                 SceneVideoJobStatus.CANCELLED.value,
@@ -228,18 +280,67 @@ class SceneVideoService:
                 metadata={"project_id": str(project.id), "scene_index": job.scene_index},
             )
             job.attempts += 1
+            estimate = getattr(provider, "estimate_cost_usd", None)
+            if callable(estimate):
+                job.cost_metadata = {
+                    **(job.cost_metadata or {}),
+                    "provider": provider.provider_id,
+                    "model": getattr(provider, "model_id", None),
+                    "estimated_cost_usd": estimate(job.duration_seconds),
+                    "currency": "USD",
+                }
+            if provider.provider_id == "wavespeed":
+                job.submission_metadata = {
+                    **(job.submission_metadata or {}),
+                    "submission_outcome": "submitting",
+                    "submission_started_at": datetime.now(UTC).isoformat(),
+                    "reconcile_before_retry": False,
+                }
+                await self._record_project_video_usage(project, jobs)
+                await self.session.flush()
+                # Commit the submission fence and budget telemetry before any
+                # billable network call. A crash can now be reconciled safely.
+                await self.session.commit()
+                await self.session.refresh(job)
+                await self.session.refresh(project)
+
             try:
                 provider_job_id = await provider.generate_video(request)
             except SceneVideoQuotaExhaustedError as exc:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = exc.code
                 job.error_message = exc.message
+                if provider.provider_id == "wavespeed":
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "rejected",
+                    }
+                await self._record_project_video_usage(project, jobs)
                 await self.session.flush()
                 raise
             except SceneVideoTransientError as exc:
                 job.error_code = exc.code
                 job.error_message = exc.message
-                if job.attempts >= job.max_attempts:
+                if exc.code == "provider_submission_unknown":
+                    job.attempts = job.max_attempts
+                    job.status = SceneVideoJobStatus.FAILED.value
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "unknown",
+                        "reconcile_before_retry": True,
+                    }
+                elif provider.provider_id == "wavespeed" and exc.code in {
+                    "provider_rate_limited", "provider_preflight_transient"
+                }:
+                    job.status = SceneVideoJobStatus.PENDING.value
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": (
+                            "preflight_failed" if exc.code == "provider_preflight_transient" else "rejected"
+                        ),
+                    }
+                    job.submission_metadata.pop("submission_started_at", None)
+                elif job.attempts >= job.max_attempts:
                     job.status = SceneVideoJobStatus.FAILED.value
                 await self.session.flush()
                 first_transient = first_transient or exc
@@ -248,15 +349,26 @@ class SceneVideoService:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = exc.code
                 job.error_message = exc.message
+                if provider.provider_id == "wavespeed":
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "rejected",
+                    }
                 await self.session.flush()
-                # Scenes are independent: preserve this failure but continue
-                # submitting the remaining scenes in the same storyboard.
                 first_permanent = first_permanent or exc
                 continue
-            except Exception as exc:  # unexpected provider failure
+            except Exception as exc:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = getattr(exc, "code", "provider_error")
                 job.error_message = getattr(exc, "message", str(exc))
+                if provider.provider_id == "wavespeed":
+                    job.attempts = job.max_attempts
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "unknown",
+                        "reconcile_before_retry": True,
+                    }
+                await self._record_project_video_usage(project, jobs)
                 await self.session.flush()
                 raise
 
@@ -265,6 +377,13 @@ class SceneVideoService:
             job.started_at = datetime.now(UTC)
             job.error_code = None
             job.error_message = None
+            job.submission_metadata = {
+                **(job.submission_metadata or {}),
+                "submission_outcome": "submitted",
+                **({"prediction_id": str(provider_job_id).split(":", 1)[1]}
+                   if str(provider_job_id).startswith("wavespeed:") else {}),
+            }
+            job.submission_metadata.pop("submission_started_at", None)
             submitted += 1
             self.audit.record(
                 event_type="scene.submitted",
@@ -281,6 +400,7 @@ class SceneVideoService:
 
         if submitted or any(job.provider_job_id for job in jobs):
             project.status = ProjectStatus.VIDEO_GENERATING.value
+        await self._record_project_video_usage(project, jobs)
         await self.session.flush()
         if first_transient is not None:
             raise first_transient
@@ -318,7 +438,14 @@ class SceneVideoService:
                 job.cost_metadata = {
                     **(job.cost_metadata or {}),
                     "reported_cost_usd": str(reported_cost),
+                    "actual_cost_usd": str(reported_cost),
                     "provider": provider.provider_id,
+                }
+            if (status.raw or {}).get("estimated_cost_usd") is not None:
+                job.cost_metadata = {
+                    **(job.cost_metadata or {}),
+                    "estimated_cost_usd": str(status.raw["estimated_cost_usd"]),
+                    "currency": "USD",
                 }
             if status.video_url:
                 job.video_url = status.video_url
@@ -349,8 +476,79 @@ class SceneVideoService:
                 project.status = ProjectStatus.VIDEO_GENERATED.value
         else:
             project.status = ProjectStatus.VIDEO_GENERATING.value
+        await self._record_project_video_usage(project, jobs)
         await self.session.flush()
         return summary
+
+    async def _record_project_video_usage(
+        self, project: ContentProject, jobs: list[SceneVideoJob]
+    ) -> None:
+        """Persist prediction IDs, states and estimates against the project reservation."""
+        metadata = project.cost_metadata or {}
+        reservation_id = metadata.get("budget_reservation_id")
+        if not reservation_id:
+            return
+        try:
+            parsed_id = uuid.UUID(str(reservation_id))
+        except (TypeError, ValueError):
+            return
+        reservation = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.id == parsed_id,
+                ProviderUsageRecord.company_id == project.company_id,
+            ).with_for_update()
+        )
+        if reservation is None or reservation.status == "settled":
+            return
+
+        predictions: list[dict[str, Any]] = []
+        estimated_total = Decimal("0")
+        reported_total = Decimal("0")
+        for job in jobs:
+            cost = job.cost_metadata or {}
+            estimated = cost.get("estimated_cost_usd")
+            reported = cost.get("reported_cost_usd")
+            if estimated is not None:
+                try:
+                    amount = Decimal(str(estimated))
+                    if amount.is_finite() and amount >= 0:
+                        estimated_total += amount
+                except (InvalidOperation, ValueError):
+                    pass
+            if reported is not None:
+                try:
+                    amount = Decimal(str(reported))
+                    if amount.is_finite() and amount >= 0:
+                        reported_total += amount
+                except (InvalidOperation, ValueError):
+                    pass
+            prediction_id = (job.submission_metadata or {}).get("prediction_id")
+            if prediction_id is None and str(job.provider_job_id or "").startswith("wavespeed:"):
+                prediction_id = str(job.provider_job_id).split(":", 1)[1]
+            predictions.append({
+                "scene_index": job.scene_index,
+                "prediction_id": str(prediction_id) if prediction_id is not None else None,
+                "provider_job_id": str(job.provider_job_id) if job.provider_job_id else None,
+                "model_id": cost.get("model"),
+                "status": job.provider_status or job.status,
+                "estimated_cost_usd": str(estimated) if estimated is not None else None,
+                "reported_cost_usd": str(reported) if reported is not None else None,
+                "submission_outcome": (job.submission_metadata or {}).get("submission_outcome"),
+            })
+
+        reservation.usage_payload = {
+            **(reservation.usage_payload or {}),
+            "model": str(metadata.get("provider_id") or reservation.provider_id),
+            "scene_predictions": predictions,
+            "estimated_scene_cost_usd": str(estimated_total),
+            "reported_scene_cost_usd": str(reported_total),
+            "currency": "USD",
+        }
+        project.cost_metadata = {
+            **metadata,
+            "estimated_scene_cost_usd": str(estimated_total),
+            "reported_scene_cost_usd": str(reported_total),
+        }
 
     async def _settle_project_video_budget(
         self,
@@ -406,6 +604,26 @@ class SceneVideoService:
                 "cost_usd": str(sum(costs, Decimal("0"))),
                 "currency": "USD",
                 "model": str(metadata.get("provider_id") or reservation.provider_id),
+                "estimated_scene_cost_usd": str(sum(
+                    (Decimal(str((job.cost_metadata or {}).get("estimated_cost_usd", "0"))) for job in jobs),
+                    Decimal("0"),
+                )),
+                "reported_scene_cost_usd": str(sum(
+                    (Decimal(str((job.cost_metadata or {}).get("reported_cost_usd", "0"))) for job in jobs),
+                    Decimal("0"),
+                )),
+                "scene_predictions": [
+                    {
+                        "scene_index": job.scene_index,
+                        "prediction_id": (job.submission_metadata or {}).get("prediction_id"),
+                        "provider_job_id": job.provider_job_id,
+                        "model_id": (job.cost_metadata or {}).get("model"),
+                        "status": job.provider_status or job.status,
+                        "estimated_cost_usd": (job.cost_metadata or {}).get("estimated_cost_usd"),
+                        "reported_cost_usd": (job.cost_metadata or {}).get("reported_cost_usd"),
+                    }
+                    for job in jobs
+                ],
             },
         )
         project.cost_metadata = {
@@ -432,6 +650,19 @@ class SceneVideoService:
                 continue
             if not job.provider_job_id:
                 continue
+            if provider.provider_id == "wavespeed":
+                # Billing records can lag prediction completion. Reconcile once
+                # more before artifact retrieval so the budget ledger captures
+                # actual charges when they become visible.
+                latest_status = await provider.get_generation_status(job.provider_job_id)
+                latest_cost = parse_reported_cost(latest_status.raw or {})
+                if latest_cost is not None:
+                    job.cost_metadata = {
+                        **(job.cost_metadata or {}),
+                        "reported_cost_usd": str(latest_cost),
+                        "actual_cost_usd": str(latest_cost),
+                        "provider": provider.provider_id,
+                    }
             prefix = bytearray()
 
             async def _chunks(job=job, prefix=prefix):  # noqa: ANN001 - closure
@@ -482,6 +713,7 @@ class SceneVideoService:
                 },
             )
 
+        await self._record_project_video_usage(project, jobs)
         await self.session.flush()
         summary = self._summarize(jobs)
         if summary["failed"]:

@@ -9,6 +9,7 @@ from scripts.wavespeed_smoke_test import (
     _prediction_id,
     _video_url,
     build_payload,
+    estimate_cost_usd,
 )
 
 
@@ -101,3 +102,10 @@ def test_build_payload_includes_optional_seed() -> None:
 def test_rejects_invalid_payload_options(kwargs: dict[str, object]) -> None:
     with pytest.raises(WaveSpeedError):
         build_payload(**kwargs)
+
+
+
+def test_published_price_estimate_matches_lowest_approved_smoke_profile():
+    assert estimate_cost_usd("480p", 5) == pytest.approx(0.10)
+    assert estimate_cost_usd("720p", 10) == pytest.approx(0.30)
+    assert estimate_cost_usd("1080p", 20) == pytest.approx(0.80)

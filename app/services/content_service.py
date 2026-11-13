@@ -6,7 +6,9 @@ scene generation, provider-side composition, quality review and artifact deliver
 
 from __future__ import annotations
 
+import copy
 import uuid
+from decimal import Decimal
 from math import gcd
 from typing import Any
 
@@ -14,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -25,6 +28,7 @@ from app.integrations.providers import (
 )
 from app.models import (
     BrandPlatformLink,
+    CompanyProviderBudget,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
@@ -791,6 +795,8 @@ class ContentService:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
         if self.scene_video_registry is None:
             raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
+        estimated_project_cost_usd: Decimal | None = None
+        estimated_cost_cap_usd: Decimal | None = None
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
             fallback_ids = (
@@ -836,6 +842,45 @@ class ContentService:
                     details=[{"field": "provider_id", "value": selected_provider}],
                 ) from exc
             selected_provider = selected.provider_id
+            if selected_provider == "wavespeed":
+                from app.core.config import get_settings
+
+                estimate_cost = getattr(selected, "estimate_cost_usd", None)
+                if callable(estimate_cost):
+                    estimated_project_cost_usd = sum(
+                        (Decimal(str(estimate_cost(duration))) for duration in required_durations),
+                        Decimal("0"),
+                    )
+                    estimated_cost_cap_usd = Decimal(str(
+                        get_settings().scene_video_wavespeed_max_project_cost_usd
+                    ))
+                    if estimated_project_cost_usd > estimated_cost_cap_usd:
+                        raise UnprocessableEntityError(
+                            "Estimated WaveSpeed project cost exceeds the configured per-project cap.",
+                            details=[
+                                {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
+                                {"field": "max_project_cost_usd", "value": str(estimated_cost_cap_usd)},
+                            ],
+                        )
+                    company_budget = await self.session.scalar(
+                        select(CompanyProviderBudget).where(
+                            CompanyProviderBudget.company_id == scope.company_id,
+                            CompanyProviderBudget.provider_id == selected_provider,
+                        )
+                    )
+                    if company_budget is not None and estimated_project_cost_usd > Decimal(
+                        str(company_budget.per_operation_limit_usd)
+                    ):
+                        raise ConflictError(
+                            "Estimated WaveSpeed project cost exceeds the company's per-operation budget.",
+                            details=[
+                                {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
+                                {
+                                    "field": "per_operation_limit_usd",
+                                    "value": str(company_budget.per_operation_limit_usd),
+                                },
+                            ],
+                        )
             route_order = [selected_provider] + [
                 candidate for candidate in ordered_ids if candidate != selected_provider
             ]
@@ -864,6 +909,10 @@ class ContentService:
                 "task_id": str(task_id) if task_id else None,
                 "provider_route_order": list(options.get("provider_route_order", [selected_provider])),
                 "status": "reserved",
+                **({
+                    "estimated_project_cost_usd": str(estimated_project_cost_usd),
+                    "max_project_cost_usd": str(estimated_cost_cap_usd),
+                } if estimated_project_cost_usd is not None and estimated_cost_cap_usd is not None else {}),
             }
             await self.session.commit()
         else:
@@ -875,11 +924,23 @@ class ContentService:
             }
 
         try:
+            video_settings = get_settings()
+            scene_video_graph = copy.deepcopy(SCENE_VIDEO_WORKFLOW_GRAPH)
+            for graph_node in scene_video_graph["nodes"]:
+                if graph_node["node_key"] == "wait":
+                    graph_node.setdefault("configuration", {})["seconds"] = (
+                        video_settings.scene_video_poll_interval_seconds
+                    )
+                elif graph_node["node_key"] == "poll":
+                    execution_settings = graph_node.setdefault("execution_settings", {})
+                    execution_settings["max_retries"] = video_settings.scene_video_max_poll_attempts
+                    execution_settings["backoff_seconds"] = video_settings.scene_video_poll_interval_seconds
             await self.ensure_workflow(
                 SCENE_VIDEO_WORKFLOW_NAME,
-                SCENE_VIDEO_WORKFLOW_GRAPH,
+                scene_video_graph,
                 company_id=scope.company_id,
                 connection_id=None,
+                refresh_scene_video_poll_settings=True,
             )
             workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
             execution, _created = await self._execution_service.execute_workflow(
@@ -1072,6 +1133,7 @@ class ContentService:
         *,
         company_id: uuid.UUID,
         connection_id: uuid.UUID | None,
+        refresh_scene_video_poll_settings: bool = False,
     ) -> Workflow:
         """Idempotently ensure a published workflow bound to the given connection.
 
@@ -1103,6 +1165,72 @@ class ContentService:
                     if node.configuration.get("connection_id")
                 }
                 if connection_id is None or str(connection_id) in used_connections:
+                    if not refresh_scene_video_poll_settings:
+                        return workflow
+                    current_nodes, current_edges = await load_version_graph(
+                        self.session, workflow.current_version_id
+                    )
+                    desired_nodes = {item["node_key"]: item for item in bound_graph["nodes"]}
+                    current_by_key = {item.node_key: item for item in current_nodes}
+                    wait_node = current_by_key.get("wait")
+                    poll_node = current_by_key.get("poll")
+                    desired_wait = desired_nodes.get("wait", {})
+                    desired_poll = desired_nodes.get("poll", {})
+                    wait_changed = bool(
+                        wait_node is not None
+                        and (wait_node.configuration or {}).get("seconds")
+                        != (desired_wait.get("configuration") or {}).get("seconds")
+                    )
+                    poll_settings = (poll_node.execution_settings or {}) if poll_node else {}
+                    desired_poll_settings = desired_poll.get("execution_settings") or {}
+                    poll_changed = bool(
+                        poll_node is not None
+                        and any(
+                            poll_settings.get(key) != desired_poll_settings.get(key)
+                            for key in ("max_retries", "backoff_seconds")
+                        )
+                    )
+                    if not (wait_changed or poll_changed):
+                        return workflow
+                    # Preserve operator-customized nodes/edges and update only
+                    # the two scheduling controls owned by environment config.
+                    nodes_payload = []
+                    for item in current_nodes:
+                        node_payload = {
+                            "node_key": item.node_key,
+                            "node_type": item.node_type,
+                            "name": item.name,
+                            "configuration": dict(item.configuration or {}),
+                            "input_mapping": dict(item.input_mapping or {}),
+                            "output_mapping": dict(item.output_mapping or {}),
+                            "execution_settings": dict(item.execution_settings or {}),
+                        }
+                        if item.node_key == "wait":
+                            node_payload["configuration"]["seconds"] = (
+                                desired_wait.get("configuration") or {}
+                            ).get("seconds")
+                        if item.node_key == "poll":
+                            for key in ("max_retries", "backoff_seconds"):
+                                node_payload["execution_settings"][key] = desired_poll_settings.get(key)
+                        nodes_payload.append(node_payload)
+                    edges_payload = [
+                        {
+                            "from_key": source,
+                            "to_key": target,
+                            "condition_expression": condition,
+                            "edge_order": index,
+                        }
+                        for index, (source, target, condition) in enumerate(current_edges)
+                    ]
+                    await self._workflow_service.update_workflow(
+                        workflow.id,
+                        company_id=company_id,
+                        nodes=nodes_payload,
+                        edges=edges_payload,
+                    )
+                    workflow.status = WorkflowDefinitionStatus.DRAFT.value
+                    await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
+                    await self.session.refresh(workflow)
                     return workflow
             scope = CompanyScope(company_id=company_id, principal=_system_principal())
             await self._workflow_service.update_workflow(
@@ -1111,6 +1239,7 @@ class ContentService:
                 nodes=bound_graph["nodes"],
                 edges=bound_graph["edges"],
             )
+            workflow.status = WorkflowDefinitionStatus.DRAFT.value
             await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
             await self.session.refresh(workflow)
             return workflow

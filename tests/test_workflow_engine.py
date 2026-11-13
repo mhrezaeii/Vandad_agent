@@ -622,3 +622,28 @@ async def test_workflow_llm_operation_is_bound_to_agent_task_spend_ceiling(
     assert usage is not None
     assert usage.status == "settled"
     assert usage.actual_cost_usd == Decimal("0.20")
+
+
+
+def test_scene_video_transient_error_is_translated_for_workflow_retry():
+    from app.integrations.providers.base import ProviderTransientError
+    from app.integrations.video.base import SceneVideoTransientError
+    from app.workflows.nodes_content import _translate_scene_video_error
+
+    with pytest.raises(ProviderTransientError) as error:
+        _translate_scene_video_error(
+            SceneVideoTransientError("Submit outcome unknown.", code="provider_submission_unknown")
+        )
+    assert error.value.code == "provider_submission_unknown"
+
+
+def test_scene_video_permanent_error_is_translated_for_workflow_failure():
+    from app.integrations.providers.base import ProviderPermanentError
+    from app.integrations.video.base import SceneVideoPermanentError
+    from app.workflows.nodes_content import _translate_scene_video_error
+
+    with pytest.raises(ProviderPermanentError) as error:
+        _translate_scene_video_error(
+            SceneVideoPermanentError("Invalid model request.", code="provider_invalid_request")
+        )
+    assert error.value.code == "provider_invalid_request"

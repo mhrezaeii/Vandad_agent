@@ -39,7 +39,8 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "input_tokens", "output_tokens", "total_cost", "cost",
         "total_cost_usd", "cost_usd", "model", "latency_ms",
         "attempts", "provider_request_id", "currency", "routing_attempts",
-        "fallback_used",
+        "fallback_used", "estimated_scene_cost_usd", "reported_scene_cost_usd",
+        "scene_predictions",
     }
     safe: dict[str, Any] = {}
     for key, value in payload.items():
@@ -48,6 +49,29 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
         if key == "fallback_used":
             if isinstance(value, bool):
                 safe[key] = value
+            continue
+        if key == "scene_predictions":
+            if isinstance(value, list):
+                safe_predictions = []
+                for item in value[:100]:
+                    if not isinstance(item, dict):
+                        continue
+                    safe_item: dict[str, Any] = {}
+                    for field in (
+                        "scene_index", "prediction_id", "provider_job_id", "model_id", "status",
+                        "estimated_cost_usd", "reported_cost_usd", "submission_outcome",
+                    ):
+                        field_value = item.get(field)
+                        if isinstance(field_value, bool) or field_value is None:
+                            continue
+                        if isinstance(field_value, (str, int, float)):
+                            safe_item[field] = (
+                                redact_text(str(field_value))[:160]
+                                if isinstance(field_value, str)
+                                else field_value
+                            )
+                    safe_predictions.append(safe_item)
+                safe[key] = safe_predictions
             continue
         if isinstance(value, bool):
             continue

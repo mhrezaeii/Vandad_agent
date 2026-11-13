@@ -82,6 +82,15 @@ async def _require_project(engine, execution: WorkflowExecution, project_id: uui
     return project
 
 
+def _translate_scene_video_error(exc: Exception) -> None:
+    from app.integrations.video.base import SceneVideoPermanentError, SceneVideoTransientError
+
+    if isinstance(exc, SceneVideoTransientError):
+        raise ProviderTransientError(exc.message, code=exc.code) from exc
+    if isinstance(exc, SceneVideoPermanentError):
+        raise ProviderPermanentError(exc.message, code=exc.code) from exc
+
+
 # ------------------------------------------------------------- update_project
 async def _last_provider_output(engine, execution: WorkflowExecution) -> dict | None:
     """Latest completed provider step output within this execution."""
@@ -377,7 +386,11 @@ async def _prepare_scenes(
         or settings.scene_video_provider
     )
     service = _scene_service(engine)
-    jobs = await service.prepare_scenes(project, scenario, provider_id=str(provider_id))
+    try:
+        jobs = await service.prepare_scenes(project, scenario, provider_id=str(provider_id))
+    except Exception as exc:
+        _translate_scene_video_error(exc)
+        raise
     engine._log(  # noqa: SLF001
         execution,
         "info",
@@ -399,7 +412,11 @@ async def _submit_scene_videos(
     project_id = _project_id(params, node)
     project = await _require_project(engine, execution, project_id)
     service = _scene_service(engine)
-    summary = await service.submit_pending(project, execution_id=execution.id)
+    try:
+        summary = await service.submit_pending(project, execution_id=execution.id)
+    except Exception as exc:
+        _translate_scene_video_error(exc)
+        raise
     engine._log(  # noqa: SLF001
         execution,
         "info",
@@ -419,8 +436,12 @@ async def _poll_scene_videos(
 
     # A failed scene with retry budget left is reset to ``pending`` by the poll
     # handler; submitting before polling is what actually retries it.
-    await service.submit_pending(project, execution_id=execution.id)
-    summary = await service.poll_jobs(project)
+    try:
+        await service.submit_pending(project, execution_id=execution.id)
+        summary = await service.poll_jobs(project)
+    except Exception as exc:
+        _translate_scene_video_error(exc)
+        raise
     if not summary["all_terminal"]:
         raise ProviderTransientError(
             "Scene videos are still generating.", code="scene_generation_in_progress"
@@ -449,7 +470,11 @@ async def _retrieve_scene_videos(
     project_id = _project_id(params, node)
     project = await _require_project(engine, execution, project_id)
     service = _scene_service(engine)
-    summary = await service.retrieve_completed(project, execution_id=execution.id)
+    try:
+        summary = await service.retrieve_completed(project, execution_id=execution.id)
+    except Exception as exc:
+        _translate_scene_video_error(exc)
+        raise
     if summary["failed"]:
         raise ProviderPermanentError(
             "One or more scene videos could not be downloaded.", code="scene_download_failed"

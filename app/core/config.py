@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -101,6 +101,21 @@ class Settings(BaseSettings):
     scene_video_apimaster_resolution: Literal["480P", "720P", "1080P"] = "720P"
     scene_video_apimaster_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     scene_video_apimaster_download_allowed_hosts: str = ""
+
+    # WaveSpeed LTX-2.3 is opt-in. Its POST submit is never retried after an
+    # ambiguous transport/server failure because a prediction may be billable.
+    scene_video_wavespeed_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SCENE_VIDEO_WAVESPEED_API_KEY", "WAVESPEED_API_KEY"),
+    )
+    scene_video_wavespeed_base_url: str = "https://api.wavespeed.ai/api/v3"
+    scene_video_wavespeed_model: str = "wavespeed-ai/ltx-2.3/text-to-video"
+    scene_video_wavespeed_resolution: Literal["480p", "720p", "1080p"] = "480p"
+    scene_video_wavespeed_aspect_ratio: Literal["16:9", "9:16"] = "9:16"
+    scene_video_wavespeed_duration_seconds: int | None = Field(default=None, ge=5, le=20)
+    scene_video_wavespeed_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    scene_video_wavespeed_max_project_cost_usd: float = Field(default=0.10, gt=0, le=100)
+    scene_video_wavespeed_download_allowed_hosts: str = ""
 
     # Optional generic HTTP contract for a provider the operator is authorised
     # to use. Disabled unless ``SCENE_VIDEO_HTTP_BASE_URL`` is set. The key is

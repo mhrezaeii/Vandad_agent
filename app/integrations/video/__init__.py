@@ -26,6 +26,7 @@ from app.integrations.video.base import (
 )
 from app.integrations.video.generic_http import GenericHttpConfig, GenericHttpSceneVideoProvider
 from app.integrations.video.mock import MockSceneVideoProvider
+from app.integrations.video.wavespeed import WaveSpeedConfig, WaveSpeedSceneVideoProvider
 
 
 class SceneVideoProviderRegistryError(Exception):
@@ -98,6 +99,10 @@ class SceneVideoProviderRegistry:
                 duration > provider.max_duration_seconds for duration in required_durations
             ):
                 continue
+            if provider.supported_durations is not None and any(
+                duration not in provider.supported_durations for duration in required_durations
+            ):
+                continue
             if (
                 required_aspect_ratio
                 and provider.supported_aspect_ratios is not None
@@ -166,6 +171,8 @@ def build_scene_video_registry(
     include_mock: bool = True,
     http_config: GenericHttpConfig | None = None,
     apimaster_config: APIMasterConfig | None = None,
+    wavespeed_config: WaveSpeedConfig | None = None,
+    wavespeed_composition_provider: SceneVideoProvider | None = None,
     mock_provider: MockSceneVideoProvider | None = None,
 ) -> SceneVideoProviderRegistry:
     """Build the scene-video registry.
@@ -181,6 +188,10 @@ def build_scene_video_registry(
         registry.register(GenericHttpSceneVideoProvider(http_config))
     if apimaster_config is not None:
         registry.register(APIMasterSceneVideoProvider(apimaster_config))
+    if wavespeed_config is not None:
+        registry.register(WaveSpeedSceneVideoProvider(
+            wavespeed_config, composition_provider=wavespeed_composition_provider
+        ))
     return registry
 
 
@@ -206,5 +217,7 @@ __all__ = [
     "SceneVideoQualityResult",
     "SceneVideoTransientError",
     "SceneVideoValidation",
+    "WaveSpeedConfig",
+    "WaveSpeedSceneVideoProvider",
     "build_scene_video_registry",
 ]

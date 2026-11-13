@@ -8,6 +8,7 @@ from app.integrations.video import (
     APIMasterConfig,
     GenericHttpConfig,
     SceneVideoProviderRegistry,
+    WaveSpeedConfig,
     build_scene_video_registry,
 )
 
@@ -76,10 +77,37 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             ),
         )
 
+    wavespeed_config: WaveSpeedConfig | None = None
+    wavespeed_key = getattr(settings, "scene_video_wavespeed_api_key", None)
+    if wavespeed_key and wavespeed_key.strip():
+        wavespeed_config = WaveSpeedConfig(
+            api_key=wavespeed_key.strip(),
+            base_url=getattr(settings, "scene_video_wavespeed_base_url", "https://api.wavespeed.ai/api/v3"),
+            model=getattr(settings, "scene_video_wavespeed_model", "wavespeed-ai/ltx-2.3/text-to-video"),
+            resolution=getattr(settings, "scene_video_wavespeed_resolution", "480p"),
+            aspect_ratio=getattr(settings, "scene_video_wavespeed_aspect_ratio", "9:16"),
+            duration_seconds=getattr(settings, "scene_video_wavespeed_duration_seconds", None),
+            timeout_seconds=getattr(settings, "scene_video_wavespeed_timeout_seconds", 60.0),
+            poll_interval_seconds=getattr(settings, "scene_video_poll_interval_seconds", 2.0),
+            max_poll_attempts=getattr(settings, "scene_video_max_poll_attempts", 600),
+            download_allowed_hosts=tuple(
+                host.strip()
+                for host in getattr(settings, "scene_video_wavespeed_download_allowed_hosts", "").split(",")
+                if host.strip()
+            ),
+        )
+
+    composition_provider = None
+    if http_config is not None and http_config.compose_path and http_config.quality_path:
+        from app.integrations.video.generic_http import GenericHttpSceneVideoProvider
+        composition_provider = GenericHttpSceneVideoProvider(http_config)
+
     registry = build_scene_video_registry(
         include_mock=not getattr(settings, "is_production", False),
         http_config=http_config,
         apimaster_config=apimaster_config,
+        wavespeed_config=wavespeed_config,
+        wavespeed_composition_provider=composition_provider,
     )
     selected = getattr(settings, "scene_video_provider", "mock")
     if getattr(settings, "is_production", False) and selected == "mock":
