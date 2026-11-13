@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -104,7 +104,10 @@ class Settings(BaseSettings):
 
     # WaveSpeed LTX-2.3 is opt-in. Its POST submit is never retried after an
     # ambiguous transport/server failure because a prediction may be billable.
-    scene_video_wavespeed_api_key: str | None = None
+    scene_video_wavespeed_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SCENE_VIDEO_WAVESPEED_API_KEY", "WAVESPEED_API_KEY"),
+    )
     scene_video_wavespeed_base_url: str = "https://api.wavespeed.ai/api/v3"
     scene_video_wavespeed_model: str = "wavespeed-ai/ltx-2.3/text-to-video"
     scene_video_wavespeed_resolution: Literal["480p", "720p", "1080p"] = "480p"
