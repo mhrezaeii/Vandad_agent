@@ -23,6 +23,7 @@ from app.models import (
     Company,
     ProjectStatus,
     ProviderUsageRecord,
+    WorkflowExecution,
 )
 from app.security.authorization import CompanyScope, Principal
 from app.services.content_service import (
@@ -248,7 +249,15 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
         return SimpleNamespace(id=uuid.uuid4())
 
     async def fake_execute_workflow(*args, **kwargs):
-        return SimpleNamespace(id=uuid.uuid4()), True
+        execution = WorkflowExecution(
+            company_id=company.id,
+            workflow_name="scene-video-routing-test",
+            workflow_type="video_production",
+            status="running",
+        )
+        db_session.add(execution)
+        await db_session.flush()
+        return execution, True
 
     monkeypatch.setattr(content_service, "ensure_workflow", fake_ensure_workflow)
     monkeypatch.setattr(content_service, "_require_published", fake_require_published)
