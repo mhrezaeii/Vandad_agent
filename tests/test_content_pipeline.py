@@ -19,6 +19,7 @@ from app.integrations.video import (
     SceneVideoProviderRegistry,
 )
 from app.models import (
+    AgentTask,
     Company,
     ProjectStatus,
     ProviderUsageRecord,
@@ -223,6 +224,21 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
         "scenes": [{"duration_seconds": 5.0}],
     }
     project.scene_options = {"requires_reference_image": False}
+    task_id = uuid.uuid4()
+    db_session.add(
+        AgentTask(
+            id=task_id,
+            company_id=company.id,
+            agent_key="video_production",
+            capability="video.scene.generate",
+            title="Ordered provider fallback test",
+            status="running",
+            priority=50,
+            input_payload={"project_id": str(project.id)},
+            max_attempts=3,
+            spend_ceiling_usd=Decimal("1.50"),
+        )
+    )
     await db_session.commit()
 
     async def fake_ensure_workflow(*args, **kwargs):
@@ -245,12 +261,13 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
         scope=_scope(company.id),
         provider_id="unhealthy",
         provider_fallbacks=["healthy"],
+        task_id=task_id,
     )
 
     assert updated.scene_video_provider == "healthy"
     assert updated.scene_options["provider_route_order"] == ["healthy", "unhealthy"]
     assert updated.cost_metadata["provider_id"] == "healthy"
-    assert updated.cost_metadata["task_id"] is None
+    assert updated.cost_metadata["task_id"] == str(task_id)
     assert updated.cost_metadata["provider_route_order"] == ["healthy", "unhealthy"]
 
     reservation = await db_session.scalar(
@@ -260,7 +277,7 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
     )
     assert reservation is not None
     assert reservation.provider_id == "healthy"
-    assert reservation.task_id is None
+    assert reservation.task_id == task_id
 
 
 # ------------------------------------------------------------- subtitles
