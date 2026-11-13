@@ -56,8 +56,8 @@ async def test_wavespeed_health_submit_poll_and_download_contract():
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, str(request.url)))
-        if request.method == "GET" and request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"model_id": MODEL}]})
+        if request.method == "GET" and request.url.path.endswith("/balance"):
+            return httpx.Response(200, json={"data": {"balance": 5.0}})
         if request.method == "POST" and request.url.path.endswith("/" + MODEL):
             body = json.loads(request.content)
             assert body == {
