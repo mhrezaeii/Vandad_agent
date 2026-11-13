@@ -105,3 +105,9 @@ def test_wavespeed_uses_explicit_generic_http_finalizer_when_both_paths_configur
     provider = build_video_registry_from_settings(settings).get("wavespeed")
     assert provider.supports_composition is True
     assert provider.supports_quality_review is True
+
+
+
+def test_wavespeed_api_key_accepts_legacy_environment_name():
+    settings = Settings(WAVESPEED_API_KEY="legacy-test-key", _env_file=None)
+    assert settings.scene_video_wavespeed_api_key == "legacy-test-key"
