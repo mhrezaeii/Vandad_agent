@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from types import SimpleNamespace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import httpx
 import pytest
