@@ -69,6 +69,11 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
     display_name = "APIMaster"
     requires_network = True
     supports_reference_image = True
+    input_modalities = ("text", "image")
+    supported_resolutions = ("480P", "720P", "1080P")
+    supports_seed = True
+    max_prompt_characters = 5000
+    max_reference_images = 1
     supports_lipsync = False
     min_duration_seconds = 2
     max_duration_seconds = 30
@@ -78,6 +83,11 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
     def __init__(self, config: APIMasterConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
         self.model_id = config.model
+        self.supported_aspect_ratios = (
+            ("adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9")
+            if config.route == "native"
+            else ("adaptive", "16:9", "9:16", "1:1", "4:3", "3:4")
+        )
         self._client_factory = client_factory
 
     async def check_health(self) -> SceneVideoHealthResult:
@@ -127,10 +137,15 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
         # durations, so normalize by truncating the fractional part (5.4 -> 5)
         # instead of rejecting an otherwise valid scene request.
         duration = int(raw_duration)
-        if not request.prompt.strip() or len(request.prompt) > 5000:
+        if not request.prompt.strip() or len(request.prompt) > self.max_prompt_characters:
             raise SceneVideoPermanentError(
-                "APIMaster requires a prompt containing 1 to 5000 characters.",
+                f"APIMaster requires a prompt containing 1 to {self.max_prompt_characters} characters.",
                 code="provider_invalid_prompt",
+            )
+        if request.aspect_ratio not in self.supported_aspect_ratios:
+            raise SceneVideoPermanentError(
+                "APIMaster does not support the requested aspect ratio on this route.",
+                code="provider_invalid_aspect_ratio",
             )
 
         body: dict[str, Any] = {
