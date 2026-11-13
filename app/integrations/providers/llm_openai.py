@@ -44,7 +44,15 @@ class LlmOpenAiProvider(ProviderAdapter):
     provider_id = "llm_openai"
     display_name = "OpenAI-compatible LLM"
     description = "Chat completions against any OpenAI-compatible endpoint."
-    capabilities = frozenset({ProviderCapability.EXECUTION, ProviderCapability.HEALTH_CHECK})
+    capabilities = frozenset(
+        {
+            ProviderCapability.EXECUTION,
+            ProviderCapability.HEALTH_CHECK,
+            # validate_connection delegates to the live /models health probe,
+            # so activation and validation endpoints work for LLM connections.
+            ProviderCapability.CONNECTION_VALIDATION,
+        }
+    )
     credential_requirements = (
         ProviderCredentialRequirement("api_key", required=True, description="Bearer API key."),
     )
@@ -78,9 +86,38 @@ class LlmOpenAiProvider(ProviderAdapter):
             headers["Authorization"] = f"Bearer {context.credential.reveal()}"
 
         started = time.perf_counter()
-        status, response_payload = await self._post_json(
-            context, f"{base_url}/chat/completions", body, headers
-        )
+        # Some OpenAI models reject request parameters the adapter sends by
+        # default (e.g. `max_tokens` instead of `max_completion_tokens`, or a
+        # non-default `temperature`). Each rejection is a definitive 400 — the
+        # request was never accepted, so nothing was billed — and the payload
+        # is corrected at most once per offending parameter before resending.
+        for _correction in range(3):
+            status, response_payload = await self._post_json(
+                context, f"{base_url}/chat/completions", body, headers
+            )
+            if status != 400 or not isinstance(response_payload, dict):
+                break
+            error = response_payload.get("error") or {}
+            code = error.get("code")
+            message = str(error.get("message") or "")
+            if (
+                code == "unsupported_parameter"
+                and "max_tokens" in payload
+                and "max_tokens" in message
+                and "max_completion_tokens" not in payload
+            ):
+                payload.pop("max_tokens")
+                if max_tokens is not None:
+                    payload["max_completion_tokens"] = min(
+                        int(max_tokens), MAX_COMPLETION_TOKENS_LIMIT
+                    )
+                body = json.dumps(payload).encode("utf-8")
+                continue
+            if code == "unsupported_value" and "temperature" in payload and "temperature" in message:
+                payload.pop("temperature")
+                body = json.dumps(payload).encode("utf-8")
+                continue
+            break
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         if status == 429:
@@ -237,4 +274,9 @@ class LlmOpenAiProvider(ProviderAdapter):
                         "LLM returned non-JSON content.", code="llm_bad_response"
                     ) from exc
                 return response.status_code, {}
-        return response.status_code, {}
+        # Non-200 POST bodies (e.g. 400 error payloads) are returned so callers
+        # can distinguish rejection reasons without re-reading the stream.
+        try:
+            return response.status_code, response.json()
+        except json.JSONDecodeError:
+            return response.status_code, {}

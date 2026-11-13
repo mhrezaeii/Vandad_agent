@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
@@ -97,6 +97,31 @@ class ProviderBudgetService:
         self.session = session
         self.audit = AuditService(session)
 
+    @staticmethod
+    def _require_same_operation(
+        record: ProviderUsageRecord, provider_id: str, operation: str
+    ) -> None:
+        if record.provider_id != provider_id or record.operation != operation:
+            raise ConflictError("Provider usage idempotency key was reused for a different operation.")
+
+    async def _existing_for_key(
+        self, company_id: uuid.UUID, idempotency_key: str
+    ) -> list[ProviderUsageRecord]:
+        """Lock and return every record of the logical-operation key family.
+
+        A retry appends ``#2``, ``#3``, ... to the key, so the family match
+        covers the original key and all its suffixed retries.
+        """
+        return list((await self.session.scalars(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.company_id == company_id,
+                or_(
+                    ProviderUsageRecord.idempotency_key == idempotency_key,
+                    ProviderUsageRecord.idempotency_key.like(f"{idempotency_key}#%"),
+                ),
+            ).with_for_update()
+        )).all())
+
     async def reserve(
         self, company_id: uuid.UUID, provider_id: str, operation: str, *,
         idempotency_key: str, model: str | None = None, require_budget: bool = False,
@@ -113,18 +138,23 @@ class ProviderBudgetService:
             if task is None:
                 raise ConflictError("The agent task budget context is unavailable.")
 
-        existing = await self.session.scalar(
-            select(ProviderUsageRecord).where(
-                ProviderUsageRecord.company_id == company_id,
-                ProviderUsageRecord.idempotency_key == idempotency_key,
-            ).with_for_update()
-        )
-        if existing is not None:
-            if existing.provider_id != provider_id or existing.operation != operation:
-                raise ConflictError("Provider usage idempotency key was reused for a different operation.")
-            raise ConflictError(
-                "This provider operation already has a usage reservation; duplicate paid execution is blocked."
-            )
+        existing_rows = await self._existing_for_key(company_id, idempotency_key)
+        if existing_rows:
+            for row in existing_rows:
+                self._require_same_operation(row, provider_id, operation)
+            active = [row for row in existing_rows if row.status == "reserved"]
+            if active:
+                raise ConflictError(
+                    "This provider operation already has a usage reservation; "
+                    "duplicate paid execution is blocked."
+                )
+            # Every prior attempt settled (fully accounted): the retry
+            # reserves under the next free suffixed key on this logical op.
+            taken = {row.idempotency_key for row in existing_rows}
+            suffix = 2
+            while f"{idempotency_key}#{suffix}" in taken:
+                suffix += 1
+            idempotency_key = f"{idempotency_key}#{suffix}"
 
         budget = await self.session.scalar(
             select(CompanyProviderBudget).where(
@@ -141,6 +171,7 @@ class ProviderBudgetService:
             ).with_for_update()
         )
         if existing is not None:
+            self._require_same_operation(existing, provider_id, operation)
             raise ConflictError(
                 "This provider operation already has a usage reservation; "
                 "duplicate paid execution is blocked."

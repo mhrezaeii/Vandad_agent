@@ -21,6 +21,7 @@ from app.integrations.video import (
 from app.models import (
     AgentTask,
     Company,
+    CompanyProviderBudget,
     ProjectStatus,
     ProviderUsageRecord,
     WorkflowExecution,
@@ -227,7 +228,6 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
     project.scenario = {
         "scenes": [{"duration_seconds": 5.0}],
     }
-    project.scene_options = {"requires_reference_image": False}
     task_id = uuid.uuid4()
     db_session.add(
         AgentTask(
@@ -290,6 +290,126 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
     assert reservation is not None
     assert reservation.provider_id == "healthy"
     assert reservation.task_id == task_id
+
+
+# ------------------------------------------------------- single-scene mode
+async def test_single_scene_project_allows_generation_only_provider(
+    db_session, content_service, company_and_platform, monkeypatch
+):
+    company, _platform = company_and_platform
+
+    class GenerationOnlyProvider(MockSceneVideoProvider):
+        provider_id = "wavespeed"
+        supports_composition = False
+        supports_quality_review = False
+
+        def estimate_cost_usd(self, duration_seconds):
+            return f"{0.10 * float(duration_seconds) / 5:.6f}"
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(GenerationOnlyProvider())
+    content_service.scene_video_registry = registry
+
+    from app.models import CompanyProviderBudget
+
+    db_session.add(
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="wavespeed",
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("2.00"),
+            enabled=True,
+        )
+    )
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    project = await content_service.create_project(
+        scope=_scope(company.id),
+        brand_id=brand.id,
+        topic="Single scene passthrough routing",
+    )
+    project.video_mode = "scene"
+    project.status = ProjectStatus.APPROVED.value
+    project.scenario = {"scenes": [{"duration_seconds": 5.0}]}
+    await db_session.commit()
+
+    async def fake_ensure_workflow(*args, **kwargs):
+        return None
+
+    async def fake_require_published(*args, **kwargs):
+        return SimpleNamespace(id=uuid.uuid4())
+
+    async def fake_execute_workflow(*args, **kwargs):
+        execution = WorkflowExecution(
+            company_id=company.id,
+            workflow_name="single-scene-routing-test",
+            workflow_type="video_production",
+            status="running",
+        )
+        db_session.add(execution)
+        await db_session.flush()
+        return execution, True
+
+    monkeypatch.setattr(content_service, "ensure_workflow", fake_ensure_workflow)
+    monkeypatch.setattr(content_service, "_require_published", fake_require_published)
+    monkeypatch.setattr(
+        content_service._execution_service, "execute_workflow", fake_execute_workflow
+    )
+
+    updated = await content_service.generate_scene_video(
+        project.id, scope=_scope(company.id), provider_id="wavespeed"
+    )
+
+    assert updated.scene_video_provider == "wavespeed"
+    assert updated.scene_options["production_mode"] == "single_scene_passthrough"
+    assert updated.cost_metadata["provider_id"] == "wavespeed"
+    assert updated.cost_metadata["estimated_project_cost_usd"] == "0.100000"
+
+
+async def test_multi_scene_project_accepts_generation_only_provider(
+    db_session, content_service, company_and_platform, monkeypatch
+):
+    """Multi-scene projects assemble locally, so a generation-only provider works.
+
+    Regression: multi-scene used to require a provider composition capability
+    and failed closed without one, blocking text-to-video providers entirely.
+    """
+    company, _platform = company_and_platform
+
+    class GenerationOnlyProvider(MockSceneVideoProvider):
+        provider_id = "wavespeed"
+        supports_composition = False
+        supports_quality_review = False
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(GenerationOnlyProvider())
+    content_service.scene_video_registry = registry
+    db_session.add(
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="wavespeed",
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("1.00"),
+            enabled=True,
+        )
+    )
+    await db_session.commit()
+
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    project = await content_service.create_project(
+        scope=_scope(company.id),
+        brand_id=brand.id,
+        topic="Multi scene capability gate",
+    )
+    project.video_mode = "scene"
+    project.status = ProjectStatus.APPROVED.value
+    project.scenario = {"scenes": [{"duration_seconds": 5.0} for _ in range(3)]}
+    await db_session.commit()
+
+    project = await content_service.generate_scene_video(
+        project.id, scope=_scope(company.id), provider_id="wavespeed"
+    )
+    assert project.scene_video_provider == "wavespeed"
+    assert project.scene_options["production_mode"] == "local_composition"
 
 
 # ------------------------------------------------------------- subtitles
@@ -355,7 +475,6 @@ async def test_wavespeed_estimated_project_cap_blocks_before_reservation(
     project.video_mode = "scene"
     project.status = ProjectStatus.APPROVED.value
     project.scenario = {"scenes": [{"duration_seconds": 10.0}]}
-    project.scene_options = {"requires_reference_image": False}
     await db_session.commit()
 
     with pytest.raises(UnprocessableEntityError, match="exceeds the configured per-project cap"):
@@ -369,3 +488,76 @@ async def test_wavespeed_estimated_project_cap_blocks_before_reservation(
         )
     )
     assert reservation is None
+
+
+async def test_script_failure_syncs_project_and_retry_creates_new_execution(
+    db_session, content_service, workflow_factory, company_and_platform
+):
+    """A failed script workflow must surface as script_failed and allow retry.
+
+    Regression: the project used to stay stuck in script_generating forever,
+    and the idempotency key kept returning the dead execution on retry.
+    """
+    company, _platform = company_and_platform
+    from app.models import CompanyProviderBudget
+
+    db_session.add(
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="llm_openai",
+            monthly_limit_usd=Decimal("10.00"),
+            per_operation_limit_usd=Decimal("1.00"),
+            enabled=True,
+        )
+    )
+    await db_session.commit()
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    project = await content_service.create_project(
+        scope=_scope(company.id), brand_id=brand.id, topic="تست شکست سناریو"
+    )
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        if "/chat/completions" in str(request.url):
+            return httpx.Response(400, json={"error": {"message": "permanent rejection"}})
+        return httpx.Response(404, json={})
+
+    content_service.registry.replace(LlmOpenAiProvider(client_factory=lambda t: httpx.AsyncClient(
+        transport=httpx.MockTransport(failing_handler), timeout=t)))
+
+    project = await content_service.generate_script(
+        project.id, scope=_scope(company.id), connection_id=await _llm_connection(db_session, company.id)
+    )
+    first_execution_id = project.script_workflow_execution_id
+    assert project.status == ProjectStatus.SCRIPT_GENERATING.value
+    await db_session.commit()  # the engine runs in a separate session below
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: PLC0415
+    from sqlalchemy.pool import NullPool  # noqa: PLC0415
+
+    from tests.conftest import TEST_DATABASE_URL  # noqa: PLC0415
+
+    test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    worker = _make_worker(
+        session_factory=None, redis_manager=None, registry=content_service.registry,
+        executor=content_service.executor, queue=None, concurrency=1,
+    )
+    worker.session_factory = async_sessionmaker(bind=test_engine, expire_on_commit=False, autoflush=False)
+    async with worker.session_factory() as session:
+        engine2 = WorkflowEngine(session, content_service.registry, content_service.executor, _keybox())
+        result = await engine2.run_execution(first_execution_id, company_id=company.id)
+        await session.commit()
+    await test_engine.dispose()
+    assert result.outcome == "failed"
+
+    await db_session.refresh(project)
+    assert project.status == ProjectStatus.SCRIPT_FAILED.value
+    assert project.error_message and "failed" in project.error_message
+
+    # Retry: the terminal-failed execution no longer blocks a new one.
+    project = await content_service.generate_script(
+        project.id, scope=_scope(company.id), connection_id=await _llm_connection(db_session, company.id)
+    )
+    assert project.status == ProjectStatus.SCRIPT_GENERATING.value
+    assert project.script_workflow_execution_id != first_execution_id
+    old_execution = await db_session.get(WorkflowExecution, first_execution_id)
+    assert old_execution.idempotency_key is None

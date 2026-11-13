@@ -402,6 +402,42 @@ async def test_idempotency_key_returns_existing_execution(
     assert first.id == second.id
 
 
+async def test_terminal_failure_releases_idempotency_key_for_retry(
+    db_session, engine_pair, workflow_factory, company_and_platform
+):
+    registry, executor = engine_pair
+    company, _platform = company_and_platform
+    workflow = await workflow_factory(company.id, [_diagnostic_node()], [])
+    service = WorkflowExecutionService(db_session, registry, executor, _keybox(), queue=None)
+    scope = SimpleNamespace(company_id=company.id)
+
+    first, created1 = await service.execute_workflow(
+        workflow.id, scope=scope, idempotency_key="order-42", enqueue=False
+    )
+    assert created1
+    first.status = WorkflowStatus.FAILED.value
+    await db_session.flush()
+
+    # A terminal failure must not poison the retry: a fresh execution claims
+    # the key and the failed row keeps its history without it.
+    second, created2 = await service.execute_workflow(
+        workflow.id, scope=scope, idempotency_key="order-42", enqueue=False
+    )
+    assert created2
+    assert second.id != first.id
+    assert second.idempotency_key == "order-42"
+    assert first.idempotency_key is None
+
+    # A completed execution still replays instead of re-running paid work.
+    second.status = WorkflowStatus.COMPLETED.value
+    await db_session.flush()
+    third, created3 = await service.execute_workflow(
+        workflow.id, scope=scope, idempotency_key="order-42", enqueue=False
+    )
+    assert not created3
+    assert third.id == second.id
+
+
 async def test_cancellation_between_nodes(
     db_session, wf_engine, workflow_factory, execution_factory, company_and_platform
 ):

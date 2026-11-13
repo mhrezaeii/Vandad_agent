@@ -163,3 +163,113 @@ async def test_llm_model_not_found_is_a_definitive_rejection():
             "url": "https://llm.example.com/v1", "model": "missing", "params": {"user": "x"},
         }))
     assert exc_info.value.code == "llm_http_404"
+
+
+def test_llm_provider_declares_connection_validation_capability():
+    """validate_connection delegates to the live health probe, so the adapter
+    must advertise CONNECTION_VALIDATION; otherwise LLM connections can never
+    be activated through the validation service (regression: activation
+    rejected with provider_unsupported despite a working validate_connection).
+    """
+    from app.integrations.providers.base import ProviderCapability
+
+    adapter = LlmOpenAiProvider()
+    assert ProviderCapability.CONNECTION_VALIDATION in adapter.capabilities
+
+
+async def test_llm_validate_connection_uses_health_probe():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert str(request.url).endswith("/models")
+        assert request.headers.get("authorization") == "Bearer secret-key-123"
+        return httpx.Response(200, json={"data": []})
+
+    adapter = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    result = await adapter.validate_connection(_context("validate", {
+        "url": "https://llm.example.com/v1",
+    }))
+    assert result.success is True
+
+
+async def test_llm_retries_with_max_completion_tokens_on_unsupported_parameter():
+    """Newer OpenAI models reject `max_tokens`; the adapter falls back once.
+
+    Regression: knowledge/scenario extraction 400-failed against models that
+    require `max_completion_tokens`, so no LLM operation could succeed.
+    """
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8")) if request.content else {}
+        calls.append(body)
+        if "max_tokens" in body:
+            return httpx.Response(400, json={
+                "error": {
+                    "message": "Unsupported parameter: 'max_tokens' is not supported with this model.",
+                    "type": "invalid_request_error",
+                    "code": "unsupported_parameter",
+                }
+            })
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "پاسخ"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "model": "gpt-6-luna",
+        })
+
+    provider = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    result = await provider.execute(_context(
+        "execute",
+        {
+            "url": "https://api.openai.com/v1",
+            "model": "gpt-6-luna",
+            "params": {"user": "سلام"},
+            "max_tokens": 2000,
+        },
+    ))
+
+    assert result.success is True
+    assert len(calls) == 2
+    assert "max_tokens" in calls[0] and "max_completion_tokens" not in calls[0]
+    assert calls[1].get("max_completion_tokens") == 2000
+    assert "max_tokens" not in calls[1]
+
+
+async def test_llm_drops_temperature_on_unsupported_value_and_retries():
+    """Models that only support the default temperature get a corrected retry."""
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8")) if request.content else {}
+        calls.append(body)
+        if "temperature" in body:
+            return httpx.Response(400, json={
+                "error": {
+                    "message": "Unsupported value: 'temperature' does not support 0.1 with this model.",
+                    "type": "invalid_request_error",
+                    "code": "unsupported_value",
+                }
+            })
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "پاسخ"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "model": "gpt-6-luna",
+        })
+
+    provider = LlmOpenAiProvider(client_factory=_mock_factory(handler))
+    result = await provider.execute(_context(
+        "execute",
+        {
+            "url": "https://api.openai.com/v1",
+            "model": "gpt-6-luna",
+            "params": {"user": "سلام"},
+            "temperature": 0.1,
+            "max_tokens": 2000,
+        },
+    ))
+
+    assert result.success is True
+    assert len(calls) == 2
+    assert "temperature" in calls[0]
+    assert "temperature" not in calls[1]
+    # The max_tokens correction never fired: this model accepted the parameter.
+    assert "max_tokens" in calls[1]

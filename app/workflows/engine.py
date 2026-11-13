@@ -307,9 +307,22 @@ class WorkflowEngine:
                     await asyncio.sleep(delay)
                     continue
             except ProviderError as exc:
+                # Non-transient failures are definitive: re-dispatching the
+                # node would re-run billable work (e.g. re-reserve the same
+                # budget key) instead of retrying anything.
                 last_error = exc
+                break
             except ExpressionError as exc:
                 last_error = ProviderError(f"Expression error: {exc}", code="invalid_expression")
+                break
+            except Exception as exc:  # noqa: BLE001 - a crashing node must not wedge the run
+                from app.security.redaction import redact_text  # noqa: PLC0415
+
+                last_error = ProviderError(
+                    f"{type(exc).__name__} crashed the node: {redact_text(str(exc))[:300]}",
+                    code="node_crashed",
+                )
+                break
             else:
                 context["nodes"][node.node_key] = {"status": "completed", "output": output}
                 step.status = WorkflowStepStatus.COMPLETED.value
@@ -554,6 +567,12 @@ class WorkflowEngine:
             }
         self._log(execution, "info", f"Execution outcome: {execution.status}.")
         await self.session.flush()
+        if outcome in (ExecutionOutcome.FAILED, ExecutionOutcome.TIMED_OUT):
+            # Content workflows must not leave their owning project stuck in an
+            # in-flight status (e.g. script_generating) after a failure.
+            from app.workflows.nodes_content import sync_project_workflow_failure  # noqa: PLC0415
+
+            await sync_project_workflow_failure(self, execution)
 
     # --------------------------------------------------------------- helpers
     def _evaluate_condition(

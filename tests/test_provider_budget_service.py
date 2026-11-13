@@ -577,3 +577,33 @@ async def test_settled_video_usage_keeps_prediction_ids_and_cost_breakdown(db_se
     assert reservation.usage_payload["scene_predictions"][0]["model_id"] == (
         "wavespeed-ai/ltx-2.3/text-to-video"
     )
+
+
+async def test_settled_operation_allows_suffixed_retry_reservation(db_session):
+    """A fully settled (accounted) reservation must not block a new attempt.
+
+    Regression: the knowledge-extraction budget key stayed blocked forever
+    after its first completed call, so identical re-extractions 409'd.
+    """
+    company = Company(name="Retry After Settle", slug=f"retry-settle-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        company.id,
+        "llm_openai",
+        monthly_limit_usd=Decimal("5.00"),
+        per_operation_limit_usd=Decimal("1.00"),
+    )
+    key = f"logical-op-{uuid.uuid4()}"
+
+    first = await service.reserve(company.id, "llm_openai", "complete", idempotency_key=key)
+    await service.settle(first, usage={"cost_usd": "0.02", "currency": "USD"})
+    second = await service.reserve(company.id, "llm_openai", "complete", idempotency_key=key)
+
+    assert second.id != first.id
+    assert second.status == "reserved"
+    assert second.idempotency_key == f"{key}#2"
+    # The live (reserved) duplicate is still blocked while in flight.
+    with pytest.raises(ConflictError, match="duplicate paid execution"):
+        await service.reserve(company.id, "llm_openai", "complete", idempotency_key=key)

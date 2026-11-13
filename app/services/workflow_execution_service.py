@@ -41,6 +41,12 @@ TERMINAL_STATUSES = frozenset(
      WorkflowStatus.TIMED_OUT.value, WorkflowStatus.SUCCEEDED.value}
 )
 DEFAULT_MAX_QUEUE_ATTEMPTS = 5
+# Terminal outcomes whose idempotency key is released so the same logical
+# operation can be retried. Completed executions are NOT here: they replay as
+# idempotent hits so a retry can never re-run paid work.
+RETRYABLE_FAILURE_STATUSES = frozenset(
+    {WorkflowStatus.FAILED.value, WorkflowStatus.CANCELLED.value, WorkflowStatus.TIMED_OUT.value}
+)
 
 
 class WorkflowExecutionService:
@@ -74,7 +80,11 @@ class WorkflowExecutionService:
         """Create and enqueue an execution; returns (execution, created).
 
         With an ``idempotency_key`` that already exists for the company, the
-        existing execution is returned (created=False) and nothing is enqueued.
+        existing execution is returned (created=False) and nothing is enqueued
+        while it is still non-terminal (pending/queued/running/waiting). A
+        terminal match (failed/cancelled/timed_out) never blocks a retry: its
+        key is released and a fresh execution is created, so callers can
+        re-drive a failed operation through the same idempotency scope.
         """
         workflow = await self.session.get(Workflow, workflow_id)
         if workflow is None or workflow.company_id != scope.company_id:
@@ -91,7 +101,13 @@ class WorkflowExecutionService:
         if idempotency_key:
             existing = await self._find_by_idempotency_key(scope.company_id, idempotency_key)
             if existing is not None:
-                return existing, False
+                if existing.status not in RETRYABLE_FAILURE_STATUSES:
+                    return existing, False
+                # A terminal failure (failed/cancelled/timed_out) must not
+                # poison retries: release the unique key so the new execution
+                # below can claim it. The failed row keeps its history.
+                existing.idempotency_key = None
+                await self.session.flush()
 
         execution = WorkflowExecution(
             workflow_name=workflow.name,
