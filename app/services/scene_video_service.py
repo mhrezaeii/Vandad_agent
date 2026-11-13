@@ -449,7 +449,7 @@ class SceneVideoService:
 
         reservation.usage_payload = {
             **(reservation.usage_payload or {}),
-            "model": "wavespeed-ai/ltx-2.3/text-to-video",
+            "model": str(metadata.get("provider_id") or reservation.provider_id),
             "scene_predictions": predictions,
             "estimated_scene_cost_usd": str(estimated_total),
             "reported_scene_cost_usd": str(reported_total),
