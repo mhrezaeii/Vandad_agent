@@ -5,9 +5,9 @@ import pytest
 from scripts.wavespeed_smoke_test import (
     WaveSpeedError,
     _data,
+    _https_url,
     _prediction_id,
     _video_url,
-    _https_url,
     build_payload,
 )
 
