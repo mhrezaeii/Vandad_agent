@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     scene_video_http_supported_modalities: str = "video"
     scene_video_http_supported_languages: str = ""
     scene_video_http_supported_aspect_ratios: str = ""
+    scene_video_http_supported_resolutions: str = ""
+    scene_video_http_supports_seed: bool = False
+    scene_video_http_max_prompt_characters: int | None = Field(default=None, gt=0)
     scene_video_http_min_duration_seconds: float | None = Field(default=None, gt=0)
     scene_video_http_max_duration_seconds: float | None = Field(default=None, gt=0)
 
