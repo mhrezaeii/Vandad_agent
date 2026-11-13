@@ -319,7 +319,27 @@ def test_cost_parser_only_accepts_usd_denominated_values():
     assert parse_reported_cost({"cost": "0.42"}) is None
 
 
-async def test_scene_video_model_capability_catalog_is_exposed(client):
+async def test_scene_video_model_capability_catalog_is_exposed(client, app):
+    from app.integrations.video import (
+        APIMasterConfig,
+        APIMasterSceneVideoProvider,
+        MockSceneVideoProvider,
+        SceneVideoProviderRegistry,
+    )
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(MockSceneVideoProvider())
+    registry.register(
+        APIMasterSceneVideoProvider(
+            APIMasterConfig(
+                api_key="catalog-test-key",
+                base_url="https://api.apimaster.test",
+                model="wan3.0-video-prime",
+            )
+        )
+    )
+    app.state.scene_video_registry = registry
+
     response = await client.get("/api/v1/providers/scene-video/models")
     assert response.status_code == 200, response.text
     models = response.json()
@@ -328,6 +348,21 @@ async def test_scene_video_model_capability_catalog_is_exposed(client):
     assert mock["supports_composition"] is True
     assert mock["supported_languages"] is None
     assert mock["max_duration_seconds"] is None
+    assert mock["input_modalities"] == ["text"]
+    assert mock["supported_resolutions"] is None
+    assert mock["supports_seed"] is False
+    assert mock["max_reference_images"] == 0
+
+    apimaster = next(item for item in models if item["provider_id"] == "apimaster")
+    assert apimaster["model_id"] == "wan3.0-video-prime"
+    assert apimaster["supports_health_check"] is True
+    assert apimaster["input_modalities"] == ["text", "image"]
+    assert apimaster["supported_resolutions"] == ["480P", "720P", "1080P"]
+    assert apimaster["supports_seed"] is True
+    assert apimaster["max_prompt_characters"] == 5000
+    assert apimaster["max_reference_images"] == 1
+    assert apimaster["min_duration_seconds"] == 2
+    assert apimaster["max_duration_seconds"] == 30
 
 
 async def test_budget_api_is_company_scoped(client, db_session):
