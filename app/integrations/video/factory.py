@@ -91,7 +91,9 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             poll_interval_seconds=getattr(settings, "scene_video_poll_interval_seconds", 2.0),
             max_poll_attempts=getattr(settings, "scene_video_max_poll_attempts", 600),
             download_allowed_hosts=tuple(
-                host.strip() for host in getattr(settings, "scene_video_wavespeed_download_allowed_hosts", "").split(",") if host.strip()
+                host.strip()
+                for host in getattr(settings, "scene_video_wavespeed_download_allowed_hosts", "").split(",")
+                if host.strip()
             ),
         )
 
