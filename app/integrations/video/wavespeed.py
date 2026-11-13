@@ -466,11 +466,11 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
                 data = await self._request_json(
                     "POST", f"{self._base()}/billings/search", json=payload
                 )
-            except SceneVideoPermanentError as exc:
-                if exc.code == "provider_unauthorized":
-                    # Developer keys may run predictions but cannot read itemized billing.
-                    return None
-                raise
+            except SceneVideoPermanentError:
+                # Billing access is optional; a Developer key may run predictions
+                # but cannot read itemized charges. Never fail video generation
+                # merely because billing reconciliation is unavailable.
+                return None
             except SceneVideoTransientError:
                 if attempt == 2:
                     return None
