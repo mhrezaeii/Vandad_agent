@@ -7,6 +7,7 @@ scene generation, provider-side composition, quality review and artifact deliver
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from math import gcd
 from typing import Any
 
@@ -25,6 +26,7 @@ from app.integrations.providers import (
 )
 from app.models import (
     BrandPlatformLink,
+    CompanyProviderBudget,
     ContentBrand,
     ContentBrandStatus,
     ContentProject,
@@ -836,6 +838,44 @@ class ContentService:
                     details=[{"field": "provider_id", "value": selected_provider}],
                 ) from exc
             selected_provider = selected.provider_id
+            estimated_project_cost_usd: Decimal | None = None
+            estimated_cost_cap_usd: Decimal | None = None
+            if selected_provider == "wavespeed":
+                from app.core.config import get_settings
+
+                estimate_cost = getattr(selected, "estimate_cost_usd", None)
+                if callable(estimate_cost):
+                    estimated_project_cost_usd = sum(
+                        (Decimal(str(estimate_cost(duration))) for duration in required_durations),
+                        Decimal("0"),
+                    )
+                    estimated_cost_cap_usd = Decimal(str(
+                        get_settings().scene_video_wavespeed_max_project_cost_usd
+                    ))
+                    if estimated_project_cost_usd > estimated_cost_cap_usd:
+                        raise UnprocessableEntityError(
+                            "Estimated WaveSpeed project cost exceeds the configured per-project cap.",
+                            details=[
+                                {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
+                                {"field": "max_project_cost_usd", "value": str(estimated_cost_cap_usd)},
+                            ],
+                        )
+                    company_budget = await self.session.scalar(
+                        select(CompanyProviderBudget).where(
+                            CompanyProviderBudget.company_id == scope.company_id,
+                            CompanyProviderBudget.provider_id == selected_provider,
+                        )
+                    )
+                    if company_budget is not None and estimated_project_cost_usd > Decimal(
+                        str(company_budget.per_operation_limit_usd)
+                    ):
+                        raise ConflictError(
+                            "Estimated WaveSpeed project cost exceeds the company's per-operation budget.",
+                            details=[
+                                {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
+                                {"field": "per_operation_limit_usd", "value": str(company_budget.per_operation_limit_usd)},
+                            ],
+                        )
             route_order = [selected_provider] + [
                 candidate for candidate in ordered_ids if candidate != selected_provider
             ]
@@ -864,6 +904,10 @@ class ContentService:
                 "task_id": str(task_id) if task_id else None,
                 "provider_route_order": list(options.get("provider_route_order", [selected_provider])),
                 "status": "reserved",
+                **({
+                    "estimated_project_cost_usd": str(estimated_project_cost_usd),
+                    "max_project_cost_usd": str(estimated_cost_cap_usd),
+                } if estimated_project_cost_usd is not None and estimated_cost_cap_usd is not None else {}),
             }
             await self.session.commit()
         else:
