@@ -285,3 +285,45 @@ async def test_wavespeed_retries_safe_get_with_retry_after(monkeypatch):
     assert result["balance"] == 5.0
     assert calls == 2
     assert delays == [3.0]
+
+
+
+async def test_wavespeed_reconciles_actual_cost_from_prediction_billing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/predictions/pred-77/result"):
+            return httpx.Response(200, json={"data": {
+                "id": "pred-77", "status": "completed",
+                "outputs": ["https://cdn.example.test/video.mp4"],
+            }})
+        if request.method == "POST" and request.url.path.endswith("/billings/search"):
+            body = json.loads(request.content)
+            assert body["prediction_uuids"] == ["pred-77"]
+            return httpx.Response(200, json={"data": {"items": [{
+                "billing_type": "deduct",
+                "price": 0.11,
+                "prediction": {"uuid": "pred-77"},
+            }]}})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    status = await provider.get_generation_status("wavespeed:pred-77")
+    assert status.state == SceneJobState.COMPLETED.value
+    assert status.raw["cost_usd"] == "0.110000"
+    assert status.raw["currency"] == "USD"
+
+
+async def test_wavespeed_falls_back_to_estimate_when_billing_permission_is_missing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/predictions/pred-78/result"):
+            return httpx.Response(200, json={"data": {
+                "id": "pred-78", "status": "completed",
+                "outputs": ["https://cdn.example.test/video.mp4"],
+            }})
+        if request.method == "POST" and request.url.path.endswith("/billings/search"):
+            return httpx.Response(403, json={"message": "billing role required"})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    status = await provider.get_generation_status("wavespeed:pred-78")
+    assert status.state == SceneJobState.COMPLETED.value
+    assert "cost_usd" not in status.raw
