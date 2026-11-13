@@ -584,3 +584,41 @@ async def test_submit_pending_blocks_paid_generation_when_live_health_probe_is_u
     assert provider.jobs == {}
     jobs = await _jobs(db_session, project.id)
     assert all(job.attempts == 0 for job in jobs)
+
+
+
+async def test_ambiguous_provider_submit_is_marked_unknown_and_never_retried(
+    db_session, content_service, company_and_platform
+):
+    from app.integrations.video import SceneVideoTransientError
+
+    company, _ = company_and_platform
+    project = await _project(db_session, content_service, company.id)
+    provider = MockSceneVideoProvider()
+    calls = 0
+
+    async def ambiguous_submit(_request):
+        nonlocal calls
+        calls += 1
+        raise SceneVideoTransientError(
+            "Submission outcome unknown.", code="provider_submission_unknown"
+        )
+
+    provider.generate_video = ambiguous_submit
+    service = _service(db_session, provider)
+    await service.prepare_scenes(project, _scenario(count=1), provider_id="mock")
+
+    with pytest.raises(SceneVideoTransientError):
+        await service.submit_pending(project)
+
+    job = (await _jobs(db_session, project.id))[0]
+    assert calls == 1
+    assert job.status == SceneVideoJobStatus.FAILED.value
+    assert job.attempts == job.max_attempts
+    assert job.submission_metadata["submission_outcome"] == "unknown"
+    assert job.submission_metadata["reconcile_before_retry"] is True
+    await db_session.commit()
+
+    result = await service.submit_pending(project)
+    assert result["submitted"] == 0
+    assert calls == 1
