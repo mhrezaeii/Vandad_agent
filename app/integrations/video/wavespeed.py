@@ -112,7 +112,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         started = time.perf_counter()
         try:
             payload = await self._request_json("GET", f"{self._base()}/models")
-            models = payload.get("data")
+            models = payload if isinstance(payload, list) else payload.get("data")
             if not isinstance(models, list):
                 raise SceneVideoPermanentError(
                     "WaveSpeed returned an invalid model catalogue.", code="provider_bad_response"
@@ -378,10 +378,14 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
             raise SceneVideoPermanentError("Empty WaveSpeed prediction identifier.", code="provider_job_not_found")
         return value
 
+    def estimate_cost_usd(self, duration_seconds: float) -> str:
+        """Return the published LTX-2.3 estimate; never treat it as actual spend."""
+        amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * float(duration_seconds) / 5.0
+        return f"{amount:.6f}"
+
     def _estimate_cost(self, payload: dict[str, Any]) -> str:
         duration = self._number(payload.get("duration")) or 5.0
-        amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * duration / 5.0
-        return f"{amount:.6f}"
+        return self.estimate_cost_usd(duration)
 
     @staticmethod
     def _reported_cost(payload: dict[str, Any]) -> str | None:
