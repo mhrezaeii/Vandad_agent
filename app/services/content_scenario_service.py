@@ -78,9 +78,8 @@ class ContentScenarioService:
             connection is None
             or connection.company_id != company_id
             or connection.provider != "llm_openai"
-            or connection.status not in {"connected", "degraded"}
         ):
-            raise ConflictError("A validated llm_openai connection for this company is required.")
+            raise ConflictError("An llm_openai connection for this company is required.")
 
         platform_ids = list((await self.session.scalars(
             select(BrandPlatformLink.platform_id).where(
