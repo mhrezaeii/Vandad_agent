@@ -122,7 +122,12 @@ def test_production_identity_rejects_wrong_proxy_secret():
 
 
 def test_production_identity_rejects_invalid_company_membership_claim():
-    request = _request(companies=["not-a-uuid"])
+    request = _request()
+    request.scope["headers"] = [
+        (key, value)
+        for key, value in request.scope["headers"]
+        if key != b"x-auth-request-company-ids"
+    ] + [(b"x-auth-request-company-ids", b"not-a-uuid")]
     with pytest.raises(UnauthorizedError, match="invalid company claim"):
         get_principal(request)
 
