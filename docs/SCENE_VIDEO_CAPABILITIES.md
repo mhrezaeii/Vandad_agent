@@ -22,6 +22,20 @@ does not mean unlimited support. For the generic HTTP adapter, declare
 Seed and dimension requests outside that declared contract fail before the
 provider request is sent.
 
+## Ordered scene-video provider selection
+
+For a scene project, the requested provider is tried first, followed by the
+explicit provider_fallbacks list. Before dispatch, the registry checks each
+candidate in order for the project's required capabilities and a live health
+probe. The selected provider and remaining route order are persisted with the
+project's scene options and budget metadata.
+
+A project is pinned to the selected provider once generation jobs are accepted.
+The service does not silently mix vendors midway through a storyboard or
+composition; that would mix job IDs, polling semantics, media retrieval and
+billing contracts. The LLM execution path has its own safe request-level
+fallback rules documented in PROVIDER_ROUTING.md.
+
 ## APIMaster
 
 The APIMaster adapter declares the limits implemented by this adapter:
