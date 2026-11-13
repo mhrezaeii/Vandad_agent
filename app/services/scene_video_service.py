@@ -102,10 +102,9 @@ class SceneVideoService:
     ) -> list[SceneVideoJob]:
         """Create one job per scene; idempotent on ``(project, scene_index)``."""
         provider = self.registry.get(provider_id)
-        if not provider.supports_quality_review:
-            raise ConflictError(
-                "The selected AI provider must support final-video quality review before generation."
-            )
+        # Scene generation and final quality review are separate capabilities.
+        # A generation-only provider may prepare and submit clips; finalization
+        # still fails closed unless composition and quality review are configured.
         existing = {
             job.scene_index: job
             for job in (
@@ -239,7 +238,18 @@ class SceneVideoService:
             except SceneVideoTransientError as exc:
                 job.error_code = exc.code
                 job.error_message = exc.message
-                if job.attempts >= job.max_attempts:
+                if exc.code == "provider_submission_unknown":
+                    # No upstream idempotency contract exists. Persist an
+                    # operator-reconciliation state and exhaust automatic
+                    # retries so a lost POST response cannot double-bill.
+                    job.attempts = job.max_attempts
+                    job.status = SceneVideoJobStatus.FAILED.value
+                    job.submission_metadata = {
+                        **(job.submission_metadata or {}),
+                        "submission_outcome": "unknown",
+                        "reconcile_before_retry": True,
+                    }
+                elif job.attempts >= job.max_attempts:
                     job.status = SceneVideoJobStatus.FAILED.value
                 await self.session.flush()
                 first_transient = first_transient or exc
