@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from app.integrations.video import (
+    build_scene_video_registry,
     GenericHttpConfig,
     GenericHttpSceneVideoProvider,
     SceneJobState,
@@ -17,7 +18,6 @@ from app.integrations.video import (
     SceneVideoTransientError,
     WaveSpeedConfig,
     WaveSpeedSceneVideoProvider,
-    build_scene_video_registry,
 )
 
 
