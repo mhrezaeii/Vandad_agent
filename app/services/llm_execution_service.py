@@ -132,6 +132,8 @@ class LlmExecutionService:
                         "model": metadata.get("model") or candidate.model,
                         "latency_ms": result.latency_ms,
                         "attempts": attempts,
+                        "routing_attempts": attempts,
+                        "fallback_used": candidate_index > 0,
                     },
                 )
                 await self.session.commit()
@@ -157,7 +159,11 @@ class LlmExecutionService:
             await ProviderBudgetService(self.session).settle(
                 reservation,
                 error_code=error.code or "llm_failure",
-                usage={"attempts": attempts},
+                usage={
+                    "attempts": attempts,
+                    "routing_attempts": attempts,
+                    "fallback_used": candidate_index > 0,
+                },
             )
             await self.session.commit()
             # Do not let the workflow engine retry an ambiguous paid request.
@@ -173,6 +179,8 @@ class LlmExecutionService:
                 "cost_usd": "0",
                 "currency": "USD",
                 "attempts": attempts,
+                "routing_attempts": attempts,
+                "fallback_used": len(candidates) > 1,
                 "model": candidates[-1].model,
             },
         )
