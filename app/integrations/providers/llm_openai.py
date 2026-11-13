@@ -48,7 +48,7 @@ class LlmOpenAiProvider(ProviderAdapter):
     credential_requirements = (
         ProviderCredentialRequirement("api_key", required=True, description="Bearer API key."),
     )
-    default_operation_idempotent = True  # completions are stateless GET-like calls
+    default_operation_idempotent = False  # billable completions have no provider idempotency key
 
     async def execute(self, context: ProviderExecutionContext) -> ProviderResult:
         config = context.configuration
