@@ -158,7 +158,10 @@ class LlmExecutionService:
                 error_code=error.code or "llm_failure",
                 usage={"attempts": attempts},
             )
-            raise error
+            # Do not let the workflow engine retry an ambiguous paid request.
+            raise ProviderPermanentError(
+                error.message, code=error.code or "llm_failure"
+            ) from error
 
         # Every attempted candidate returned a definitive rejection or failed
         # before connecting, so no provider accepted this logical request.
@@ -171,10 +174,18 @@ class LlmExecutionService:
                 "model": candidates[-1].model,
             },
         )
-        raise last_safe_error or ProviderPermanentError(
-            "Every configured LLM route candidate rejected the request.",
-            code="llm_fallback_exhausted",
-        )
+        raise ProviderPermanentError(
+            (
+                last_safe_error.message
+                if last_safe_error is not None
+                else "Every configured LLM route candidate rejected the request."
+            ),
+            code=(
+                last_safe_error.code
+                if last_safe_error is not None
+                else "llm_fallback_exhausted"
+            ),
+        ) from last_safe_error
 
     async def _get_connection(
         self, connection_id: uuid.UUID, company_id: uuid.UUID
