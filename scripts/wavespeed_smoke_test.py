@@ -17,6 +17,14 @@ from urllib.parse import urlsplit
 
 import httpx
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # The application settings loader still reads .env; this standalone script
+    # also works with explicitly exported environment variables.
+    pass
+
 API_BASE = os.environ.get("SCENE_VIDEO_WAVESPEED_BASE_URL", "https://api.wavespeed.ai/api/v3").rstrip("/")
 MODEL_ID = os.environ.get("SCENE_VIDEO_WAVESPEED_MODEL", "wavespeed-ai/ltx-2.3/text-to-video")
 TIMEOUT_SECONDS = float(os.environ.get("SCENE_VIDEO_WAVESPEED_TIMEOUT_SECONDS", "60"))
