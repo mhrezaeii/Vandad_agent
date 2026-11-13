@@ -122,6 +122,8 @@ async def test_ordered_model_fallback_uses_one_budget_reservation(
     assert usage is not None
     assert usage.status == "settled"
     assert usage.actual_cost_usd == Decimal("0.25")
+    assert usage.usage_payload["fallback_used"] is True
+    assert usage.usage_payload["routing_attempts"] == 2
 
 
 async def test_ordered_fallback_can_switch_to_another_tenant_connection(
@@ -231,6 +233,8 @@ async def test_ambiguous_timeout_does_not_try_fallback_and_keeps_budget_unknown(
     assert usage is not None
     assert usage.status == "unknown"
     assert usage.reserved_amount_usd == Decimal("1.000000")
+    assert usage.usage_payload["fallback_used"] is False
+    assert usage.usage_payload["routing_attempts"] == 1
 
 
 async def test_all_definitive_rejections_release_the_logical_reservation(
