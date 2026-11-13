@@ -875,11 +875,26 @@ class ContentService:
             }
 
         try:
+            import copy
+            from app.core.config import get_settings
+
+            video_settings = get_settings()
+            scene_video_graph = copy.deepcopy(SCENE_VIDEO_WORKFLOW_GRAPH)
+            for graph_node in scene_video_graph["nodes"]:
+                if graph_node["node_key"] == "wait":
+                    graph_node.setdefault("configuration", {})["seconds"] = (
+                        video_settings.scene_video_poll_interval_seconds
+                    )
+                elif graph_node["node_key"] == "poll":
+                    execution_settings = graph_node.setdefault("execution_settings", {})
+                    execution_settings["max_retries"] = video_settings.scene_video_max_poll_attempts
+                    execution_settings["backoff_seconds"] = video_settings.scene_video_poll_interval_seconds
             await self.ensure_workflow(
                 SCENE_VIDEO_WORKFLOW_NAME,
-                SCENE_VIDEO_WORKFLOW_GRAPH,
+                scene_video_graph,
                 company_id=scope.company_id,
                 connection_id=None,
+                refresh_scene_video_poll_settings=True,
             )
             workflow = await self._require_published(SCENE_VIDEO_WORKFLOW_NAME, scope.company_id)
             execution, _created = await self._execution_service.execute_workflow(
@@ -1072,6 +1087,7 @@ class ContentService:
         *,
         company_id: uuid.UUID,
         connection_id: uuid.UUID | None,
+        refresh_scene_video_poll_settings: bool = False,
     ) -> Workflow:
         """Idempotently ensure a published workflow bound to the given connection.
 
@@ -1103,6 +1119,66 @@ class ContentService:
                     if node.configuration.get("connection_id")
                 }
                 if connection_id is None or str(connection_id) in used_connections:
+                    if not refresh_scene_video_poll_settings:
+                        return workflow
+                    current_nodes, current_edges = await load_version_graph(
+                        self.session, workflow.current_version_id
+                    )
+                    desired_nodes = {item["node_key"]: item for item in bound_graph["nodes"]}
+                    current_by_key = {item.node_key: item for item in current_nodes}
+                    wait_node = current_by_key.get("wait")
+                    poll_node = current_by_key.get("poll")
+                    desired_wait = desired_nodes.get("wait", {})
+                    desired_poll = desired_nodes.get("poll", {})
+                    wait_changed = bool(
+                        wait_node is not None
+                        and (wait_node.configuration or {}).get("seconds")
+                        != (desired_wait.get("configuration") or {}).get("seconds")
+                    )
+                    poll_settings = (poll_node.execution_settings or {}) if poll_node else {}
+                    desired_poll_settings = desired_poll.get("execution_settings") or {}
+                    poll_changed = bool(
+                        poll_node is not None
+                        and any(
+                            poll_settings.get(key) != desired_poll_settings.get(key)
+                            for key in ("max_retries", "backoff_seconds")
+                        )
+                    )
+                    if not (wait_changed or poll_changed):
+                        return workflow
+                    # Preserve operator-customized nodes/edges and update only
+                    # the two scheduling controls owned by environment config.
+                    nodes_payload = []
+                    for item in current_nodes:
+                        node_payload = {
+                            "node_key": item.node_key,
+                            "node_type": item.node_type,
+                            "name": item.name,
+                            "configuration": dict(item.configuration or {}),
+                            "input_mapping": dict(item.input_mapping or {}),
+                            "output_mapping": dict(item.output_mapping or {}),
+                            "execution_settings": dict(item.execution_settings or {}),
+                        }
+                        if item.node_key == "wait":
+                            node_payload["configuration"]["seconds"] = (
+                                desired_wait.get("configuration") or {}
+                            ).get("seconds")
+                        if item.node_key == "poll":
+                            for key in ("max_retries", "backoff_seconds"):
+                                node_payload["execution_settings"][key] = desired_poll_settings.get(key)
+                        nodes_payload.append(node_payload)
+                    edges_payload = [
+                        {"from_key": source, "to_key": target, "condition_expression": condition}
+                        for source, target, condition in current_edges
+                    ]
+                    await self._workflow_service.update_workflow(
+                        workflow.id,
+                        company_id=company_id,
+                        nodes=nodes_payload,
+                        edges=edges_payload,
+                    )
+                    await self._workflow_service.publish_workflow(workflow.id, company_id=company_id)
+                    await self.session.refresh(workflow)
                     return workflow
             scope = CompanyScope(company_id=company_id, principal=_system_principal())
             await self._workflow_service.update_workflow(
