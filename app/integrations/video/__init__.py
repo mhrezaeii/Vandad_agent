@@ -99,6 +99,10 @@ class SceneVideoProviderRegistry:
                 duration > provider.max_duration_seconds for duration in required_durations
             ):
                 continue
+            if provider.supported_durations is not None and any(
+                duration not in provider.supported_durations for duration in required_durations
+            ):
+                continue
             if (
                 required_aspect_ratio
                 and provider.supported_aspect_ratios is not None
