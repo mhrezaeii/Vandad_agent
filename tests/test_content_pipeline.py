@@ -11,7 +11,7 @@ import httpx
 import pytest
 from sqlalchemy import select, text
 
-from app.core.exceptions import ConflictError, NotFoundError, UnprocessableEntityError
+from app.core.exceptions import NotFoundError, UnprocessableEntityError
 from app.integrations.providers.llm_openai import LlmOpenAiProvider
 from app.integrations.video import (
     MockSceneVideoProvider,
