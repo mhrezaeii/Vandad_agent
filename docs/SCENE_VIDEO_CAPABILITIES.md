@@ -57,3 +57,23 @@ to the provider's own authorization and quota checks.
 
 The adapter currently sends at most one reference image even if the upstream
 service supports more, so the catalogue reports `max_reference_images: 1`.
+
+
+## WaveSpeed LTX-2.3
+
+The `wavespeed` adapter is opt-in and implements text-to-video scene
+generation only. It supports 480p/720p/1080p, 16:9/9:16, optional seed, and
+5/10/15/20-second clips. It performs a read-only authenticated
+`GET /api/v3/models` health probe.
+
+WaveSpeed's documented model contract does not provide final storyboard
+composition or AI quality review. The adapter can delegate those two stages
+to an explicitly configured `generic_http` provider only when both
+`SCENE_VIDEO_HTTP_COMPOSE_PATH` and `SCENE_VIDEO_HTTP_QUALITY_PATH` are
+present. Otherwise, generation remains available while finalization fails
+closed. See [WAVESPEED_PROVIDER.md](WAVESPEED_PROVIDER.md).
+
+The adapter stores prediction IDs, provider status, reported USD cost when
+available, and a separately labelled published-price estimate. Missing actual
+cost never becomes zero: the existing project budget reservation remains
+unknown until reconciled.
