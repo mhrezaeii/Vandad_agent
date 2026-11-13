@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.core.exceptions import NotFoundError
 from app.integrations.providers.base import (
     ProviderPermanentError,
     ProviderResult,
@@ -318,7 +317,7 @@ async def test_fallback_connection_is_tenant_scoped(
     await db_session.commit()
 
     registry, executor = engine_pair
-    with pytest.raises(NotFoundError, match="LLM connection not found"):
+    with pytest.raises(ProviderPermanentError, match="fallback connection is unavailable"):
         await LlmExecutionService(
             db_session, registry, executor, key_box
         ).execute(
