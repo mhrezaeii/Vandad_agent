@@ -315,6 +315,7 @@ class SceneVideoService:
                         **(job.submission_metadata or {}),
                         "submission_outcome": "rejected",
                     }
+                await self._record_project_video_usage(project, jobs)
                 await self.session.flush()
                 raise
             except SceneVideoTransientError as exc:
@@ -367,6 +368,7 @@ class SceneVideoService:
                         "submission_outcome": "unknown",
                         "reconcile_before_retry": True,
                     }
+                await self._record_project_video_usage(project, jobs)
                 await self.session.flush()
                 raise
 
