@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -784,12 +785,8 @@ class ContentService:
         options = dict(project.scene_options or {})
         selected_provider = provider_id or options.get("provider_id") or project.scene_video_provider
         if not selected_provider:
-            from app.core.config import get_settings
-
             selected_provider = get_settings().scene_video_provider
         if selected_provider == "mock":
-            from app.core.config import get_settings
-
             if get_settings().is_production:
                 raise ConflictError("The mock scene-video provider is forbidden in production.")
         if self.scene_video_registry is None:
