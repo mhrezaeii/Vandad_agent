@@ -403,6 +403,98 @@ async def test_generic_http_rejects_private_media_ip():
     assert exc.value.code == "provider_private_media_ip"
 
 
+async def test_generic_http_capability_contract_controls_seed_and_resolution():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(201, json={"id": "generic-job"})
+
+    provider = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(
+            base_url="https://video.example.test",
+            supported_resolutions=("1080x1920",),
+            supports_seed=True,
+            max_prompt_characters=100,
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    assert provider.input_modalities == ("text",)
+    assert provider.supported_resolutions == ("1080x1920",)
+    assert provider.supports_seed is True
+    assert provider.max_prompt_characters == 100
+    assert provider.max_reference_images == 0
+
+    await provider.generate_video(
+        SceneVideoRequest(
+            scene_id="p:0",
+            prompt="A short test prompt.",
+            duration_seconds=5,
+            width=1080,
+            height=1920,
+            aspect_ratio="9:16",
+            seed=7,
+        )
+    )
+    assert captured["body"]["seed"] == 7
+
+
+async def test_generic_http_rejects_seed_when_contract_does_not_declare_support():
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(201, json={"id": "unexpected"})
+
+    provider = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(base_url="https://video.example.test"),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    with pytest.raises(SceneVideoPermanentError, match="does not declare seed support"):
+        await provider.generate_video(
+            SceneVideoRequest(
+                scene_id="p:0",
+                prompt="A short test prompt.",
+                duration_seconds=5,
+                seed=7,
+            )
+        )
+    assert requested == []
+
+
+async def test_generic_http_rejects_undeclared_resolution_before_request():
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(201, json={"id": "unexpected"})
+
+    provider = GenericHttpSceneVideoProvider(
+        GenericHttpConfig(
+            base_url="https://video.example.test",
+            supported_resolutions=("720x1280",),
+        ),
+        client_factory=lambda timeout: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), timeout=timeout
+        ),
+    )
+    with pytest.raises(SceneVideoPermanentError, match="dimensions are not supported"):
+        await provider.generate_video(
+            SceneVideoRequest(
+                scene_id="p:0",
+                prompt="A short test prompt.",
+                duration_seconds=5,
+                width=1080,
+                height=1920,
+            )
+        )
+    assert requested == []
+
+
 # --------------------------------------------------------------- APIMaster
 async def test_apimaster_live_health_probe_uses_authenticated_read_only_models_endpoint():
     captured: dict[str, object] = {}
