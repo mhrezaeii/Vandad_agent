@@ -105,6 +105,19 @@ def _auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
 
 
+def check_balance(client: httpx.Client, api_key: str) -> float:
+    try:
+        response = client.get(f"{API_BASE}/balance", headers=_auth_headers(api_key), timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()
+        balance = _data(response.json()).get("balance")
+        amount = float(balance)
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise WaveSpeedError("Could not verify WaveSpeed account balance before paid submit.") from exc
+    if not math.isfinite(amount) or amount < 0:
+        raise WaveSpeedError("WaveSpeed returned an invalid account balance.")
+    return amount
+
+
 def submit_prediction(
     client: httpx.Client,
     api_key: str,
@@ -299,6 +312,13 @@ def main() -> int:
             follow_redirects=False,
             trust_env=False,
         ) as client:
+            balance = check_balance(client, api_key)
+            if balance < estimate:
+                print(
+                    f"WaveSpeed balance ${balance:.2f} is below the estimated charge ${estimate:.2f}; no prediction was submitted.",
+                    file=sys.stderr,
+                )
+                return 2
             prediction_id = submit_prediction(
                 client,
                 api_key,
