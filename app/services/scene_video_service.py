@@ -515,6 +515,25 @@ class SceneVideoService:
                 "cost_usd": str(sum(costs, Decimal("0"))),
                 "currency": "USD",
                 "model": str(metadata.get("provider_id") or reservation.provider_id),
+                "estimated_scene_cost_usd": str(sum(
+                    (Decimal(str((job.cost_metadata or {}).get("estimated_cost_usd", "0"))) for job in jobs),
+                    Decimal("0"),
+                )),
+                "reported_scene_cost_usd": str(sum(
+                    (Decimal(str((job.cost_metadata or {}).get("reported_cost_usd", "0"))) for job in jobs),
+                    Decimal("0"),
+                )),
+                "scene_predictions": [
+                    {
+                        "scene_index": job.scene_index,
+                        "prediction_id": (job.submission_metadata or {}).get("prediction_id"),
+                        "provider_job_id": job.provider_job_id,
+                        "status": job.provider_status or job.status,
+                        "estimated_cost_usd": (job.cost_metadata or {}).get("estimated_cost_usd"),
+                        "reported_cost_usd": (job.cost_metadata or {}).get("reported_cost_usd"),
+                    }
+                    for job in jobs
+                ],
             },
         )
         project.cost_metadata = {
