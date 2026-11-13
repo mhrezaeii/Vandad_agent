@@ -787,3 +787,33 @@ async def test_ordered_healthy_registry_skips_unhealthy_provider():
         require_quality_review=True,
     )
     assert selected.provider_id == "mock"
+
+
+
+async def test_ordered_registry_selects_apimaster_only_after_live_health_probe():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"object": "list", "data": [{"id": "wan3.0-video-prime"}]},
+        )
+
+    provider = _apimaster_provider(handler)
+    registry = SceneVideoProviderRegistry()
+    registry.register(provider)
+
+    selected = await registry.resolve_ordered_healthy(
+        ["apimaster"], require_reference_image=True
+    )
+
+    assert selected is provider
+
+
+async def test_ordered_registry_rejects_apimaster_when_live_probe_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "unauthorized"}})
+
+    registry = SceneVideoProviderRegistry()
+    registry.register(_apimaster_provider(handler))
+
+    with pytest.raises(SceneVideoProviderRegistryError, match="passes a live health probe"):
+        await registry.resolve_ordered_healthy(["apimaster"])
