@@ -129,7 +129,9 @@ async def test_wavespeed_explicit_rate_limit_is_retryable_not_ambiguous():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
             return httpx.Response(429, json={"message": "rate limited"})
-        return httpx.Response(200, json={"data": [{"model_id": MODEL}]})
+        if request.method == "GET" and request.url.path.endswith("/balance"):
+            return httpx.Response(200, json={"data": {"balance": 5.0}})
+        return httpx.Response(404)
 
     provider = _provider(handler)
     with pytest.raises(SceneVideoTransientError) as error:
