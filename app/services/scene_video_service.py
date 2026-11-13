@@ -312,6 +312,7 @@ class SceneVideoService:
 
         if submitted or any(job.provider_job_id for job in jobs):
             project.status = ProjectStatus.VIDEO_GENERATING.value
+        await self._record_project_video_usage(project, jobs)
         await self.session.flush()
         if first_transient is not None:
             raise first_transient
@@ -387,8 +388,78 @@ class SceneVideoService:
                 project.status = ProjectStatus.VIDEO_GENERATED.value
         else:
             project.status = ProjectStatus.VIDEO_GENERATING.value
+        await self._record_project_video_usage(project, jobs)
         await self.session.flush()
         return summary
+
+    async def _record_project_video_usage(
+        self, project: ContentProject, jobs: list[SceneVideoJob]
+    ) -> None:
+        """Persist prediction IDs, states and estimates against the project reservation."""
+        metadata = project.cost_metadata or {}
+        reservation_id = metadata.get("budget_reservation_id")
+        if not reservation_id:
+            return
+        try:
+            parsed_id = uuid.UUID(str(reservation_id))
+        except (TypeError, ValueError):
+            return
+        reservation = await self.session.scalar(
+            select(ProviderUsageRecord).where(
+                ProviderUsageRecord.id == parsed_id,
+                ProviderUsageRecord.company_id == project.company_id,
+            ).with_for_update()
+        )
+        if reservation is None or reservation.status == "settled":
+            return
+
+        predictions: list[dict[str, Any]] = []
+        estimated_total = Decimal("0")
+        reported_total = Decimal("0")
+        for job in jobs:
+            cost = job.cost_metadata or {}
+            estimated = cost.get("estimated_cost_usd")
+            reported = cost.get("reported_cost_usd")
+            if estimated is not None:
+                try:
+                    amount = Decimal(str(estimated))
+                    if amount.is_finite() and amount >= 0:
+                        estimated_total += amount
+                except (InvalidOperation, ValueError):
+                    pass
+            if reported is not None:
+                try:
+                    amount = Decimal(str(reported))
+                    if amount.is_finite() and amount >= 0:
+                        reported_total += amount
+                except (InvalidOperation, ValueError):
+                    pass
+            prediction_id = (job.submission_metadata or {}).get("prediction_id")
+            if prediction_id is None and str(job.provider_job_id or "").startswith("wavespeed:"):
+                prediction_id = str(job.provider_job_id).split(":", 1)[1]
+            predictions.append({
+                "scene_index": job.scene_index,
+                "prediction_id": str(prediction_id) if prediction_id is not None else None,
+                "provider_job_id": str(job.provider_job_id) if job.provider_job_id else None,
+                "status": job.provider_status or job.status,
+                "estimated_cost_usd": str(estimated) if estimated is not None else None,
+                "reported_cost_usd": str(reported) if reported is not None else None,
+                "submission_outcome": (job.submission_metadata or {}).get("submission_outcome"),
+            })
+
+        reservation.usage_payload = {
+            **(reservation.usage_payload or {}),
+            "model": "wavespeed-ai/ltx-2.3/text-to-video",
+            "scene_predictions": predictions,
+            "estimated_scene_cost_usd": str(estimated_total),
+            "reported_scene_cost_usd": str(reported_total),
+            "currency": "USD",
+        }
+        project.cost_metadata = {
+            **metadata,
+            "estimated_scene_cost_usd": str(estimated_total),
+            "reported_scene_cost_usd": str(reported_total),
+        }
 
     async def _settle_project_video_budget(
         self,
