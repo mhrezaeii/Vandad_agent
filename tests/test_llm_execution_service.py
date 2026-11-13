@@ -6,6 +6,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.exceptions import NotFoundError
@@ -20,6 +21,7 @@ from app.models import (
     PlatformConnection,
     ProviderUsageRecord,
 )
+from app.schemas.connection import ConnectionCreate, ConnectionUpdate
 from app.services.llm_execution_service import LlmExecutionService
 from app.services.provider_budget_service import ProviderBudgetService
 
@@ -322,4 +324,46 @@ async def test_fallback_connection_is_tenant_scoped(
             timeout_seconds=5,
             operation="test.llm.foreign_fallback",
             idempotency_key=f"llm-foreign-{uuid.uuid4()}",
+        )
+
+
+
+def test_connection_schema_accepts_ordered_llm_fallback_configuration():
+    payload = ConnectionCreate(
+        platform_id=uuid.uuid4(),
+        name="Primary LLM",
+        provider="llm_openai",
+        configuration={
+            "url": "https://llm.example.test/v1",
+            "model": "primary-model",
+            "llm_fallbacks": [{"model": "backup-model"}],
+        },
+    )
+    assert payload.configuration["llm_fallbacks"] == [{"model": "backup-model"}]
+
+    update = ConnectionUpdate(
+        configuration={"llm_fallbacks": [{"connection_id": str(uuid.uuid4())}]}
+    )
+    assert update.configuration is not None
+    assert len(update.configuration["llm_fallbacks"]) == 1
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        "not-a-list",
+        [{}],
+        [{"model": "  "}],
+        [{"connection_id": "not-a-uuid"}],
+        [{"model": "model", "unexpected": "field"}],
+        [{"model": f"model-{index}"} for index in range(6)],
+    ],
+)
+def test_connection_schema_rejects_invalid_llm_fallback_configuration(fallbacks):
+    with pytest.raises(ValidationError):
+        ConnectionCreate(
+            platform_id=uuid.uuid4(),
+            name="Primary LLM",
+            provider="llm_openai",
+            configuration={"llm_fallbacks": fallbacks},
         )
