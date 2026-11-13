@@ -214,6 +214,10 @@ async def list_scene_video_models(
             max_reference_images=provider.max_reference_images,
             min_duration_seconds=provider.min_duration_seconds,
             max_duration_seconds=provider.max_duration_seconds,
+            supported_durations=(
+                list(provider.supported_durations)
+                if provider.supported_durations is not None else None
+            ),
         )
         for provider in registry.list_providers()
     ]
