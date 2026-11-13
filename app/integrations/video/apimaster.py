@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import socket
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -20,6 +21,7 @@ import httpx
 from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
+    SceneVideoHealthResult,
     SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoQuotaExhaustedError,
@@ -70,12 +72,44 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
     supports_lipsync = False
     min_duration_seconds = 2
     max_duration_seconds = 30
+    supports_health_check = True
     _MAX_REDIRECTS = 3
 
     def __init__(self, config: APIMasterConfig, *, client_factory=None) -> None:  # noqa: ANN001
         self.config = config
         self.model_id = config.model
         self._client_factory = client_factory
+
+    async def check_health(self) -> SceneVideoHealthResult:
+        """Probe the authenticated, read-only OpenAI-compatible model catalogue."""
+        started = time.perf_counter()
+        try:
+            payload = await self._request_json(
+                "GET",
+                f"{self._base()}/v1/models",
+                timeout_seconds=max(1.0, min(10.0, self.config.timeout_seconds)),
+            )
+        except (SceneVideoTransientError, SceneVideoPermanentError) as exc:
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message=str(exc),
+                latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
+
+        if not isinstance(payload.get("data"), list):
+            return SceneVideoHealthResult(
+                provider_id=self.provider_id,
+                healthy=False,
+                message="APIMaster returned an unexpected model-catalogue response.",
+                latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
+        return SceneVideoHealthResult(
+            provider_id=self.provider_id,
+            healthy=True,
+            message="APIMaster authenticated model-catalogue endpoint is reachable.",
+            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
         raw_duration = request.duration_seconds
@@ -245,8 +279,15 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
                 code="provider_unreachable",
             ) from exc
 
-    async def _request_json(self, method: str, url: str, *, json: Any = None) -> dict[str, Any]:
-        client = self._client()
+    async def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        client = self._client(timeout_seconds=timeout_seconds)
         try:
             async with client:
                 response = await client.request(
@@ -360,11 +401,12 @@ class APIMasterSceneVideoProvider(SceneVideoProvider):
     def _base(self) -> str:
         return self.config.base_url.rstrip("/")
 
-    def _client(self) -> httpx.AsyncClient:  # noqa: ANN201
+    def _client(self, *, timeout_seconds: float | None = None) -> httpx.AsyncClient:  # noqa: ANN201
+        timeout = timeout_seconds if timeout_seconds is not None else self.config.timeout_seconds
         if self._client_factory is not None:
-            return self._client_factory(self.config.timeout_seconds)
+            return self._client_factory(timeout)
         return httpx.AsyncClient(
-            timeout=self.config.timeout_seconds,
+            timeout=timeout,
             follow_redirects=False,
         )
 
