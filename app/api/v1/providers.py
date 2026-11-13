@@ -195,6 +195,7 @@ async def list_scene_video_models(
             supports_composition=provider.supports_composition,
             supports_quality_review=provider.supports_quality_review,
             supports_health_check=provider.supports_health_check,
+            input_modalities=list(provider.input_modalities),
             supported_modalities=list(provider.supported_modalities),
             supported_languages=(
                 list(provider.supported_languages)
@@ -204,6 +205,13 @@ async def list_scene_video_models(
                 list(provider.supported_aspect_ratios)
                 if provider.supported_aspect_ratios is not None else None
             ),
+            supported_resolutions=(
+                list(provider.supported_resolutions)
+                if provider.supported_resolutions is not None else None
+            ),
+            supports_seed=provider.supports_seed,
+            max_prompt_characters=provider.max_prompt_characters,
+            max_reference_images=provider.max_reference_images,
             min_duration_seconds=provider.min_duration_seconds,
             max_duration_seconds=provider.max_duration_seconds,
         )
