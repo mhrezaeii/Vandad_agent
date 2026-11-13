@@ -8,7 +8,6 @@ import pytest
 from app.integrations.video import (
     GenericHttpConfig,
     GenericHttpSceneVideoProvider,
-    build_scene_video_registry,
     SceneJobState,
     SceneVideoCompositionRequest,
     SceneVideoPermanentError,
@@ -18,6 +17,7 @@ from app.integrations.video import (
     SceneVideoTransientError,
     WaveSpeedConfig,
     WaveSpeedSceneVideoProvider,
+    build_scene_video_registry,
 )
 
 
