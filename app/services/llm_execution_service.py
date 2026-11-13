@@ -163,7 +163,7 @@ class LlmExecutionService:
                 usage={
                     "attempts": attempts,
                     "routing_attempts": attempts,
-                    "fallback_used": candidate_index > 0,
+                    "fallback_used": not candidate.is_primary,
                 },
             )
             await self.session.commit()
