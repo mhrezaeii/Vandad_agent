@@ -93,7 +93,6 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
     supported_aspect_ratios = ("16:9", "9:16")
     min_duration_seconds = 5
     max_duration_seconds = 20
-    max_prompt_characters = 10000
     max_reference_images = 0
 
     def __init__(self, config: WaveSpeedConfig, *, client_factory=None,
@@ -157,7 +156,9 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
                 "WaveSpeed LTX-2.3 text-to-video does not accept reference images.",
                 code="provider_reference_image_unsupported",
             )
-        aspect_ratio = request.aspect_ratio or self.config.aspect_ratio
+        # The adapter's aspect ratio is an operator setting; the scene service
+        # currently supplies its contract default on every request.
+        aspect_ratio = self.config.aspect_ratio
         if aspect_ratio not in self.supported_aspect_ratios:
             raise SceneVideoPermanentError(
                 "WaveSpeed LTX-2.3 supports only 16:9 and 9:16 aspect ratios.",
@@ -177,8 +178,10 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         try:
             payload = await self._request_json("POST", f"{self._base()}/{self.config.model}", json=body)
         except SceneVideoTransientError as exc:
-            # WaveSpeed does not document an idempotency-key header. A lost
-            # POST response may already represent a paid prediction; never retry it.
+            # A documented 429 is an explicit rejection. A timeout, dropped
+            # connection, or server error may have accepted a billable POST.
+            if exc.code == "provider_rate_limited":
+                raise
             raise SceneVideoTransientError(
                 "WaveSpeed submission outcome is unknown. Prediction history must be checked before any retry.",
                 code="provider_submission_unknown",
@@ -268,7 +271,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
     async def review_video(self, request: SceneVideoQualityRequest) -> SceneVideoQualityResult:
         return await self._composition().review_video(request)
 
-    async def _request_json(self, method: str, url: str, *, json: Any = None) -> dict[str, Any]:
+    async def _request_json(self, method: str, url: str, *, json: Any = None) -> Any:
         client = self._client()
         try:
             async with client:
@@ -305,7 +308,7 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         if body.get("code") not in (None, 200):
             raise SceneVideoPermanentError("WaveSpeed returned an API-level error.", code="provider_request_failed")
         data = body.get("data", body)
-        if not isinstance(data, dict):
+        if not isinstance(data, (dict, list)):
             raise SceneVideoPermanentError("WaveSpeed response data is invalid.", code="provider_bad_response")
         return data
 
