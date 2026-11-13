@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from decimal import Decimal
 
@@ -223,6 +224,61 @@ async def test_task_budget_is_tenant_scoped(db_session):
         )
 
 
+async def test_task_spend_ceiling_is_atomic_across_concurrent_providers(session_factory):
+    company_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    async with session_factory() as session:
+        company = Company(
+            id=company_id,
+            name="Concurrent Task Budget",
+            slug=f"concurrent-task-budget-{uuid.uuid4().hex[:8]}",
+        )
+        session.add(company)
+        await session.flush()
+        task = AgentTask(
+            id=task_id,
+            company_id=company.id,
+            agent_key="content",
+            capability="content.scenario.generate",
+            title="Concurrent bounded task",
+            spend_ceiling_usd=Decimal("1.00"),
+        )
+        session.add(task)
+        await session.flush()
+        service = ProviderBudgetService(session)
+        for provider_id in ("llm_openai", "apimaster"):
+            await service.set_budget(
+                company.id,
+                provider_id,
+                monthly_limit_usd=Decimal("5.00"),
+                per_operation_limit_usd=Decimal("0.75"),
+            )
+        await session.commit()
+
+    async def reserve(provider_id: str):
+        async with session_factory() as session:
+            try:
+                record = await ProviderBudgetService(session).reserve(
+                    company_id,
+                    provider_id,
+                    "concurrent-operation",
+                    idempotency_key=f"concurrent-{provider_id}-{uuid.uuid4()}",
+                    require_budget=True,
+                    task_id=task_id,
+                )
+                await session.commit()
+                return record
+            except ConflictError:
+                await session.rollback()
+                return None
+
+    results = await asyncio.gather(
+        reserve("llm_openai"),
+        reserve("apimaster"),
+    )
+    assert sum(record is not None for record in results) == 1
+
+
 async def test_paid_operation_fails_closed_without_company_budget(db_session):
     company = Company(name="No Budget", slug=f"no-budget-{uuid.uuid4().hex[:8]}")
     db_session.add(company)
@@ -261,7 +317,6 @@ def test_cost_parser_only_accepts_usd_denominated_values():
     assert parse_reported_cost({"cost": "0.42", "currency": "USD"}) == Decimal("0.42")
     assert parse_reported_cost({"cost": "0.42", "currency": "EUR"}) is None
     assert parse_reported_cost({"cost": "0.42"}) is None
-
 
 
 async def test_scene_video_model_capability_catalog_is_exposed(client):
