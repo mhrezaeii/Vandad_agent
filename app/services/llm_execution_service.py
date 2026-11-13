@@ -267,10 +267,9 @@ class LlmExecutionService:
             override_model = overrides.get("model") if is_primary else None
             model = model_override or override_model or configured_model
             if not isinstance(model, str) or not model.strip():
-                raise ProviderPermanentError(
-                    "Every LLM route candidate must define a model.",
-                    code="invalid_configuration",
-                )
+                # A misconfigured primary must not prevent a later, valid
+                # explicitly configured fallback from being considered.
+                continue
             identity = (connection.id, model)
             if identity in seen:
                 continue
