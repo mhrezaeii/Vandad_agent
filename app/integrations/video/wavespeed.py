@@ -112,6 +112,10 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         self._composition_provider = composition_provider
         self.supported_aspect_ratios = (config.aspect_ratio,)
         self.supported_durations = None
+        if config.duration_seconds is not None:
+            # A configured fixed duration overrides storyboard clip lengths.
+            self.min_duration_seconds = None
+            self.max_duration_seconds = None
         self.supports_composition = bool(
             composition_provider and composition_provider.supports_composition
         )
