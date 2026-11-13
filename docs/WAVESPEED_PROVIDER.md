@@ -25,7 +25,7 @@ Use exact HTTPS hostnames observed in the returned output URL for
 userinfo, non-HTTPS URLs, unlisted hosts, and non-public resolved IP addresses.
 It does not forward the API key to the media host.
 
-Supported LTX-2.3 settings are 480p/720p/1080p, 16:9/9:16, and 5/10/15/20
+Supported LTX-2.3 settings are 480p/720p/1080p, 16:9/9:16, and 5–20 seconds (integer duration)
 seconds. Seed is optional. Reference images are rejected because this is the
 text-to-video model, not the image-to-video endpoint.
 
