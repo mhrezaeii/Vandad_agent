@@ -108,3 +108,5 @@ Official references:
 - [WaveSpeed API authentication](https://wavespeed.ai/docs/api-authentication)
 - [WaveSpeed get started: submit and poll predictions](https://wavespeed.ai/docs/get-started-api)
 - [WaveSpeed LTX-2.3 text-to-video model](https://wavespeed.ai/models/wavespeed-ai/ltx-2.3/text-to-video)
+
+Billing reference: [WaveSpeed Check Billings](https://wavespeed.ai/docs/check-billings).
