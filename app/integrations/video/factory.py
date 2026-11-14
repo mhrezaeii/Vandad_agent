@@ -117,6 +117,14 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
                 for host in getattr(settings, "scene_video_wavespeed_download_allowed_hosts", "").split(",")
                 if host.strip()
             ),
+            generate_audio=bool(getattr(settings, "scene_video_wavespeed_generate_audio", False)),
+            min_clip_duration_seconds=int(
+                getattr(settings, "scene_video_wavespeed_min_clip_duration_seconds", 5)
+            ),
+            max_clip_duration_seconds=int(
+                getattr(settings, "scene_video_wavespeed_max_clip_duration_seconds", 20)
+            ),
+            price_per_second_usd=getattr(settings, "scene_video_wavespeed_price_per_second_usd", None),
         )
 
     composition_provider = None

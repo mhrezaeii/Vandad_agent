@@ -803,3 +803,73 @@ async def test_stale_wavespeed_submit_fence_becomes_unknown_without_resubmit(
     assert job.status == SceneVideoJobStatus.FAILED.value
     assert job.attempts == job.max_attempts
     assert job.submission_metadata["reconcile_before_retry"] is True
+
+
+def test_overlay_planner_maps_screenshots_to_scene_windows(tmp_path):
+    """Real-UI screenshots map to their scene windows; subtitles are planned."""
+    from types import SimpleNamespace
+
+    from app.services.scene_video_service import SceneVideoService
+
+    platform_dir = tmp_path / "vandiyar"
+    platform_dir.mkdir()
+    shots = []
+    for name in ("01.png", "02.png"):
+        item = platform_dir / name
+        item.write_bytes(b"\x89PNG fake")
+        shots.append(item)
+
+    service = SceneVideoService.__new__(SceneVideoService)
+    service._screenshots_root = tmp_path
+    project = SimpleNamespace(
+        scene_options={"screenshots_platform": "vandiyar"},
+        script_text="روایت اول. روایت دوم.",
+    )
+    jobs = [
+        SimpleNamespace(scene_index=0, duration_seconds=15.0),
+        SimpleNamespace(scene_index=1, duration_seconds=15.0),
+    ]
+    overlays, subtitle_path = service._plan_real_product_overlays(
+        project, jobs, output_dir_hint=__import__("uuid").uuid4(), width=1080, height=1920,
+    )
+    assert [(str(o[0]), round(o[1], 3), round(o[2], 3)) for o in overlays] == [
+        (str(shots[0]), 0.0, 15.0),
+        (str(shots[1]), 15.0, 30.0),
+    ]
+    assert subtitle_path is not None and subtitle_path.exists()
+    assert "Dialogue" in subtitle_path.read_text(encoding="utf-8")
+
+
+def test_overlay_planner_skips_without_platform_or_screenshots(tmp_path):
+    from types import SimpleNamespace
+
+    from app.services.scene_video_service import SceneVideoService
+
+    service = SceneVideoService.__new__(SceneVideoService)
+    service._screenshots_root = tmp_path
+    project = SimpleNamespace(scene_options={"screenshots_platform": "unknown"}, script_text="")
+    jobs = [SimpleNamespace(scene_index=0, duration_seconds=15.0)]
+    overlays, subtitle_path = service._plan_real_product_overlays(
+        project, jobs, output_dir_hint=__import__("uuid").uuid4(), width=1080, height=1920,
+    )
+    assert overlays == [] and subtitle_path is None
+
+
+def test_narration_fit_and_mux_arg_builders():
+    from pathlib import Path
+
+    from app.services.video_assembly import (
+        build_audio_concat_args,
+        build_narration_mux_args,
+        build_silence_args,
+    )
+
+    mux = build_narration_mux_args(
+        ffmpeg="ffmpeg", video_path=Path("v.mp4"), narration_audio_path=Path("n.wav"),
+        output_path=Path("o.mp4"),
+    )
+    assert "-c:v" in mux and "copy" in mux and "-shortest" in mux
+    silence = build_silence_args(ffmpeg="ffmpeg", seconds=15.0, output_path=Path("s.wav"))
+    assert "anullsrc" in " ".join(silence) and "15.000" in " ".join(silence)
+    concat = build_audio_concat_args(ffmpeg="ffmpeg", concat_list=Path("l.txt"), output_path=Path("n.wav"))
+    assert "-f" in concat and "concat" in concat

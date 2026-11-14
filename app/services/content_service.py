@@ -627,6 +627,7 @@ class ContentService:
         target_duration_seconds: int = 30,
         scene_count: int | None = None,
         provider_id: str | None = None,
+        screenshots_platform: str | None = None,
     ) -> ContentProject:
         """Create a non-avatar project that will be built from scene clips."""
         from app.schemas.scenario import MAX_TARGET_DURATION_SECONDS, MIN_TARGET_DURATION_SECONDS
@@ -653,6 +654,7 @@ class ContentService:
                 "target_duration_seconds": target_duration_seconds,
                 "scene_count": scene_count,
                 "provider_id": provider_id,
+                "screenshots_platform": screenshots_platform,
             },
             scene_video_provider=provider_id,
         )
@@ -901,6 +903,7 @@ class ContentService:
                 idempotency_key=f"scene-video:{project.id}",
                 require_budget=True,
                 task_id=task_id,
+                allow_reuse=True,
             )
             project.cost_metadata = {
                 "provider_id": selected_provider,

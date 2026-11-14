@@ -88,6 +88,21 @@ class Settings(BaseSettings):
     scene_video_provider: str = "mock"
     scene_video_daily_quota: int | None = Field(default=None, ge=0)
     scene_video_max_scene_attempts: int = Field(default=3, ge=1, le=10)
+    # Audio-capable WaveSpeed models (Seedance 2.5) generate native sound.
+    scene_video_wavespeed_generate_audio: bool = False
+    scene_video_wavespeed_min_clip_duration_seconds: int = Field(default=5, ge=1)
+    scene_video_wavespeed_max_clip_duration_seconds: int = Field(default=20, le=60)
+    # Per-second USD price for models that bill per output second.
+    scene_video_wavespeed_price_per_second_usd: float | None = None
+    # Real platform screenshots overlaid during local assembly.
+    platform_screenshots_root: str = "assets/platform_screenshots"
+    # Persian narration TTS: "" disables, "edge_tts" (free, dev) or
+    # "azure_speech" (official; free tier 500k chars/month).
+    tts_provider: str = ""
+    tts_voice: str = "fa-IR-DilaraNeural"
+    tts_rate_percent: str = "+0%"
+    tts_azure_speech_key: str = ""
+    tts_azure_speech_region: str = ""
     # Scheduled platform monitoring observes configured platforms (crawl +
     # knowledge refresh) but never generates content; scenario/video
     # production stays an explicit, billable, operator-initiated request.

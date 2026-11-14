@@ -238,6 +238,7 @@ async def create_scene_project(
         target_duration_seconds=payload.target_duration_seconds,
         scene_count=payload.scene_count,
         provider_id=payload.provider_id,
+        screenshots_platform=payload.screenshots_platform,
     )
     return ContentProjectRead.model_validate(project)
 

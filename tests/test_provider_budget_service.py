@@ -607,3 +607,25 @@ async def test_settled_operation_allows_suffixed_retry_reservation(db_session):
     # The live (reserved) duplicate is still blocked while in flight.
     with pytest.raises(ConflictError, match="duplicate paid execution"):
         await service.reserve(company.id, "llm_openai", "complete", idempotency_key=key)
+
+
+async def test_reserved_reservation_is_reused_with_allow_reuse_flag(db_session):
+    """A crashed workflow's still-held reservation must not deadlock its retry."""
+    company = Company(name="Reuse Retry", slug=f"reuse-retry-{uuid.uuid4().hex[:8]}")
+    db_session.add(company)
+    await db_session.flush()
+    service = ProviderBudgetService(db_session)
+    await service.set_budget(
+        company.id, "wavespeed",
+        monthly_limit_usd=Decimal("10.00"), per_operation_limit_usd=Decimal("2.00"),
+    )
+    key = f"scene-video:{uuid.uuid4()}"
+    first = await service.reserve(company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key)
+
+    reused = await service.reserve(
+        company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key, allow_reuse=True,
+    )
+    assert reused.id == first.id
+    # Without the flag the live reservation still blocks.
+    with pytest.raises(ConflictError, match="duplicate paid execution"):
+        await service.reserve(company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key)

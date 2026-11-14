@@ -125,7 +125,7 @@ class ProviderBudgetService:
     async def reserve(
         self, company_id: uuid.UUID, provider_id: str, operation: str, *,
         idempotency_key: str, model: str | None = None, require_budget: bool = False,
-        task_id: uuid.UUID | None = None,
+        task_id: uuid.UUID | None = None, allow_reuse: bool = False,
     ) -> ProviderUsageRecord | None:
         task = None
         if task_id is not None:
@@ -144,6 +144,18 @@ class ProviderBudgetService:
                 self._require_same_operation(row, provider_id, operation)
             active = [row for row in existing_rows if row.status == "reserved"]
             if active:
+                if allow_reuse and len(active) == 1:
+                    # A retry of the same logical operation (e.g. a crashed
+                    # video workflow) reuses the still-held reservation instead
+                    # of blocking; true concurrent duplicates stay blocked at
+                    # the workflow execution idempotency layer.
+                    reused = active[0]
+                    reused.usage_payload = {
+                        **(reused.usage_payload or {}),
+                        "reused_by_retry": True,
+                    }
+                    await self.session.flush()
+                    return reused
                 raise ConflictError(
                     "This provider operation already has a usage reservation; "
                     "duplicate paid execution is blocked."

@@ -93,7 +93,9 @@ async def sync_project_workflow_failure(engine, execution: WorkflowExecution) ->
     elif execution.workflow_name == SCENE_VIDEO_WORKFLOW_NAME:
         if project.status not in (
             ProjectStatus.VIDEO_GENERATION_PENDING.value,
+            ProjectStatus.SCENES_PREPARED.value,
             ProjectStatus.VIDEO_GENERATING.value,
+            ProjectStatus.VIDEO_GENERATED.value,
             ProjectStatus.ASSEMBLING.value,
         ):
             return
@@ -238,6 +240,8 @@ def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
             "Artifact storage is not configured.", code="storage_unavailable"
         )
     settings = get_settings()
+    from app.integrations.tts import tts_settings_from  # noqa: PLC0415
+
     return SceneVideoService(
         engine.session,
         engine.scene_video_registry,
@@ -245,6 +249,8 @@ def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
         daily_quota=settings.scene_video_daily_quota,
         max_attempts=settings.scene_video_max_scene_attempts,
         max_size_bytes=settings.artifact_max_size_bytes,
+        screenshots_root=settings.platform_screenshots_root,
+        tts_settings=tts_settings_from(settings),
     )
 
 

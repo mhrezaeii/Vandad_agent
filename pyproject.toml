@@ -20,6 +20,7 @@ dependencies = [
     "cryptography>=44",
     "croniter>=6.0",
     "python-multipart>=0.0.20",
+    "edge-tts>=6.1",
 ]
 
 [project.optional-dependencies]

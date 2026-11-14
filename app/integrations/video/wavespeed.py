@@ -64,6 +64,15 @@ class WaveSpeedConfig:
     poll_interval_seconds: float = 2.0
     max_poll_attempts: int = 600
     download_allowed_hosts: tuple[str, ...] = ()
+    # Audio-capable models (e.g. Seedance 2.5) generate a synchronized native
+    # soundtrack; LTX text-to-video is silent. Only sent when enabled.
+    generate_audio: bool = False
+    # Model-specific clip-duration bounds (LTX: 5..20; Seedance 2.5: 4..30).
+    min_clip_duration_seconds: int = 5
+    max_clip_duration_seconds: int = 20
+    # Per-second USD price for models that do not bill per 5 seconds
+    # (Seedance 2.5 bills per output second; rate depends on resolution).
+    price_per_second_usd: float | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.base_url)
@@ -78,12 +87,21 @@ class WaveSpeedConfig:
             raise ValueError("WaveSpeed resolution must be 480p, 720p or 1080p.")
         if self.aspect_ratio not in {"16:9", "9:16"}:
             raise ValueError("WaveSpeed aspect_ratio must be 16:9 or 9:16.")
+        if self.min_clip_duration_seconds < 1 or self.max_clip_duration_seconds < self.min_clip_duration_seconds:
+            raise ValueError("WaveSpeed clip duration bounds are invalid.")
         if self.duration_seconds is not None and (
             isinstance(self.duration_seconds, bool)
             or not isinstance(self.duration_seconds, int)
-            or not 5 <= self.duration_seconds <= 20
+            or not self.min_clip_duration_seconds <= self.duration_seconds <= self.max_clip_duration_seconds
         ):
-            raise ValueError("WaveSpeed duration_seconds must be an integer from 5 through 20.")
+            raise ValueError(
+                f"WaveSpeed duration_seconds must be an integer from "
+                f"{self.min_clip_duration_seconds} through {self.max_clip_duration_seconds}."
+            )
+        if self.price_per_second_usd is not None and (
+            self.price_per_second_usd < 0 or self.price_per_second_usd > 10
+        ):
+            raise ValueError("WaveSpeed price_per_second_usd must be a sane non-negative rate.")
         if self.timeout_seconds <= 0 or self.poll_interval_seconds < 2 or self.max_poll_attempts < 1:
             raise ValueError("WaveSpeed timeout and polling settings are invalid.")
         for host in self.download_allowed_hosts:
@@ -114,6 +132,8 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         self._status_cache: dict[str, tuple[float, SceneGenerationStatus]] = {}
         self.supported_aspect_ratios = (config.aspect_ratio,)
         self.supported_durations = None
+        self.min_duration_seconds = config.min_clip_duration_seconds
+        self.max_duration_seconds = config.max_clip_duration_seconds
         if config.duration_seconds is not None:
             # A configured fixed duration overrides storyboard clip lengths.
             self.min_duration_seconds = None
@@ -181,6 +201,9 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
             "aspect_ratio": aspect_ratio,
             "duration": int(duration),
         }
+        if self.config.generate_audio:
+            # Audio-capable models only; LTX rejects the unknown parameter.
+            body["generate_audio"] = True
         if request.seed is not None:
             if isinstance(request.seed, bool) or not isinstance(request.seed, int):
                 raise SceneVideoPermanentError("WaveSpeed seed must be an integer.", code="provider_invalid_seed")
@@ -369,8 +392,27 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
                 "WaveSpeed rejected the API credential or IP allowlist.", code="provider_unauthorized"
             )
         if not 200 <= response.status_code < 300:
+            # WaveSpeed also returns 400 with a readable body (e.g. "Insufficient
+            # credits"); surface the sanitized provider message instead of a bare
+            # status so operators can act (top up, fix parameters, ...).
+            try:
+                provider_message = str(response.json().get("message") or "").strip()
+            except ValueError:
+                provider_message = ""
+            lowered = provider_message.casefold()
+            if "insufficient credit" in lowered or "insufficient balance" in lowered:
+                raise SceneVideoQuotaExhaustedError(
+                    "WaveSpeed account credits are below this model's price; "
+                    "top up the account to continue.",
+                    code="provider_insufficient_balance",
+                )
+            from app.security.redaction import redact_text  # noqa: PLC0415
+
+            detail = redact_text(provider_message)[:200] if provider_message else ""
             raise SceneVideoPermanentError(
-                f"WaveSpeed request failed (HTTP {response.status_code}).", code="provider_request_failed"
+                f"WaveSpeed request failed (HTTP {response.status_code})"
+                + (f": {detail}" if detail else "."),
+                code="provider_request_failed",
             )
         try:
             body = response.json()
@@ -475,7 +517,12 @@ class WaveSpeedSceneVideoProvider(SceneVideoProvider):
         return value
 
     def estimate_cost_usd(self, duration_seconds: float) -> str:
-        """Return the published LTX-2.3 estimate; never treat it as actual spend."""
+        """Return the published estimate; never treat it as actual spend."""
+        if self.config.price_per_second_usd is not None:
+            # Per-second pricing (e.g. Seedance 2.5 bills each output second);
+            # the provider charge prevails, this estimate only gates preflight.
+            configured_duration = self.config.duration_seconds or duration_seconds
+            return f"{float(self.config.price_per_second_usd) * float(configured_duration):.6f}"
         configured_duration = self.config.duration_seconds or duration_seconds
         amount = _PRICE_PER_FIVE_SECONDS[self.config.resolution] * float(configured_duration) / 5.0
         return f"{amount:.6f}"

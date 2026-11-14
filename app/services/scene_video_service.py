@@ -52,7 +52,16 @@ from app.security.redaction import redact_text
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
-from app.services.video_assembly import concat_scene_clips
+from app.integrations.tts import TextToSpeechError, TtsSettings, synthesize
+from app.services.video_assembly import (
+    build_audio_concat_args,
+    build_narration_mux_args,
+    build_scene_audio_fit_args,
+    build_silence_args,
+    concat_scene_clips,
+    ffmpeg_binary,
+    run_ffmpeg,
+)
 from app.storage.base import ArtifactStorage
 
 _SCENE_RESOURCE = "scene_video_job"
@@ -79,6 +88,14 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
         lines.append(f"CAMERA: {scene.camera_direction}")
     lines.append(f"TRANSITION INTO NEXT SCENE: {scene.transition}")
     lines.append(f"VISUAL PROMPT: {scene.visual_prompt}")
+    # Audio-capable models speak this as the Persian voice-over; silent
+    # models simply ignore the audio direction.
+    if scene.narration.strip():
+        lines.append(
+            "AUDIO: warm, professional Persian (Farsi) voice-over says exactly this, "
+            f"clearly and naturally: {scene.narration.strip()} "
+            "Under the voice-over, add a soft modern corporate background track and subtle UI sounds."
+        )
     return "\n".join(lines)
 
 
@@ -92,12 +109,16 @@ class SceneVideoService:
         daily_quota: int | None = None,
         max_attempts: int = 3,
         max_size_bytes: int = 2 * 1024**3,
+        screenshots_root: str | Path | None = None,
+        tts_settings: TtsSettings | None = None,
     ) -> None:
         self.session = session
         self.registry = registry
         self.storage = storage
         self.daily_quota = daily_quota
         self.max_attempts = max(1, int(max_attempts))
+        self._screenshots_root = Path(screenshots_root) if screenshots_root else None
+        self._tts_settings = tts_settings
         self.max_size_bytes = max_size_bytes
         self.audit = AuditService(session)
 
@@ -783,6 +804,46 @@ class SceneVideoService:
             artifact = await artifact_service.get_artifact(
                 job.artifact_id, company_id=project.company_id
             )
+            narration = await self._narration_track(jobs, Path(tempfile.mkdtemp(prefix="vandad-tts-")))
+            if narration is not None:
+                # TTS narration: mux onto the provider clip and store a voiced
+                # artifact instead of reusing the scene file directly.
+                clip_path = (
+                    self.storage.local_path(artifact.storage_key) if self.storage else None
+                )
+                if clip_path is None:
+                    raise SceneVideoPermanentError(
+                        "Scene clips are not available on local storage; narration muxing is unavailable.",
+                        code="local_assembly_storage_unavailable",
+                    )
+                workdir = narration.parent
+                voiced = workdir / f"vandad-final-voiced-{project.id}.mp4"
+                await self._run_assembly_ffmpeg(
+                    build_narration_mux_args(
+                        ffmpeg=ffmpeg_binary(), video_path=clip_path,
+                        narration_audio_path=narration, output_path=voiced,
+                    )
+                )
+
+                async def voiced_chunks(path=voiced):
+                    with path.open("rb") as handle:
+                        while True:
+                            block = handle.read(1024 * 1024)
+                            if not block:
+                                break
+                            yield block
+
+                artifact = await artifact_service.store_artifact(
+                    execution_id,
+                    company_id=project.company_id,
+                    kind=ArtifactKind.VIDEO.value,
+                    content_type="video/mp4",
+                    chunks=voiced_chunks(),
+                    filename=voiced.name,
+                )
+                metadata_extra = {"mode": "single_scene_passthrough_tts", "narration": "tts"}
+            else:
+                metadata_extra = {"mode": "single_scene_passthrough", "narration": None}
             # Passthrough mode bills no composition or quality-review call, so
             # the project reservation settles from the scene's reported cost.
             await self._settle_project_video_budget(
@@ -793,7 +854,7 @@ class SceneVideoService:
             )
             metadata = {
                 "service": "provider",
-                "mode": "single_scene_passthrough",
+                **metadata_extra,
                 "production_path": "provider_single_scene",
                 "provider": provider.provider_id,
                 "scene_job_id": str(job.id),
@@ -1070,12 +1131,34 @@ class SceneVideoService:
                 )
             clip_paths.append(path)
 
+        overlays, subtitle_path = self._plan_real_product_overlays(
+            project, jobs, output_dir_hint=project.id, width=width, height=height,
+        )
         output_dir = Path(tempfile.mkdtemp(prefix="vandad-assembly-"))
         try:
+            if subtitle_path is not None:
+                moved = output_dir / subtitle_path.name
+                shutil.move(str(subtitle_path), str(moved))
+                subtitle_path = moved
+            for index, (image, _start, _end) in enumerate(list(overlays)):
+                moved = output_dir / f"overlay-{index}{image.suffix.lower()}"
+                shutil.copy(str(image), str(moved))
+                overlays[index] = (moved, _start, _end)
             output_path = output_dir / f"vandad-final-{project.id}.mp4"
             await concat_scene_clips(
-                tuple(clip_paths), output_path=output_path, width=width, height=height
+                tuple(clip_paths), output_path=output_path, width=width, height=height,
+                overlays=tuple(overlays), subtitle_path=subtitle_path,
             )
+            narration = await self._narration_track(jobs, output_dir)
+            if narration is not None:
+                voiced = output_dir / f"vandad-final-voiced-{project.id}.mp4"
+                await self._run_assembly_ffmpeg(
+                    build_narration_mux_args(
+                        ffmpeg=ffmpeg_binary(), video_path=output_path,
+                        narration_audio_path=narration, output_path=voiced,
+                    )
+                )
+                voiced.replace(output_path)
             preview = bytearray()
 
             async def chunks():
@@ -1155,6 +1238,114 @@ class SceneVideoService:
         )
         await self.session.flush()
         return artifact, metadata
+
+    async def _narration_track(
+        self, jobs: list[SceneVideoJob], workdir: Path
+    ) -> Path | None:
+        """Synthesize per-scene Persian narration and mix one exact-length track.
+
+        Each narration is fitted into its scene window (bounded 1.3x speed-up,
+        then silence padding), so the combined audio aligns with the assembled
+        video. Scenes without narration get exact-length silence.
+        """
+        tts = self._tts_settings
+        if tts is None or not tts.provider:
+            return None
+        ffmpeg = ffmpeg_binary()
+        fitted: list[Path] = []
+        for job in sorted(jobs, key=lambda item: item.scene_index):
+            seconds = float(job.duration_seconds)
+            narration = (job.narration or "").strip()
+            if narration:
+                raw = workdir / f"raw-{job.scene_index}.mp3"
+                try:
+                    raw.write_bytes(await synthesize(narration, tts))
+                except TextToSpeechError as exc:
+                    raise SceneVideoPermanentError(str(exc), code=exc.code) from exc
+                fitted_path = workdir / f"fit-{job.scene_index}.wav"
+                await self._run_assembly_ffmpeg(
+                    build_scene_audio_fit_args(
+                        ffmpeg=ffmpeg, source_audio=raw, output_path=fitted_path,
+                        scene_seconds=seconds,
+                    )
+                )
+            else:
+                fitted_path = workdir / f"silence-{job.scene_index}.wav"
+                await self._run_assembly_ffmpeg(
+                    build_silence_args(ffmpeg=ffmpeg, seconds=seconds, output_path=fitted_path)
+                )
+            fitted.append(fitted_path)
+        if not fitted:
+            return None
+        concat_list = workdir / "narration-list.txt"
+        concat_list.write_text(
+            "".join("file '" + path.as_posix() + "'" + chr(10) for path in fitted),
+            encoding="utf-8",
+        )
+        narration_full = workdir / "narration-full.wav"
+        await self._run_assembly_ffmpeg(
+            build_audio_concat_args(
+                ffmpeg=ffmpeg, concat_list=concat_list, output_path=narration_full
+            )
+        )
+        return narration_full
+
+    def _plan_real_product_overlays(
+        self,
+        project: ContentProject,
+        jobs: list[SceneVideoJob],
+        *,
+        output_dir_hint: uuid.UUID,
+        width: int,
+        height: int,
+    ) -> tuple[list[tuple[Path, float, float]], Path | None]:
+        """Plan real-UI screenshot overlays and the Persian subtitle file.
+
+        Screenshots live under ``screenshots_root/<platform>/`` and are shown
+        during their scene's time window (scene i -> screenshot i, cycling when
+        fewer screenshots exist than scenes). Deterministic local stitching
+        only: the AI footage stays, the real product UI is drawn on top of it.
+        """
+        overlays: list[tuple[Path, float, float]] = []
+        subtitle_path: Path | None = None
+
+        platform = (project.scene_options or {}).get("screenshots_platform")
+        root = self._screenshots_root
+        if platform and root is not None and root.is_dir():
+            platform_dir = root / str(platform)
+            if platform_dir.is_dir():
+                images = sorted(
+                    item for item in platform_dir.iterdir()
+                    if item.is_file() and item.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                )
+                if images:
+                    ordered = sorted(jobs, key=lambda item: item.scene_index)
+                    start = 0.0
+                    for index, job in enumerate(ordered):
+                        end = start + float(job.duration_seconds)
+                        overlays.append((images[index % len(images)], start, end))
+                        start = end
+
+        narration = (project.script_text or "").strip()
+        if narration:
+            from app.services.subtitle_service import build_ass_for_script
+
+            total = sum(float(job.duration_seconds) for job in jobs)
+            ass = build_ass_for_script(narration, total_seconds=total, width=width, height=height)
+            subtitle_path = Path(tempfile.gettempdir()) / f"vandad-subs-{output_dir_hint}.ass"
+            subtitle_path.write_text(ass, encoding="utf-8")
+        return overlays, subtitle_path
+
+    async def _run_assembly_ffmpeg(self, command: tuple[str, ...]) -> None:
+        """Run one assembly ffmpeg command; permanent failures carry detail."""
+        from app.services.video_assembly import SceneVideoPermanentError, SceneVideoTransientError
+
+        try:
+            await run_ffmpeg(command)
+        except SceneVideoTransientError as exc:
+            raise SceneVideoTransientError(exc.message, code=exc.code) from exc
+        except SceneVideoPermanentError as exc:
+            raise SceneVideoPermanentError(exc.message, code=exc.code) from exc
 
     # ------------------------------------------------------------------- cancel
     async def cancel(self, project: ContentProject) -> dict[str, Any]:
