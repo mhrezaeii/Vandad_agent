@@ -29,9 +29,12 @@ services:
       - .env
     ports:
       - "${API_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
+      - ./data/flow:/app/data/flow
     networks:
       - backend
     depends_on:
@@ -84,9 +87,12 @@ services:
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT:-/app/data/artifacts}
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
+      - ./data/flow:/app/data/flow
     networks:
       - backend
     depends_on:
@@ -122,6 +128,7 @@ services:
     volumes:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
+      - ./data/flow:/app/data/flow
     networks:
       - backend
     depends_on:

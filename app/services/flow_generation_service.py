@@ -62,6 +62,7 @@ class FlowSettings:
     chromium_path: Path
     headless: bool
     timeout_seconds: int
+    proxy: str = ""
 
     @classmethod
     def from_config(cls, config: object) -> "FlowSettings":  # noqa: ANN001 - Settings
@@ -73,14 +74,15 @@ class FlowSettings:
             chromium_path=Path(str(getattr(config, "flow_chromium_path", ""))),
             headless=bool(getattr(config, "flow_headless", True)),
             timeout_seconds=int(getattr(config, "flow_timeout_seconds", 900)),
+            proxy=str(getattr(config, "flow_proxy", "") or ""),
         )
 
 
 # AI Studio video-generation selectors (single place to update when the UI moves).
 SELECTORS = {
-    "media_tab": "text=Generate media",
-    "video_tool": "text=Video",
+    "playground_nav": "text=Playground",
     "prompt_box": "textarea",
+    "veo_model": "text=Veo",
     "aspect_916": "text=9:16",
     "submit": "button:has-text('Run')",
     "download": "text=Download",
@@ -199,39 +201,83 @@ class FlowGenerationService:
         target = output_dir / f"flow-{stamp}.mp4"
 
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(
-                headless=self.settings.headless,
-                executable_path=str(self.settings.chromium_path)
-                if self.settings.chromium_path.is_file() else None,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            launch_args = [
+                "--no-sandbox", "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ]
+            executable = (
+                str(self.settings.chromium_path)
+                if self.settings.chromium_path.is_file() else None
             )
-            context = await browser.new_context(
-                storage_state=str(self.settings.storage_state),
-                viewport={"width": 1440, "height": 900},
-                locale="en-US",
+            browser = None
+            common = {
+                "viewport": {"width": 1440, "height": 900},
+                "locale": "en-US",
+                "proxy": {"server": self.settings.proxy} if self.settings.proxy else None,
+                "user_agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                ),
+            }
+            if self.settings.profile_dir.is_dir():
+                # A persistent profile keeps Google's own cookies and local
+                # state alive between runs (most human-like continuity).
+                context = await playwright.chromium.launch_persistent_context(
+                    str(self.settings.profile_dir), headless=self.settings.headless,
+                    executable_path=executable, args=launch_args, **common,
+                )
+            else:
+                browser = await playwright.chromium.launch(
+                    headless=self.settings.headless, executable_path=executable,
+                    args=launch_args,
+                )
+                context = await browser.new_context(
+                    storage_state=str(self.settings.storage_state), **common,
+                )
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
             )
+            # Re-apply the operator's cookie export on every run: it stays the
+            # source of truth and heals rotated-out sessions in the profile.
+            state = json.loads(self.settings.storage_state.read_text(encoding="utf-8"))
+            await context.add_cookies(state.get("cookies", []))
             page = await context.new_page()
             deadline = __import__("time").monotonic() + self.settings.timeout_seconds
             try:
-                await page.goto("https://aistudio.google.com/generate-media", wait_until="domcontentloaded")
+                shots_dir = self.settings.storage_state.parent
+                await page.goto("https://aistudio.google.com/", wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
+                try:  # dismiss the cookie banner when present
+                    await page.get_by_text("OK, got it").first.click(timeout=5_000)
+                except Exception:  # noqa: BLE001
+                    pass
                 if "accounts.google.com" in page.url:
                     raise FlowError(
                         "The stored session is signed out; re-import fresh cookies.",
                         code="flow_session_expired",
                     )
-                for key in ("media_tab", "video_tool"):
-                    locator = page.locator(SELECTORS[key]).first
-                    await locator.wait_for(state="visible", timeout=30_000)
-                    await locator.click()
+                await page.locator(SELECTORS["playground_nav"]).first.click(timeout=30_000)
+                await page.wait_for_timeout(4000)
+                await page.screenshot(path=str(shots_dir / "flow-stage-playground.png"))
                 box = page.locator(SELECTORS["prompt_box"]).first
                 await box.wait_for(state="visible", timeout=30_000)
+                await box.click()
                 await box.fill(prompt.strip())
+                await page.screenshot(path=str(shots_dir / "flow-stage-prompt.png"))
+                # Select the Veo video model if the picker exposes it.
+                try:
+                    await page.locator(SELECTORS["veo_model"]).first.click(timeout=10_000)
+                    await page.wait_for_timeout(1500)
+                except Exception:  # noqa: BLE001 - picker shape varies; keep default
+                    logger.info("Veo picker entry not found; continuing with default model")
                 if aspect_ratio == "9:16":
                     try:
                         await page.locator(SELECTORS["aspect_916"]).first.click(timeout=8_000)
                     except Exception:  # noqa: BLE001 - aspect control may be a dropdown
                         logger.info("aspect selector not found; continuing with default")
-                await page.locator(SELECTORS["submit"]).first.click()
+                await page.screenshot(path=str(shots_dir / "flow-stage-prerun.png"))
+                await page.locator(SELECTORS["submit"]).first.click(timeout=20_000)
 
                 await page.locator(SELECTORS["download"]).first.wait_for(
                     state="visible", timeout=self._remaining_ms(deadline)
@@ -255,7 +301,8 @@ class FlowGenerationService:
                 ) from exc
             finally:
                 await context.close()
-                await browser.close()
+                if browser is not None:
+                    await browser.close()
 
         if not target.is_file() or target.stat().st_size < 10_000:
             target.unlink(missing_ok=True)

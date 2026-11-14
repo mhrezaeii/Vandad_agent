@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     flow_storage_state: str = "data/flow/storage_state.json"
     flow_profile_dir: str = "data/flow/profile"
     flow_chromium_path: str = "/usr/bin/chromium"
+    # Non-Iranian exit for AI Studio (geo-blocked): route the worker browser
+    # through the operator's local VPN relay (see docs / portproxy).
+    flow_proxy: str = ""
     flow_headless: bool = True
     flow_timeout_seconds: int = Field(default=900, ge=60, le=3600)
     # Persian narration TTS: "" disables, "edge_tts" (free, dev) or
