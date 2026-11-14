@@ -35,6 +35,7 @@ services:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
       - ./data/flow:/app/data/flow
+      - ./data/dreamina:/app/data/dreamina
     networks:
       - backend
     depends_on:
@@ -93,6 +94,7 @@ services:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
       - ./data/flow:/app/data/flow
+      - ./data/dreamina:/app/data/dreamina
     networks:
       - backend
     depends_on:
@@ -129,6 +131,7 @@ services:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
       - ./data/flow:/app/data/flow
+      - ./data/dreamina:/app/data/dreamina
     networks:
       - backend
     depends_on:

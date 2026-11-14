@@ -125,17 +125,19 @@ class QuotaTracker:
         return datetime.now(UTC).date().isoformat()
 
 
-def convert_cookie_export(export: list[dict], *, output_path: Path) -> Path:
+def convert_cookie_export(
+    export: list[dict], *, output_path: Path, domain_filter: str = "google.com"
+) -> Path:
     """Convert a Cookie-Editor JSON export into a Playwright storage state.
 
-    Only google.com cookies are kept; sameSite values are normalized to what
-    Playwright accepts.
+    Only cookies for ``domain_filter`` are kept; sameSite values are
+    normalized to what Playwright accepts.
     """
     cookies: list[dict] = []
     allowed_sites = {"sameSite_lax", "sameSite_strict", "sameSite_none"}
     for item in export:
         domain = str(item.get("domain") or "")
-        if "google.com" not in domain:
+        if domain_filter not in domain:
             continue
         same_site = str(item.get("sameSite") or "lax").lower()
         cookie = {
@@ -158,7 +160,8 @@ def convert_cookie_export(export: list[dict], *, output_path: Path) -> Path:
         cookies.append(cookie)
     if not cookies:
         raise FlowError(
-            "The cookie export contained no google.com cookies.", code="flow_cookie_export_empty"
+            f"The cookie export contained no {domain_filter} cookies.",
+            code="flow_cookie_export_empty",
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(

@@ -111,6 +111,15 @@ class Settings(BaseSettings):
     # Non-Iranian exit for AI Studio (geo-blocked): route the worker browser
     # through the operator's local VPN relay (see docs / portproxy).
     flow_proxy: str = ""
+    # Dreamina (CapCut/ByteDance) free-quota worker: Seedance models, Google
+    # OAuth session, ~120 credits/day. Same single-account policy as Flow.
+    dreamina_enabled: bool = False
+    dreamina_daily_limit: int = Field(default=6, ge=1, le=50)
+    dreamina_storage_state: str = "data/dreamina/storage_state.json"
+    dreamina_profile_dir: str = "data/dreamina/profile"
+    dreamina_headless: bool = True
+    dreamina_timeout_seconds: int = Field(default=1200, ge=60, le=3600)
+    dreamina_proxy: str = ""
     flow_headless: bool = True
     flow_timeout_seconds: int = Field(default=900, ge=60, le=3600)
     # Persian narration TTS: "" disables, "edge_tts" (free, dev) or
