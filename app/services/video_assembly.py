@@ -214,6 +214,36 @@ def build_silence_args(*, ffmpeg: str, seconds: float, output_path: Path) -> tup
     )
 
 
+def build_endcard_video_args(
+    *,
+    ffmpeg: str,
+    image_path: Path,
+    output_path: Path,
+    seconds: float,
+    width: int,
+    height: int,
+) -> tuple[str, ...]:
+    """Turn the end-card PNG into a fixed-length silent-audio video segment.
+
+    The segment always carries a silent stereo track so concat never hits a
+    mixed audio/no-audio stream set.
+    """
+    return (
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-loop", "1", "-i", str(image_path),
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", f"{seconds:.3f}",
+        "-vf", (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p"
+        ),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-shortest", "-movflags", "+faststart",
+        str(output_path),
+    )
+
+
 def build_narration_mux_args(
     *,
     ffmpeg: str,

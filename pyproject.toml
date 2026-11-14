@@ -21,6 +21,8 @@ dependencies = [
     "croniter>=6.0",
     "python-multipart>=0.0.20",
     "edge-tts>=6.1",
+    "pillow>=11.0",
+    "playwright>=1.49",
 ]
 
 [project.optional-dependencies]

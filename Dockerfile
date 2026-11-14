@@ -30,7 +30,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-farsiweb \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-farsiweb chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user

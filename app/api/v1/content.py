@@ -6,11 +6,12 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import company_scope
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
+from app.models import ContentBrand
 from app.schemas.content import (
     BrandCreate,
     BrandPlatformLinksUpdate,
@@ -375,3 +376,116 @@ async def download_video(
         media_type=artifact.content_type,
         headers={"Content-Length": str(artifact.size_bytes)},
     )
+
+
+# ---------------------------------------------------------------- clip assembly
+@router.post("/scene-projects/{project_id}/assemble-clips", response_model=ContentProjectRead)
+async def assemble_external_clips(
+    project_id: uuid.UUID,
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+    background_tasks: BackgroundTasks,
+) -> ContentProjectRead:
+    """Assemble the final video from operator-provided clips (no paid provider).
+
+    Clips live at ``assets/clips/<project_id>/01.mp4, 02.mp4, ...`` in playback
+    order; each clip covers one scenario scene. The worker adds Persian TTS
+    narration, burned subtitles, screenshot overlays, and the branded end card.
+    """
+    from app.services.clip_assembly_service import ClipAssemblyError, ClipAssemblyService  # noqa: PLC0415
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.integrations.tts import tts_settings_from  # noqa: PLC0415
+    from app.models import ProjectStatus, WorkflowExecution, WorkflowStatus  # noqa: PLC0415
+
+    project = await service.get_project(project_id, company_id=scope.company_id)
+    if project.video_mode != "scene":
+        raise ConflictError("This project does not use the scene pipeline.")
+    allowed = {
+        ProjectStatus.APPROVED.value,
+        ProjectStatus.VIDEO_GENERATION_PENDING.value,
+        ProjectStatus.SCENES_PREPARED.value,
+        ProjectStatus.VIDEO_GENERATING.value,
+        ProjectStatus.VIDEO_GENERATED.value,
+        ProjectStatus.FAILED.value,
+    }
+    if project.status not in allowed:
+        raise ConflictError(
+            f"Clip assembly is not allowed from status '{project.status}'.",
+            details=[{"status": project.status}],
+        )
+    if not project.scenario:
+        raise ConflictError("The project has no generated scenario to narrate the clips.")
+
+    execution = WorkflowExecution(
+        workflow_name="vandad.clip.assembly.v1",
+        company_id=scope.company_id,
+        trigger_type="api",
+        trigger_reference=str(project.id),
+        input_metadata={"project_id": str(project.id), "mode": "external_clips"},
+        status=WorkflowStatus.RUNNING.value,
+        started_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+    )
+    service.session.add(execution)
+    await service.session.flush()
+    project.status = ProjectStatus.VIDEO_GENERATION_PENDING.value
+    project.error_message = None
+    await service.session.flush()
+    execution_id = execution.id
+    brand_width, brand_height = 1080, 1920
+    brand = await service.session.get(ContentBrand, project.brand_id)
+    if brand is not None:
+        brand_width, brand_height = int(brand.video_width), int(brand.video_height)
+
+    settings = get_settings()
+    app_state = request.app.state
+
+    async def _run() -> None:
+        from app.models import ContentBrand as _Brand  # noqa: PLC0415
+
+        async with app_state.session_factory() as task_session:
+            try:
+                task_project = await task_session.get(ContentProject, project_id)
+                if task_project is None:
+                    return
+                clip_service = ClipAssemblyService(
+                    task_session,
+                    app_state.scene_video_registry,
+                    app_state.artifact_storage,
+                    tts_settings=tts_settings_from(settings),
+                    screenshots_root=settings.platform_screenshots_root,
+                    clips_root=settings.platform_clips_root,
+                    end_card_seconds=settings.end_card_seconds,
+                )
+                await clip_service.assemble(
+                    task_project, execution_id=execution_id,
+                    width=brand_width, height=brand_height,
+                )
+                await task_session.commit()
+            except ClipAssemblyError as exc:
+                await task_session.rollback()
+                async with app_state.session_factory() as err_session:
+                    failed_project = await err_session.get(ContentProject, project_id)
+                    failed_execution = await err_session.get(WorkflowExecution, execution_id)
+                    if failed_project is not None:
+                        failed_project.status = ProjectStatus.FAILED.value
+                        failed_project.error_message = exc.message[:500]
+                    if failed_execution is not None:
+                        failed_execution.status = WorkflowStatus.FAILED.value
+                        failed_execution.error_message = exc.message[:500]
+                    await err_session.commit()
+            except Exception:  # noqa: BLE001 - background task must not crash silently
+                import logging  # noqa: PLC0415
+
+                logging.getLogger("app.clip_assembly").exception("clip assembly failed")
+                await task_session.rollback()
+                async with app_state.session_factory() as err_session:
+                    failed_project = await err_session.get(ContentProject, project_id)
+                    if failed_project is not None:
+                        failed_project.status = ProjectStatus.FAILED.value
+                        failed_project.error_message = "Clip assembly failed unexpectedly."
+                    await err_session.commit()
+
+    background_tasks.add_task(_run)
+    await service.session.refresh(project)
+    return ContentProjectRead.model_validate(project)

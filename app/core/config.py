@@ -96,6 +96,20 @@ class Settings(BaseSettings):
     scene_video_wavespeed_price_per_second_usd: float | None = None
     # Real platform screenshots overlaid during local assembly.
     platform_screenshots_root: str = "assets/platform_screenshots"
+    # Operator-provided clips (Google Flow free quota, Hoosha, ...) per project:
+    # assets/clips/<project_id>/01.mp4, 02.mp4, ...
+    platform_clips_root: str = "assets/clips"
+    end_card_seconds: float = Field(default=3.0, ge=1.0, le=10.0)
+    # Single-account Google Flow/AI Studio free-quota worker. The session is
+    # a company-owned account; multi-account rotation is intentionally not
+    # supported by design.
+    flow_enabled: bool = False
+    flow_daily_limit: int = Field(default=3, ge=1, le=50)
+    flow_storage_state: str = "data/flow/storage_state.json"
+    flow_profile_dir: str = "data/flow/profile"
+    flow_chromium_path: str = "/usr/bin/chromium"
+    flow_headless: bool = True
+    flow_timeout_seconds: int = Field(default=900, ge=60, le=3600)
     # Persian narration TTS: "" disables, "edge_tts" (free, dev) or
     # "azure_speech" (official; free tier 500k chars/month).
     tts_provider: str = ""

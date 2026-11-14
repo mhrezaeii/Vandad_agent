@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import json
+
 import pytest
 from sqlalchemy import select
 
@@ -873,3 +875,43 @@ def test_narration_fit_and_mux_arg_builders():
     assert "anullsrc" in " ".join(silence) and "15.000" in " ".join(silence)
     concat = build_audio_concat_args(ffmpeg="ffmpeg", concat_list=Path("l.txt"), output_path=Path("n.wav"))
     assert "-f" in concat and "concat" in concat
+
+
+def test_flow_quota_tracker_and_cookie_conversion(tmp_path):
+    from app.services.flow_generation_service import (
+        FlowError,
+        FlowGenerationService,
+        QuotaTracker,
+        convert_cookie_export,
+    )
+
+    state = tmp_path / "storage_state.json"
+    tracker = QuotaTracker(state, daily_limit=3)
+    assert tracker.remaining() == 3
+    tracker.consume()
+    tracker.consume()
+    assert tracker.used_today() == 2 and tracker.remaining() == 1
+
+    export = [
+        {"name": "__Secure-1PSID", "value": "abc", "domain": ".google.com", "path": "/",
+         "httpOnly": True, "secure": True, "sameSite": "no_restriction", "expirationDate": 1893456000},
+        {"name": "NID", "value": "x", "domain": ".google.com", "path": "/", "secure": True},
+        {"name": "other", "value": "y", "domain": ".example.com", "path": "/", "secure": True},
+    ]
+    out = convert_cookie_export(export, output_path=tmp_path / "state.json")
+    cookies = json.loads(out.read_text(encoding="utf-8"))["cookies"]
+    assert len(cookies) == 2
+    psid = next(c for c in cookies if c["name"] == "__Secure-1PSID")
+    assert psid["sameSite"] in ("Strict", "None", "Lax")
+    assert all(c["domain"].endswith("google.com") for c in cookies)
+
+    with __import__("pytest").raises(FlowError):
+        convert_cookie_export([{"name": "x", "value": "y", "domain": ".example.com"}],
+                              output_path=tmp_path / "empty.json")
+
+    service = FlowGenerationService(__import__("types").SimpleNamespace(
+        enabled=True, daily_limit=3, storage_state=state, profile_dir=tmp_path,
+        chromium_path=tmp_path / "no-chromium", headless=True, timeout_seconds=60,
+    ))
+    status = service.status()
+    assert status["session_present"] is False and status["remaining_today"] == 1  # same tracker state
