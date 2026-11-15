@@ -127,6 +127,26 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             price_per_second_usd=getattr(settings, "scene_video_wavespeed_price_per_second_usd", None),
         )
 
+    eightscale_key = _optional_text(getattr(settings, "scene_video_8scale_api_key", None))
+    eightscale_config = None
+    if eightscale_key:
+        from app.integrations.video.eightscale import EightScaleConfig
+
+        eightscale_config = EightScaleConfig(
+            api_key=eightscale_key,
+            base_url=str(getattr(settings, "scene_video_8scale_base_url", "https://8scale.run")),
+            resolution=str(getattr(settings, "scene_video_8scale_resolution", "480p")),
+            aspect_ratio=str(getattr(settings, "scene_video_8scale_aspect_ratio", "9:16")),
+            price_per_second_usd=float(
+                getattr(settings, "scene_video_8scale_price_per_second_usd", 0.003)
+            ),
+            download_allowed_hosts=tuple(
+                host.strip()
+                for host in getattr(settings, "scene_video_8scale_download_allowed_hosts", "").split(",")
+                if host.strip()
+            ),
+        )
+
     composition_provider = None
     if http_config is not None and http_config.compose_path and http_config.quality_path:
         from app.integrations.video.generic_http import GenericHttpSceneVideoProvider
@@ -139,6 +159,10 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
         wavespeed_config=wavespeed_config,
         wavespeed_composition_provider=composition_provider,
     )
+    if eightscale_config is not None:
+        from app.integrations.video.eightscale import EightScaleSceneVideoProvider
+
+        registry.register(EightScaleSceneVideoProvider(eightscale_config))
     selected = getattr(settings, "scene_video_provider", "mock")
     if getattr(settings, "is_production", False) and selected == "mock":
         raise ValueError("The mock scene-video provider is forbidden in production.")

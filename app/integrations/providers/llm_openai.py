@@ -18,6 +18,7 @@ Output metadata (never contains the key):
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 
@@ -245,7 +246,10 @@ class LlmOpenAiProvider(ProviderAdapter):
         client = (
             self._client_factory(context.timeout_seconds)
             if self._client_factory is not None
-            else httpx.AsyncClient(timeout=context.timeout_seconds)
+            else httpx.AsyncClient(
+                timeout=context.timeout_seconds,
+                proxy=os.environ.get("LLM_OPENAI_PROXY") or None,
+            )
         )
         try:
             async with client as http_client:

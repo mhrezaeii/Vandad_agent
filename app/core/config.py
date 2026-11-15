@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     scene_video_wavespeed_max_clip_duration_seconds: int = Field(default=20, le=60)
     # Per-second USD price for models that bill per output second.
     scene_video_wavespeed_price_per_second_usd: float | None = None
+    # 8Scale Wan 2.2 14B (cheapest verified host: ~$0.015/5s 480p, silent).
+    scene_video_8scale_api_key: str = ""
+    scene_video_8scale_base_url: str = "https://8scale.run"
+    scene_video_8scale_resolution: str = "480p"
+    scene_video_8scale_aspect_ratio: str = "9:16"
+    scene_video_8scale_price_per_second_usd: float = Field(default=0.003, ge=0)
+    scene_video_8scale_download_allowed_hosts: str = "static.8scale.com"
     # Real platform screenshots overlaid during local assembly.
     platform_screenshots_root: str = "assets/platform_screenshots"
     # Operator-provided clips (Google Flow free quota, Hoosha, ...) per project:

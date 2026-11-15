@@ -75,3 +75,23 @@ def test_evidence_validation_tolerates_unicode_normalisation():
     )
     with pytest.raises(PlatformKnowledgeExtractionError, match="ادعا"):
         validate_knowledge_evidence(paraphrased, [doc])
+
+
+def test_evidence_validation_tolerates_trailing_slash_urls():
+    """Models may cite the source URL without the trailing slash."""
+    from types import SimpleNamespace
+
+    from app.schemas.platform_knowledge import PlatformKnowledgeFact, PlatformKnowledgePayload
+    from app.services.platform_knowledge_service import validate_knowledge_evidence
+
+    doc = SimpleNamespace(url="https://vandiyar.ir/", content_text="وندیار مدیریت پروژه و تیم است.")
+    payload = PlatformKnowledgePayload(
+        summary="",
+        products_and_services=[PlatformKnowledgeFact(
+            name="مدیریت پروژه", description="مدیریت پروژه و تیم",
+            evidence="مدیریت پروژه و تیم",
+            source_url="https://vandiyar.ir",  # no trailing slash
+            confidence=0.95,
+        )],
+    )
+    validate_knowledge_evidence(payload, [doc])

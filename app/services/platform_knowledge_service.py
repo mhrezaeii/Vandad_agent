@@ -116,12 +116,13 @@ def _parse_payload(raw: Any, allowed_urls: set[str]) -> PlatformKnowledgePayload
         raise PlatformKnowledgeExtractionError(
             "The extracted knowledge did not match the required schema.", code="knowledge_invalid_schema"
         ) from exc
+    allowed = {url.rstrip("/") for url in allowed_urls}
     for group in (
         payload.products_and_services, payload.capabilities, payload.workflows,
         payload.target_audiences, payload.differentiators,
     ):
         for fact in group:
-            if fact.source_url not in allowed_urls:
+            if fact.source_url.rstrip("/") not in allowed:
                 raise PlatformKnowledgeExtractionError(
                     "A knowledge fact referenced a URL outside the supplied source set.",
                     code="knowledge_invalid_source",
@@ -155,7 +156,7 @@ def validate_knowledge_evidence(
 ) -> None:
     """Reject model-generated facts whose cited URL or evidence is not in source text."""
     source_text = {
-        document.url: normalise_evidence_text(document.content_text or "")
+        (document.url or "").rstrip("/"): normalise_evidence_text(document.content_text or "")
         for document in documents
     }
     groups = (
@@ -164,7 +165,11 @@ def validate_knowledge_evidence(
     )
     for group in groups:
         for fact in group:
-            source = source_text.get(fact.source_url)
+            source = (
+                source_text.get(fact.source_url)
+                or source_text.get(fact.source_url.rstrip("/"))
+                or source_text.get(fact.source_url + "/")
+            )
             if source is None or normalise_evidence_text(fact.evidence) not in source:
                 raise PlatformKnowledgeExtractionError(
                     f"A knowledge fact contained evidence not found in its cited source "
