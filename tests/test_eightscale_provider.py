@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import json
 import pytest
 
 from app.integrations.video.base import (
@@ -38,11 +39,10 @@ def test_extract_helpers_tolerate_common_shapes():
 
 
 async def test_sync_flow_returns_url_job_and_retrieves():
-    calls: list[str] = []
-
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(str(request.url))
         if request.method == "POST":
+            body = json.loads(request.content.decode())
+            assert len(body["prompt"]) <= 2000
             return httpx.Response(200, json={
                 "video_url": "https://static.8scale.com/out/clip-01.mp4"})
         return httpx.Response(200, content=b"VIDEOBYTES")
@@ -58,25 +58,57 @@ async def test_sync_flow_returns_url_job_and_retrieves():
     assert b"".join(chunks) == b"VIDEOBYTES"
 
 
-async def test_async_flow_polls_until_completed():
-    state = {"polls": 0}
+async def test_async_flow_polls_status_then_out_json():
+    """Submit -> /status/{id} (presigned out.json) -> completed with video URL."""
+    polls = {"n": 0}
+    manifest = {"video_url": "https://m.8scale.com/job-77/out.mp4"}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
         if request.method == "POST":
-            return httpx.Response(200, json={"data": {"task_id": "job-77"}})
-        state["polls"] += 1
-        if state["polls"] < 2:
-            return httpx.Response(200, json={"data": {"task_id": "job-77", "status": "processing"}})
-        return httpx.Response(200, json={"data": {
-            "task_id": "job-77", "status": "completed",
-            "video_url": "https://static.8scale.com/out/done.mp4"}})
+            return httpx.Response(200, json={"task_id": "job-77"})
+        if "/status/" in url:
+            polls["n"] += 1
+            if polls["n"] == 1:
+                return httpx.Response(200, json={"status": "PROCESSING", "executionTimeMs": 1})
+            return httpx.Response(200, json={
+                "status": "COMPLETED",
+                "output": "https://m.8scale.com/job-77/out.mp4?sig=1"})
+        if "out.mp4" in url:
+            return httpx.Response(200, content=b"VIDEOBYTES")
+        return httpx.Response(404, json={"message": "Not Found"})
 
     provider = _provider(handler)
     job = await provider.generate_video(_request())
     assert job == "8scale:job-77"
-    await provider.get_generation_status(job)   # first poll: still processing
+    await provider.get_generation_status(job)      # first poll: not ready
     status = await provider.get_generation_status(job)  # second poll: completed
-    assert status.is_completed and state["polls"] == 2
+    assert status.is_completed and status.video_url.endswith("out.mp4?sig=1")
+    assert polls["n"] == 2
+
+
+async def test_validation_error_in_manifest_maps_to_failed():
+    import json as _json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "POST":
+            return httpx.Response(200, json={"task_id": "job-88"})
+        if "/status/" in url:
+            return httpx.Response(200, json={
+                "status": "FAILED",
+                "output": "https://m.8scale.com/job-88/out.json?sig=1"})
+        if "out.json" in url:
+            return httpx.Response(200, json={"detail": [
+                {"type": "string_too_long", "msg": "String should have at most 2000 characters"}]})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    job = await provider.generate_video(_request())
+    status = await provider.get_generation_status(job)
+    assert not status.is_completed
+    assert status.error_code == "provider_generation_failed"
+    assert "2000" in (status.error_message or "")
 
 
 async def test_error_mapping():

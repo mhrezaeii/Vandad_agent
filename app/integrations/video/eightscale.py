@@ -13,6 +13,7 @@ mismatch is fixed in one place: :func:`_extract_video_url` /
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -107,6 +108,7 @@ class EightScaleSceneVideoProvider(SceneVideoProvider):
     display_name = "8Scale Wan 2.2 14B"
     model_id = "wan-2.2/14b/text-to-video"
     requires_network = True
+    supports_health_check = True
     input_modalities = ("text",)
     supported_modalities = ("video",)
     supported_resolutions = ("480p", "720p")
@@ -179,9 +181,26 @@ class EightScaleSceneVideoProvider(SceneVideoProvider):
         return httpx.AsyncClient(timeout=self.config.timeout_seconds)
 
     # ------------------------------------------------------------------ ABC
+    PROMPT_LIMIT = 2000
+
+    @staticmethod
+    def _cap_prompt(prompt: str, limit: int = 2000) -> str:
+        """Fit the composed prompt under the provider's 2000-char limit.
+
+        The composed prompt puts the scene type/style first and the concrete
+        visual prompt last; keep both ends and drop the middle when over.
+        """
+        text = prompt.strip()
+        if len(text) <= limit:
+            return text
+        keep = limit - 20
+        head = keep * 30 // 100
+        tail = keep - head
+        return text[:head] + chr(10) + "..." + chr(10) + text[-tail:]
+
     async def generate_video(self, request: SceneVideoRequest) -> str:
         body: dict[str, Any] = {
-            "prompt": request.prompt.strip(),
+            "prompt": self._cap_prompt(request.prompt),
             "resolution": self.config.resolution,
             "aspect_ratio": self.config.aspect_ratio,
             "duration": int(request.duration_seconds),
@@ -201,41 +220,88 @@ class EightScaleSceneVideoProvider(SceneVideoProvider):
             code="provider_bad_response",
         )
 
-    async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
-        from app.integrations.video.base import SceneVideoPermanentError as _P  # noqa: PLC0415
+    async def check_health(self):
+        """Liveness probe: any HTTP answer (even 4xx) proves reachability."""
+        from app.integrations.video.base import SceneVideoHealthResult
 
+        try:
+            await self._request("GET", f"/{self.config.model_path}")
+        except SceneVideoTransientError:
+            raise
+        except SceneVideoPermanentError:
+            pass  # a 4xx still proves the endpoint answered with our auth
+        return SceneVideoHealthResult(
+            provider_id=self.provider_id, healthy=True,
+            message="8Scale API reachable.", latency_ms=None,
+        )
+
+    async def _fetch_result_manifest(self, out_url: str) -> dict[str, Any] | None:
+        """Fetch a small out.json document (failure details / nested outputs)."""
+        for attempt in range(3):
+            try:
+                async with self._client() as client:
+                    response = await client.get(out_url, timeout=120.0)
+                if response.status_code != 200:
+                    return None
+                data = response.json()
+                return data if isinstance(data, dict) else None
+            except (httpx.HTTPError, ValueError):
+                if attempt == 2:
+                    return None
+                await asyncio.sleep(2 * (attempt + 1))
+        return None
+
+    async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         raw = job_id.removeprefix("8scale:")
         # Synchronous submissions embed the video URL directly.
         if raw.lower().startswith(("http://", "https://")):
             return SceneGenerationStatus(
                 job_id=job_id, state=SceneJobState.COMPLETED.value, video_url=raw,
             )
-        payload = await self._request("GET", f"/{self.config.model_path}/{raw}")
-        status = (extract_status(payload) or "").lower()
-        video_url = extract_video_url(payload)
-        if video_url:
-            return SceneGenerationStatus(
-                job_id=job_id, state=SceneJobState.COMPLETED.value, video_url=video_url,
-            )
-        if any(flag in status for flag in ("fail", "error", "cancel")):
+        payload = await self._request("GET", f"/status/{raw}")
+        status = str(payload.get("status") or "").strip().upper()
+        output = payload.get("output") if isinstance(payload.get("output"), str) else None
+        if status == "COMPLETED" and output:
+            # Completed jobs put the presigned MP4 URL straight in `output`;
+            # failed jobs point at a small out.json error document.
+            if "out.json" not in output.lower():
+                return SceneGenerationStatus(
+                    job_id=job_id, state=SceneJobState.COMPLETED.value, video_url=output,
+                )
+            manifest = await self._fetch_result_manifest(output)
+            if manifest and "detail" not in manifest:
+                video_url = manifest.get("_video_url") or extract_video_url(manifest)
+                if video_url:
+                    return SceneGenerationStatus(
+                        job_id=job_id, state=SceneJobState.COMPLETED.value, video_url=video_url,
+                    )
+        if status in ("FAILED", "ERROR", "CANCELLED", "CANCELED"):
+            message = "8Scale reported generation failure."
+            if output and "out.json" in output.lower():
+                manifest = await self._fetch_result_manifest(output)
+                if manifest and "detail" in manifest:
+                    detail = manifest["detail"]
+                    message = (json.dumps(detail, ensure_ascii=False)[:300]
+                               if not isinstance(detail, str) else detail[:300])
             return SceneGenerationStatus(
                 job_id=job_id, state=SceneJobState.FAILED.value,
-                error_code="provider_generation_failed",
-                error_message=f"8Scale reported status: {status or 'failed'}.",
+                error_code="provider_generation_failed", error_message=message,
             )
-        if status in ("", "queued", "pending", "processing", "running", "generating", "in_progress"):
-            return SceneGenerationStatus(
-                job_id=job_id, state=SceneJobState.GENERATING.value,
-            )
-        return SceneGenerationStatus(
-            job_id=job_id, state=SceneJobState.GENERATING.value,
-        )
+        return SceneGenerationStatus(job_id=job_id, state=SceneJobState.GENERATING.value)
 
     async def retrieve_video(self, job_id: str) -> AsyncIterator[bytes]:
         url = job_id.removeprefix("8scale:")
         if not url.lower().startswith(("http://", "https://")):
-            payload = await self._request("GET", f"/{self.config.model_path}/{url}")
-            url = extract_video_url(payload) or ""
+            payload = await self._request("GET", f"/status/{url}")
+            url = payload.get("output") if isinstance(payload.get("output"), str) else ""
+        if not url:
+            raise SceneVideoPermanentError(
+                "No video URL is available for this 8Scale job.",
+                code="provider_video_url_missing",
+            )
+        if "out.json" in url.lower():
+            manifest = await self._fetch_result_manifest(url)
+            url = (extract_video_url(manifest) if manifest else "") or ""
         if not url:
             raise SceneVideoPermanentError(
                 "No video URL is available for this 8Scale job.",
@@ -250,7 +316,7 @@ class EightScaleSceneVideoProvider(SceneVideoProvider):
                 code="provider_download_host_blocked",
             )
         async with self._client() as client:
-            async with client.stream("GET", url, timeout=180.0, follow_redirects=False) as response:
+            async with client.stream("GET", url, timeout=300.0, follow_redirects=False) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     raise SceneVideoPermanentError(
                         "The 8Scale video URL redirected; refusing an unverified host.",
