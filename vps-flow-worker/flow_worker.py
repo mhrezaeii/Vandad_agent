@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Google Flow (labs.google/flow) free-quota clip worker — VPS edition.
+"""Google Flow (labs.google/flow) free-quota clip worker — Windows 11 VPS edition.
 
-Runs on a foreign VPS (Flow is geo-blocked from Iran). One company Google
-account, one cookie session, daily free quota. No multi-account rotation.
-
-Setup (see README.md):
-  1. bash install.sh          # python + playwright + chromium
-  2. python flow_worker.py import-cookies cookies.json
-  3. python flow_worker.py generate --prompt-file prompts.txt --out clips/
+Runs on the Nesta Windows VPS (foreign IP -> Flow accessible). One company
+Google account, one persistent browser profile (login once interactively),
+daily free quota. No multi-account rotation.
 
 Commands:
-  import-cookies <file>   import a Cookie-Editor JSON export (labs.google)
-  status                  show session + quota state
-  generate                generate clips for every prompt in the file
-  prompt <text>           generate one clip for a single prompt
+  login      open a visible browser -> log into labs.google/flow once -> profile saved
+  status     show session + quota state
+  generate   generate one clip per prompt block in the prompt file
+  prompt     generate a single clip for one prompt
 """
 
 from __future__ import annotations
@@ -29,23 +25,21 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 STATE_DIR = BASE_DIR / "state"
+PROFILE_DIR = STATE_DIR / "chrome-profile"
 OUTPUT_DIR = BASE_DIR / "clips"
 SHOTS_DIR = STATE_DIR / "shots"
-STORAGE_STATE = STATE_DIR / "storage_state.json"
-PROFILE_DIR = STATE_DIR / "profile"
 QUOTA_FILE = STATE_DIR / "quota.json"
 
 DAILY_LIMIT = int(__import__("os").environ.get("FLOW_DAILY_LIMIT", "6"))
 GENERATE_URL = "https://labs.google/flow"
-TIMEOUT_SECONDS = int(__import__("os").environ.get("FLOW_TIMEOUT_SECONDS", "1200"))
+HEADLESS = __import__("os").environ.get("FLOW_HEADLESS", "0") == "1"
 
 # Flow's DOM changes without notice — every selector lives here.
 SELECTORS = {
-    "create_button": "button:has-text('Create'), a:has-text('Create'), [aria-label*='Create']",
     "prompt_box": "textarea, [contenteditable='true'], [role='textbox']",
-    "submit": "button:has-text('Create'), button:has-text('Generate'), [aria-label*='Generate'], button[type='submit']",
+    "submit": "button:has-text('Create'), button:has-text('Generate'), "
+              "[aria-label*='Generate'], button[type='submit']",
     "video_element": "video",
-    "download": "text=Download",
 }
 
 
@@ -70,51 +64,70 @@ def quota_remaining() -> int:
     return max(0, DAILY_LIMIT - quota_read()["used"])
 
 
-def import_cookies(export_path: str) -> None:
-    export = json.loads(Path(export_path).read_text(encoding="utf-8"))
-    if isinstance(export, dict):
-        export = export.get("cookies", [])
-    cookies = []
-    for item in export:
-        domain = str(item.get("domain") or "")
-        if not any(d in domain for d in ("google.com", "labs.google", "accounts.google.com")):
-            continue
-        cookie = {
-            "name": str(item.get("name") or ""),
-            "value": str(item.get("value") or ""),
-            "domain": domain,
-            "path": str(item.get("path") or "/"),
-            "httpOnly": bool(item.get("httpOnly", False)),
-            "secure": bool(item.get("secure", True)),
-        }
-        expires = item.get("expirationDate") or item.get("expires")
-        if isinstance(expires, (int, float)) and expires > 0:
-            cookie["expires"] = int(expires)
-        cookies.append(cookie)
-    if not cookies:
-        print("ERROR: the export contained no google/labs.google cookies.", file=sys.stderr)
-        sys.exit(2)
-    STORAGE_STATE.parent.mkdir(parents=True, exist_ok=True)
-    STORAGE_STATE.write_text(
-        json.dumps({"cookies": cookies, "origins": []}, indent=2), encoding="utf-8"
+async def _launch(force_headless: bool = False):
+    from playwright.async_api import async_playwright
+
+    manager = await async_playwright().start()
+    browser = await manager.chromium.launch_persistent_context(
+        str(PROFILE_DIR),
+        headless=force_headless or HEADLESS,
+        viewport={"width": 1440, "height": 900},
+        locale="en-US",
+        args=["--disable-blink-features=AutomationControlled"],
     )
-    print(f"session imported: {len(cookies)} cookies -> {STORAGE_STATE}")
+    return manager, browser
 
 
-def status() -> None:
+async def login_cmd() -> None:
+    """Open a visible browser; the operator logs into Flow once; profile saved."""
+    from playwright.async_api import async_playwright
+
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    print("opening a visible browser — log into labs.google/flow with the "
+          "company Google account, wait until the Flow dashboard loads, "
+          "then press Enter here...")
+    manager = await async_playwright().start()
+    browser = await manager.chromium.launch_persistent_context(
+        str(PROFILE_DIR), headless=False,
+        viewport={"width": 1280, "height": 900}, locale="en-US",
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    page = await browser.new_page()
+    await page.goto(GENERATE_URL, wait_until="domcontentloaded", timeout=90_000)
+    input("\n>>> after the Flow dashboard is visible, press Enter to save the profile... ")
+    await browser.close()
+    await manager.stop()
+    print(f"profile saved: {PROFILE_DIR}")
+    await asyncio.to_thread(status)
+
+
+async def status_cmd() -> None:
     print(json.dumps({
-        "session_present": STORAGE_STATE.is_file(),
+        "profile_present": PROFILE_DIR.is_dir(),
         "used_today": quota_read()["used"],
         "remaining_today": quota_remaining(),
         "daily_limit": DAILY_LIMIT,
+        "headless": HEADLESS,
     }, indent=2))
+
+
+def _load_prompts(prompt_file: str | None, single_prompt: str | None) -> list[str]:
+    if single_prompt:
+        return [single_prompt]
+    raw = Path(prompt_file or "").read_text(encoding="utf-8")
+    prompts: list[str] = []
+    for block in re.split(r"\n-{3,}\n|\n=====*\n", raw):
+        text = re.sub(r"^CLIP \d+[^\n]*\n?", "", block.strip()).strip()
+        if len(text) > 60:
+            prompts.append(text)
+    return prompts
 
 
 async def _dismiss_popups(page) -> None:
     for _ in range(4):
         dismissed = False
-        for sel in ("[aria-label='Close']", "button:has-text('Accept')", "button:has-text('Got it')",
-                    "button:has-text('I agree')", "[class*='close']"):
+        for sel in ("[aria-label='Close']", "button:has-text('Accept')",
+                    "button:has-text('Got it')", "button:has-text('I agree')"):
             try:
                 loc = page.locator(sel)
                 if await loc.count() > 0 and await loc.first.is_visible():
@@ -132,9 +145,9 @@ async def _dismiss_popups(page) -> None:
 
 async def _generate_one(page, prompt: str, out_path: Path, shots: Path, index: int) -> None:
     await page.goto(GENERATE_URL, wait_until="domcontentloaded", timeout=90_000)
-    await page.wait_for_timeout(6000)
+    await page.wait_for_timeout(5000)
     if "accounts.google.com" in page.url:
-        raise RuntimeError("session signed out — re-import fresh cookies")
+        raise RuntimeError("session signed out — run `flow_worker.py login` again")
     await _dismiss_popups(page)
     await page.screenshot(path=str(shots / f"flow-{index:02d}-a-landing.png"))
 
@@ -146,25 +159,20 @@ async def _generate_one(page, prompt: str, out_path: Path, shots: Path, index: i
     await page.screenshot(path=str(shots / f"flow-{index:02d}-b-prompt.png"))
 
     submitted = False
-    for sel in (SELECTORS["submit"],):
-        try:
-            loc = page.locator(sel)
-            for i in range(await loc.count()):
-                btn = loc.nth(i)
-                if await btn.is_visible() and await btn.is_enabled():
-                    await btn.click()
-                    submitted = True
-                    break
-            if submitted:
+    try:
+        loc = page.locator(SELECTORS["submit"])
+        for i in range(await loc.count()):
+            btn = loc.nth(i)
+            if await btn.is_visible() and await btn.is_enabled():
+                await btn.click()
+                submitted = True
                 break
-        except Exception:  # noqa: BLE001
-            continue
+    except Exception:  # noqa: BLE001
+        pass
     if not submitted:
         await page.keyboard.press("Control+Enter")
-        submitted = True
-    print(f"  [{index}] submitted, generating (this takes 1-4 minutes)...")
+    print(f"  [{index}] submitted, generating (1-4 minutes)...")
 
-    # wait for a video element to appear in the latest generation card
     video = page.locator(SELECTORS["video_element"]).last
     await video.wait_for(state="attached", timeout=600_000)
     for _ in range(120):
@@ -179,7 +187,7 @@ async def _generate_one(page, prompt: str, out_path: Path, shots: Path, index: i
     await page.screenshot(path=str(shots / f"flow-{index:02d}-c-result.png"))
 
     downloaded = False
-    for sel in (SELECTORS["download"], "[aria-label*='Download']", "button:has-text('Download')"):
+    for sel in ("text=Download", "[aria-label*='Download']", "button:has-text('Download')"):
         try:
             loc = page.locator(sel)
             if await loc.count() > 0 and await loc.last.is_visible():
@@ -192,7 +200,6 @@ async def _generate_one(page, prompt: str, out_path: Path, shots: Path, index: i
         except Exception:  # noqa: BLE001
             continue
     if not downloaded:
-        # fallback: grab the video src and fetch it via the browser context
         src = await page.evaluate(
             "() => { const v = [...document.querySelectorAll('video')].pop();"
             " return v ? (v.src || v.querySelector('source')?.src || null) : null; }"
@@ -201,8 +208,8 @@ async def _generate_one(page, prompt: str, out_path: Path, shots: Path, index: i
             import httpx
 
             cookies = await page.context.cookies()
-            with httpx.Client(cookies={c["name"]: c["value"] for c in cookies}, timeout=180,
-                              follow_redirects=True) as client:
+            with httpx.Client(cookies={c["name"]: c["value"] for c in cookies},
+                              timeout=180, follow_redirects=True) as client:
                 r = client.get(src)
                 if r.status_code == 200 and len(r.content) > 10_000:
                     out_path.write_bytes(r.content)
@@ -214,52 +221,27 @@ async def _generate_one(page, prompt: str, out_path: Path, shots: Path, index: i
 
 
 async def generate_cmd(prompt_file: str | None, single_prompt: str | None, out_dir: str) -> None:
-    from playwright.async_api import async_playwright
-
-    prompts: list[str] = []
-    if single_prompt:
-        prompts = [single_prompt]
-    else:
-        raw = Path(prompt_file or "").read_text(encoding="utf-8")
-        for block in re.split(r"\n-{3,}\n|\n=====*\n|\n\n(?=CLIP \d+)", raw):
-            text = block.strip()
-            text = re.sub(r"^CLIP \d+[^\n]*\n?", "", text).strip()
-            if len(text) > 60:
-                prompts.append(text)
+    prompts = _load_prompts(prompt_file, single_prompt)
     if not prompts:
         print("ERROR: no prompts found.", file=sys.stderr)
         sys.exit(2)
-
     if quota_remaining() < len(prompts):
-        print(f"WARNING: {len(prompts)} prompts but only {quota_remaining()} quota left today; "
+        print(f"NOTE: {len(prompts)} prompts but only {quota_remaining()} quota left today; "
               f"generating as many as possible.")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     shots = SHOTS_DIR / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     shots.mkdir(parents=True, exist_ok=True)
 
+    manager, browser = await _launch(force_headless=False)
+    page = await browser.new_page()
     start_index = 1 + sum(1 for _ in out.glob("*.mp4"))
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage",
-                  "--disable-blink-features=AutomationControlled"],
-        )
-        context = await browser.new_context(
-            storage_state=str(STORAGE_STATE) if STORAGE_STATE.is_file() else None,
-            viewport={"width": 1440, "height": 900}, locale="en-US",
-            user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
-        )
-        await context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
-        page = await context.new_page()
-        ok = failed = 0
+    ok = failed = 0
+    try:
         for offset, prompt in enumerate(prompts):
             index = start_index + offset
             if quota_remaining() <= 0:
-                print(f"  [{index}] daily quota exhausted — stop here, rerun tomorrow.")
+                print(f"  [{index}] daily quota exhausted — rerun tomorrow.")
                 break
             out_path = out / f"{index:02d}.mp4"
             try:
@@ -268,30 +250,31 @@ async def generate_cmd(prompt_file: str | None, single_prompt: str | None, out_d
                 ok += 1
             except Exception as exc:  # noqa: BLE001
                 failed += 1
-                print(f"  [{index}] FAILED: {str(exc)[:160]}", file=sys.stderr)
-        await context.close()
+                print(f"  [{index}] FAILED: {str(exc)[:180]}", file=sys.stderr)
+    finally:
         await browser.close()
+        await manager.stop()
     print(f"done: ok={ok} failed={failed} | clips in {out}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd")
-    p_imp = sub.add_parser("import-cookies")
-    p_imp.add_argument("file")
+    sub.add_parser("login")
     sub.add_parser("status")
     p_gen = sub.add_parser("generate")
-    p_gen.add_argument("--prompt-file", default="prompts.txt")
+    p_gen.add_argument("--prompt-file", default="prompts-vandiyar.txt")
     p_gen.add_argument("--out", default=str(OUTPUT_DIR))
-    p_gen.add_argument("--prompt", default=None, help="generate a single prompt")
+    p_gen.add_argument("--prompt", default=None)
     p_one = sub.add_parser("prompt")
     p_one.add_argument("text")
     args = parser.parse_args()
 
-    if args.cmd == "import-cookies":
-        import_cookies(args.file)
+    if args.cmd == "login":
+        asyncio.run(login_cmd())
     elif args.cmd == "status":
-        status()
+        asyncio.run(status_cmd())
     elif args.cmd == "generate":
         asyncio.run(generate_cmd(args.prompt_file, args.prompt, args.out))
     elif args.cmd == "prompt":
