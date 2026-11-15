@@ -98,7 +98,7 @@ async def login_cmd() -> None:
     await browser.close()
     await manager.stop()
     print(f"profile saved: {PROFILE_DIR}")
-    await asyncio.to_thread(status)
+    await asyncio.to_thread(status_cmd)
 
 
 async def status_cmd() -> None:
