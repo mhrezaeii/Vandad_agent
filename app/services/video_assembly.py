@@ -115,7 +115,7 @@ def build_finish_args(
         )
         chain = f"[{next_chain}]"
     if subtitle_path is not None:
-        escaped = str(subtitle_path).replace("\\", "/").replace(":", "\:").replace("'", "\'")
+        escaped = str(subtitle_path).replace("\\", "/").replace(":", r"\:").replace("'", "\'")
         filters.append(f"{chain}subtitles='{escaped}'[subbed]")
         chain = "[subbed]"
     command: list[str] = [
