@@ -52,6 +52,12 @@ from app.schemas.scenario import Scenario
 from app.security.redaction import redact_text
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
+from app.services.character_service import (
+    CharacterImageError,
+    load_character_image_bytes,
+    resolve_character_image,
+)
+from app.services.prompt_composer import PromptCompositionError, compose_single_shot_prompt
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 from app.services.video_assembly import (
     build_audio_concat_args,
@@ -112,6 +118,7 @@ class SceneVideoService:
         max_attempts: int = 3,
         max_size_bytes: int = 2 * 1024**3,
         screenshots_root: str | Path | None = None,
+        characters_root: str | Path | None = None,
         tts_settings: TtsSettings | None = None,
     ) -> None:
         self.session = session
@@ -120,15 +127,28 @@ class SceneVideoService:
         self.daily_quota = daily_quota
         self.max_attempts = max(1, int(max_attempts))
         self._screenshots_root = Path(screenshots_root) if screenshots_root else None
+        self._characters_root = Path(characters_root) if characters_root else None
         self._tts_settings = tts_settings
         self.max_size_bytes = max_size_bytes
         self.audit = AuditService(session)
+
+    @staticmethod
+    def _generation_mode(project: ContentProject) -> str:
+        options = project.scene_options or {}
+        mode = str(options.get("generation_mode") or "").strip().lower()
+        return mode or "multi_scene"
 
     # -------------------------------------------------------------- preparation
     async def prepare_scenes(
         self, project: ContentProject, scenario: Scenario, *, provider_id: str
     ) -> list[SceneVideoJob]:
-        """Create one job per scene; idempotent on ``(project, scene_index)``."""
+        """Create provider jobs for the approved scenario.
+
+        ``multi_scene`` (default) creates one job per storyboard beat.
+        ``single_shot`` combines the complete scenario into ONE composed
+        prompt and creates exactly ONE job, so the provider receives exactly
+        one generation request for the whole video.
+        """
         provider = self.registry.get(provider_id)
         # Scene generation and final quality review are separate capabilities.
         # A generation-only provider may prepare and submit clips; finalization
@@ -142,6 +162,30 @@ class SceneVideoService:
             ).scalars()
         }
 
+        if self._generation_mode(project) == "single_shot":
+            jobs = await self._prepare_single_shot(project, scenario, provider, existing)
+        else:
+            jobs = await self._prepare_multi_scene(project, scenario, provider, existing)
+
+        project.scenario = scenario.model_dump(mode="json")
+        project.scene_video_provider = provider.provider_id
+        project.status = ProjectStatus.SCENES_PREPARED.value
+        await self.session.flush()
+        return jobs
+
+    async def _prepare_multi_scene(
+        self,
+        project: ContentProject,
+        scenario: Scenario,
+        provider: SceneVideoProvider,
+        existing: dict[int, SceneVideoJob],
+    ) -> list[SceneVideoJob]:
+        single_shot_jobs = [job for job in existing.values() if job.scene_key == "single-shot"]
+        if single_shot_jobs:
+            raise ConflictError(
+                "This project was prepared in single-shot mode; switching to multi-scene "
+                "would create additional paid generation jobs. Start a new project instead.",
+            )
         jobs: list[SceneVideoJob] = []
         for scene in scenario.scenes:
             job = existing.get(scene.index)
@@ -184,12 +228,137 @@ class SceneVideoService:
                 job.duration_seconds = scene.duration_seconds
                 job.provider = provider.provider_id
             jobs.append(job)
-
-        project.scenario = scenario.model_dump(mode="json")
-        project.scene_video_provider = provider.provider_id
-        project.status = ProjectStatus.SCENES_PREPARED.value
-        await self.session.flush()
         return jobs
+
+    async def _prepare_single_shot(
+        self,
+        project: ContentProject,
+        scenario: Scenario,
+        provider: SceneVideoProvider,
+        existing: dict[int, SceneVideoJob],
+    ) -> list[SceneVideoJob]:
+        """Prepare exactly ONE whole-video job from the complete scenario."""
+        if len(existing) > 1:
+            raise ConflictError(
+                "This project already has per-scene jobs; single-shot preparation "
+                "must start from a fresh project.",
+            )
+        total_duration = scenario.total_duration_seconds
+        min_duration = provider.min_duration_seconds
+        max_duration = provider.max_duration_seconds
+        if min_duration is not None and total_duration < min_duration:
+            raise SceneVideoPermanentError(
+                f"The single-shot scenario is {total_duration:g}s but {provider.display_name} "
+                f"requires at least {min_duration:g}s for one continuous generation.",
+                code="provider_invalid_duration",
+            )
+        if max_duration is not None and total_duration > max_duration:
+            raise SceneVideoPermanentError(
+                f"The single-shot scenario is {total_duration:g}s but {provider.display_name} "
+                f"generates at most {max_duration:g}s in one request. Reduce the target "
+                "duration; single-shot mode never splits the video into multiple paid jobs.",
+                code="provider_invalid_duration",
+            )
+
+        options = project.scene_options or {}
+        character_description = str(options.get("character_description") or "").strip() or None
+        try:
+            prompt = compose_single_shot_prompt(
+                scenario,
+                character_description=character_description,
+                max_characters=provider.max_prompt_characters or 5000,
+            )
+        except PromptCompositionError as exc:
+            raise SceneVideoPermanentError(exc.message, code=exc.code) from exc
+
+        job = existing.get(0)
+        if job is None:
+            job = SceneVideoJob(
+                company_id=project.company_id,
+                project_id=project.id,
+                scene_index=0,
+                scene_key="single-shot",
+                provider=provider.provider_id,
+                status=SceneVideoJobStatus.PENDING.value,
+                prompt=prompt,
+                narration=scenario.narration,
+                on_screen_text="\n".join(
+                    scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
+                    if scene.on_screen_text
+                ) or None,
+                subtitle_text=scenario.narration,
+                duration_seconds=total_duration,
+                max_attempts=self.max_attempts,
+                submission_metadata={"generation_mode": "single_shot"},
+            )
+            self.session.add(job)
+            await self.session.flush()
+            self.audit.record(
+                event_type="scene.prepared",
+                action="create",
+                company_id=project.company_id,
+                resource_type=_SCENE_RESOURCE,
+                resource_id=job.id,
+                metadata={
+                    "project_id": str(project.id),
+                    "scene_index": 0,
+                    "provider": provider.provider_id,
+                    "generation_mode": "single_shot",
+                    "beats": len(scenario.scenes),
+                },
+            )
+        else:
+            # Keep the persisted prompt in sync with an approved scenario
+            # without resetting provider submission state.
+            job.prompt = prompt
+            job.narration = scenario.narration
+            job.on_screen_text = "\n".join(
+                scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
+                if scene.on_screen_text
+            ) or None
+            job.subtitle_text = scenario.narration
+            job.duration_seconds = total_duration
+            job.provider = provider.provider_id
+        return [job]
+
+    async def _resolve_reference_image(
+        self, project: ContentProject, provider: SceneVideoProvider
+    ) -> str | None:
+        """Resolve the configured character reference image to a provider-fetchable URL.
+
+        Two sources are supported (checked in order):
+
+        1. ``scene_options["character_image_url"]`` — an operator-supplied public
+           HTTPS URL (the provider adapter validates it again before submit).
+        2. ``scene_options["character_key"]`` — a validated local asset from the
+           character registry; providers that expose a file-upload API receive
+           the uploaded public URL, so the image bytes are actually transmitted
+           to the provider instead of being dropped.
+        """
+        if not provider.supports_reference_image:
+            return None
+        options = project.scene_options or {}
+        external_url = str(options.get("character_image_url") or "").strip()
+        character_key = str(options.get("character_key") or "").strip()
+        if external_url:
+            return external_url
+        if not character_key:
+            return None
+        uploader = getattr(provider, "upload_reference_image", None)
+        if not callable(uploader):
+            raise SceneVideoPermanentError(
+                f"Provider {provider.provider_id} cannot host local character images; "
+                "provide a public HTTPS character_image_url instead.",
+                code="provider_reference_image_unsupported",
+            )
+        try:
+            image = resolve_character_image(self._characters_root, character_key)
+        except CharacterImageError as exc:
+            raise SceneVideoPermanentError(exc.message, code=exc.code) from exc
+        image_bytes = load_character_image_bytes(image)
+        return await uploader(image_bytes, file_name=image.file_name)
+
+    # ---------------------------------------------------------------- submission
 
     # ---------------------------------------------------------------- submission
     async def submit_pending(
@@ -333,12 +502,29 @@ class SceneVideoService:
                 continue
 
             await self._reserve_quota(project.company_id, provider)
+            # Resolve the character reference image BEFORE the submission fence:
+            # uploads are free and image-source failures must never consume the
+            # fence or reach a billable POST.
+            try:
+                reference_image_url = await self._resolve_reference_image(project, provider)
+            except SceneVideoPermanentError as exc:
+                job.status = SceneVideoJobStatus.FAILED.value
+                job.error_code = exc.code
+                job.error_message = exc.message
+                await self.session.flush()
+                first_permanent = first_permanent or exc
+                continue
             request = SceneVideoRequest(
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,
                 duration_seconds=job.duration_seconds,
+                reference_image_url=reference_image_url,
                 idempotency_key=f"vandad-scene-{job.id}",
-                metadata={"project_id": str(project.id), "scene_index": job.scene_index},
+                metadata={
+                    "project_id": str(project.id),
+                    "scene_index": job.scene_index,
+                    "generation_mode": self._generation_mode(project),
+                },
             )
             job.attempts += 1
             estimate = getattr(provider, "estimate_cost_usd", None)

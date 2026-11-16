@@ -561,3 +561,221 @@ async def test_script_failure_syncs_project_and_retry_creates_new_execution(
     assert project.script_workflow_execution_id != first_execution_id
     old_execution = await db_session.get(WorkflowExecution, first_execution_id)
     assert old_execution.idempotency_key is None
+
+
+# ------------------------------------------------------- single-shot pipeline
+class _SingleShotProvider(MockSceneVideoProvider):
+    """Mock provider with the documented image-to-video capability surface."""
+
+    provider_id = "mockshot"
+    supports_reference_image = True
+    supports_native_audio = True
+    min_duration_seconds = 6
+    max_duration_seconds = 30
+    max_prompt_characters = 5000
+
+
+def _single_shot_registry():
+    registry = SceneVideoProviderRegistry()
+    registry.register(_SingleShotProvider())
+    return registry
+
+
+async def _approved_single_shot_project(
+    db_session, content_service, company, *,
+    target_duration: int = 20,
+    scene_seconds: float = 5.0,
+    scene_count: int = 4,
+    character_key: str | None = "Vandiyar/Emerald Blazer",
+    character_image_url: str | None = None,
+):
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    project = await content_service.create_scene_project(
+        scope=_scope(company.id),
+        brand_id=brand.id,
+        topic="معرفی تک‌برداشت ویدیار",
+        target_duration_seconds=target_duration,
+        generation_mode="single_shot",
+        character_key=character_key,
+        character_image_url=character_image_url,
+        character_description="young office worker, round glasses, red tie",
+    )
+    project.status = ProjectStatus.APPROVED.value
+    project.scenario = {
+        "title": "معرفی",
+        "opening_hook": "قلاب",
+        "scenes": [
+            {
+                "index": index,
+                "narration": f"روایت {index}",
+                "visual_prompt": f"visual {index}",
+                "duration_seconds": scene_seconds,
+            }
+            for index in range(scene_count)
+        ],
+        "narration": " ".join(f"روایت {index}" for index in range(scene_count)),
+        "cta": "شروع کنید",
+        "target_duration_seconds": target_duration,
+    }
+    await db_session.commit()
+    return project
+
+
+async def test_single_shot_start_requires_character_reference_and_duration_bounds(
+    db_session, content_service, company_and_platform, monkeypatch
+):
+    company, _ = company_and_platform
+    content_service.scene_video_registry = _single_shot_registry()
+    project = await _approved_single_shot_project(
+        db_session, content_service, company, character_key=None, character_image_url=None,
+    )
+
+    async def fake_ensure_workflow(*args, **kwargs):
+        return None
+
+    async def fake_require_published(*args, **kwargs):
+        return SimpleNamespace(id=uuid.uuid4())
+
+    async def fake_execute_workflow(*args, **kwargs):
+        execution = WorkflowExecution(
+            company_id=company.id,
+            workflow_name="single-shot-test",
+            workflow_type="video_production",
+            status="running",
+        )
+        db_session.add(execution)
+        await db_session.flush()
+        return execution, True
+
+    monkeypatch.setattr(content_service, "ensure_workflow", fake_ensure_workflow)
+    monkeypatch.setattr(content_service, "_require_published", fake_require_published)
+    monkeypatch.setattr(
+        content_service._execution_service, "execute_workflow", fake_execute_workflow
+    )
+
+    # Missing character image fails closed before any budget reservation.
+    with pytest.raises(UnprocessableEntityError, match="character"):
+        await content_service.generate_scene_video(
+            project.id, scope=_scope(company.id), provider_id="mockshot"
+        )
+
+    project2 = await _approved_single_shot_project(
+        db_session, content_service, company,
+        character_key=None, character_image_url="https://assets.example.test/character.png",
+        target_duration=45, scene_seconds=15.0, scene_count=3,
+    )
+    # A 45s single-shot scenario exceeds the documented 30s model maximum.
+    with pytest.raises(UnprocessableEntityError, match="at most 30s"):
+        await content_service.generate_scene_video(
+            project2.id, scope=_scope(company.id), provider_id="mockshot"
+        )
+
+
+async def test_single_shot_end_to_end_submits_exactly_one_paid_generation(
+    db_session, content_service, company_and_platform, monkeypatch, tmp_path
+):
+    """Scenario -> one composed prompt -> exactly ONE provider submission.
+
+    The provider here is a capability-matched mock, so no paid KIE call is made;
+    the KIE request contract itself is covered in tests/test_kie_provider.py.
+    """
+    company, _ = company_and_platform
+    content_service.scene_video_registry = _single_shot_registry()
+
+    class _UploadingProvider(_SingleShotProvider):
+        provider_id = "mockuploadshot"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.uploads: list[tuple[bytes, str]] = []
+            self.requests: list = []
+
+        async def upload_reference_image(self, data: bytes, *, file_name: str) -> str:
+            self.uploads.append((data, file_name))
+            return "https://tempfile.example.test/vandad/character-references/Emerald Blazer.png"
+
+        async def generate_video(self, request):
+            self.requests.append(request)
+            return await super().generate_video(request)
+
+    provider = _UploadingProvider()
+    registry = SceneVideoProviderRegistry()
+    registry.register(provider)
+    content_service.scene_video_registry = registry
+
+    from decimal import Decimal as _Decimal
+
+    db_session.add(
+        CompanyProviderBudget(
+            company_id=company.id,
+            provider_id="mockuploadshot",
+            monthly_limit_usd=_Decimal("10.00"),
+            per_operation_limit_usd=_Decimal("2.00"),
+            enabled=True,
+        )
+    )
+    await db_session.commit()
+
+    character_root = tmp_path / "Paltform_charactar" / "Vandiyar"
+    character_root.mkdir(parents=True)
+    (character_root / "Emerald Blazer.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 1100)
+
+    project = await _approved_single_shot_project(
+        db_session, content_service, company, target_duration=20, scene_seconds=5.0,
+    )
+
+    async def fake_ensure_workflow(*args, **kwargs):
+        return None
+
+    async def fake_require_published(*args, **kwargs):
+        return SimpleNamespace(id=uuid.uuid4())
+
+    async def fake_execute_workflow(*args, **kwargs):
+        execution = WorkflowExecution(
+            company_id=company.id,
+            workflow_name="single-shot-e2e",
+            workflow_type="video_production",
+            status="running",
+        )
+        db_session.add(execution)
+        await db_session.flush()
+        return execution, True
+
+    monkeypatch.setattr(content_service, "ensure_workflow", fake_ensure_workflow)
+    monkeypatch.setattr(content_service, "_require_published", fake_require_published)
+    monkeypatch.setattr(
+        content_service._execution_service, "execute_workflow", fake_execute_workflow
+    )
+
+    started = await content_service.generate_scene_video(
+        project.id, scope=_scope(company.id), provider_id="mockuploadshot"
+    )
+    assert started.scene_options["production_mode"] == "single_shot"
+
+    from app.services.scene_video_service import SceneVideoService
+
+    service = SceneVideoService(
+        db_session,
+        registry,
+        storage=None,
+        characters_root=tmp_path / "Paltform_charactar",
+    )
+    from app.schemas.scenario import Scenario
+
+    scenario = Scenario.model_validate(project.scenario)
+    jobs = await service.prepare_scenes(project, scenario, provider_id="mockuploadshot")
+    assert len(jobs) == 1
+    await db_session.commit()
+    summary = await service.submit_pending(project)
+    await db_session.commit()
+
+    assert summary["submitted"] == 1
+    assert len(provider.requests) == 1  # exactly ONE paid generation
+    assert len(provider.uploads) == 1
+    request = provider.requests[0]
+    assert request.reference_image_url == "https://tempfile.example.test/vandad/character-references/Emerald Blazer.png"
+    assert "Beat " in request.prompt
+    assert "Iranian Persian" in request.prompt
+    assert "روایت 0" in request.prompt
+    assert request.duration_seconds == 20.0
+    assert request.metadata["generation_mode"] == "single_shot"

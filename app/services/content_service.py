@@ -628,6 +628,10 @@ class ContentService:
         scene_count: int | None = None,
         provider_id: str | None = None,
         screenshots_platform: str | None = None,
+        generation_mode: str | None = None,
+        character_key: str | None = None,
+        character_image_url: str | None = None,
+        character_description: str | None = None,
     ) -> ContentProject:
         """Create a non-avatar project that will be built from scene clips."""
         from app.schemas.scenario import MAX_TARGET_DURATION_SECONDS, MIN_TARGET_DURATION_SECONDS
@@ -643,6 +647,20 @@ class ContentService:
                     }
                 ],
             )
+        resolved_mode = (generation_mode or get_settings().scene_video_generation_mode or "").strip().lower()
+        if resolved_mode not in ("multi_scene", "single_shot"):
+            raise UnprocessableEntityError(
+                "generation_mode must be 'multi_scene' or 'single_shot'.",
+                details=[{"field": "generation_mode", "value": generation_mode}],
+            )
+        character_key = (character_key or "").strip() or None
+        character_image_url = (character_image_url or "").strip() or None
+        character_description = (character_description or "").strip() or None
+        if character_key and character_image_url:
+            raise UnprocessableEntityError(
+                "Provide either character_key or character_image_url, not both.",
+                details=[{"field": "character_key"}, {"field": "character_image_url"}],
+            )
         brand = await self.get_brand(brand_id, company_id=scope.company_id)
         project = ContentProject(
             company_id=scope.company_id,
@@ -655,6 +673,10 @@ class ContentService:
                 "scene_count": scene_count,
                 "provider_id": provider_id,
                 "screenshots_platform": screenshots_platform,
+                "generation_mode": resolved_mode,
+                "character_key": character_key,
+                "character_image_url": character_image_url,
+                "character_description": character_description,
             },
             scene_video_provider=provider_id,
         )
@@ -671,6 +693,7 @@ class ContentService:
                 "topic": topic[:200],
                 "target_duration_seconds": target_duration_seconds,
                 "provider_id": provider_id,
+                "generation_mode": resolved_mode,
             },
         )
         await self.session.flush()
@@ -823,6 +846,12 @@ class ContentService:
                 and isinstance(scene.get("duration_seconds"), (int, float))
                 and not isinstance(scene.get("duration_seconds"), bool)
             )
+            if (options.get("generation_mode") or "").strip().lower() == "single_shot":
+                # Single-shot submits ONE whole-video request. The registry's
+                # per-duration capability check is bypassed here so the
+                # explicit single-shot bounds validation below can fail with
+                # an actionable message instead of a generic resolver error.
+                required_durations = ()
             divisor = gcd(int(brand.video_width), int(brand.video_height))
             required_aspect_ratio = (
                 f"{int(brand.video_width) // divisor}:{int(brand.video_height) // divisor}"
@@ -882,11 +911,48 @@ class ContentService:
             route_order = [selected_provider] + [
                 candidate for candidate in ordered_ids if candidate != selected_provider
             ]
+            # Single-shot mode: the whole video is ONE provider generation from
+            # one reference image. Validate duration bounds and the character
+            # image source BEFORE reserving budget or spending any credit.
+            if (options.get("generation_mode") or "").strip().lower() == "single_shot":
+                total_duration = sum(
+                    (scene_duration for scene_duration in required_durations), 0.0
+                ) or float((project.scenario or {}).get("target_duration_seconds") or 0)
+                min_duration = selected.min_duration_seconds
+                max_duration = selected.max_duration_seconds
+                if min_duration is not None and total_duration < min_duration:
+                    raise UnprocessableEntityError(
+                        f"Single-shot generation needs at least {min_duration:g}s but the "
+                        f"scenario is {total_duration:g}s.",
+                        details=[{"field": "target_duration_seconds", "value": total_duration}],
+                    )
+                if max_duration is not None and total_duration > max_duration:
+                    raise UnprocessableEntityError(
+                        f"Single-shot generation supports at most {max_duration:g}s in one "
+                        f"request but the scenario is {total_duration:g}s. Reduce the target "
+                        "duration; single-shot mode never splits the video into multiple "
+                        "paid jobs.",
+                        details=[{"field": "target_duration_seconds", "value": total_duration}],
+                    )
+                has_reference_source = bool(
+                    (options.get("character_image_url") or "").strip()
+                    or (options.get("character_key") or "").strip()
+                )
+                if selected.supports_reference_image and not has_reference_source:
+                    raise UnprocessableEntityError(
+                        "Single-shot image-to-video generation requires a character "
+                        "reference image. Create the project with a 'character_key' "
+                        "(for example 'Vandiyar/<character name>') or a public HTTPS "
+                        "'character_image_url'.",
+                        details=[{"field": "character_key"}],
+                    )
             project.scene_video_provider = selected_provider
             options["provider_id"] = selected_provider
             options["provider_route_order"] = route_order
             options["production_mode"] = (
-                "single_scene_passthrough" if len(scenario_scenes) <= 1 else "local_composition"
+                "single_shot"
+                if (options.get("generation_mode") or "").strip().lower() == "single_shot"
+                else ("single_scene_passthrough" if len(scenario_scenes) <= 1 else "local_composition")
             )
             project.scene_options = options
         if selected_provider:
