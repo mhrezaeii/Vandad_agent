@@ -60,6 +60,7 @@ from app.services.video_assembly import (
     build_silence_args,
     concat_scene_clips,
     ffmpeg_binary,
+    ffprobe_binary,
     run_ffmpeg,
 )
 from app.storage.base import ArtifactStorage
@@ -203,6 +204,17 @@ class SceneVideoService:
         )).scalars())
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+
+        # Paid multi-scene providers without their own composition endpoint rely
+        # on local FFmpeg assembly. Verify both binaries before spending credits;
+        # ffprobe is required to preserve KIE native audio across all clips.
+        if len(jobs) > 1 and not (provider.supports_composition and provider.supports_quality_review):
+            ffmpeg_binary()
+            if ffprobe_binary() is None:
+                raise SceneVideoPermanentError(
+                    "ffprobe is required for safe multi-scene video assembly and audio preservation.",
+                    code="ffprobe_unavailable",
+                )
 
         submitted = 0
         first_transient: Exception | None = None
