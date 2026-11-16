@@ -89,9 +89,10 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
         kie_config = KIEConfig(
             api_key=kie_key,
             base_url=getattr(settings, "scene_video_kie_base_url", "https://api.kie.ai"),
-            model=getattr(settings, "scene_video_kie_model", "grok-imagine-video-1-5-preview"),
+            model=getattr(settings, "scene_video_kie_model", "grok-imagine/image-to-video"),
             resolution=getattr(settings, "scene_video_kie_resolution", "480p"),
             aspect_ratio=getattr(settings, "scene_video_kie_aspect_ratio", "9:16"),
+            mode=getattr(settings, "scene_video_kie_mode", "normal"),
             timeout_seconds=getattr(settings, "scene_video_kie_timeout_seconds", 60.0),
             poll_interval_seconds=getattr(settings, "scene_video_poll_interval_seconds", 3.0),
             max_poll_attempts=getattr(settings, "scene_video_max_poll_attempts", 300),
@@ -101,6 +102,8 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
                 for host in getattr(settings, "scene_video_kie_download_allowed_hosts", "").split(",")
                 if host.strip()
             ),
+            upload_base_url=getattr(settings, "scene_video_kie_upload_base_url", None),
+            upload_path=getattr(settings, "scene_video_kie_upload_path", "vandad/character-references"),
         )
 
     apimaster_config: APIMasterConfig | None = None

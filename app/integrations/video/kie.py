@@ -45,12 +45,54 @@ _STATUS_MAP = {
     "fail": SceneJobState.FAILED.value,
 }
 
+# Documented per-model contracts for the two supported KIE Grok Imagine models.
+# - "grok-imagine-video-1-5-preview": text-to-video, 1..15 (int/fractional)
+#   seconds, aspect_ratio always sent, optional reference image.
+# - "grok-imagine/image-to-video": image-to-video, integer 6..30 seconds
+#   serialized as a string, prompt up to 5000 chars, a reference image is
+#   mandatory and aspect_ratio must NOT be sent (single-image mode derives the
+#   output geometry from the image itself).
+T2V_MODEL_ID = "grok-imagine-video-1-5-preview"
+I2V_MODEL_ID = "grok-imagine/image-to-video"
+_KIE_MODEL_RULES = {
+    T2V_MODEL_ID: {
+        "min_duration": 1.0,
+        "max_duration": 15.0,
+        "duration_as_string": False,
+        "fractional_duration": True,
+        "max_prompt_characters": 4096,
+        "requires_reference_image": False,
+        "send_mode": False,
+    },
+    I2V_MODEL_ID: {
+        "min_duration": 6.0,
+        "max_duration": 30.0,
+        "duration_as_string": True,
+        "fractional_duration": False,
+        "max_prompt_characters": 5000,
+        "requires_reference_image": True,
+        "send_mode": True,
+    },
+}
+# External image inputs must run without NSFW "spicy" mode; the documented
+# mode enum is fun/normal/spicy with spicy reserved for internal task_id flows.
+_ALLOWED_MODES = {"normal", "fun"}
+
+# Reference images must be re-fetchable by KIE: public HTTPS, no userinfo,
+# standard port, and never a private/reserved address.
+_ALLOWED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+_MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
+_REFERENCE_IMAGE_MAGIC = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+)
+
 
 @dataclass(frozen=True)
 class KIEConfig:
     api_key: str
     base_url: str = "https://api.kie.ai"
-    model: str = "grok-imagine-video-1-5-preview"
+    model: str = I2V_MODEL_ID
     resolution: str = "480p"
     aspect_ratio: str = "9:16"
     timeout_seconds: float = 60.0
@@ -58,6 +100,13 @@ class KIEConfig:
     max_poll_attempts: int = 300
     price_per_credit_usd: float = 0.005
     download_allowed_hosts: tuple[str, ...] = ()
+    # Grok Imagine image-to-video mode ("normal" or "fun"; "spicy" is not
+    # available for external image inputs and is rejected by this adapter).
+    mode: str = "normal"
+    # Optional override for the file-upload host (documented mirror base is
+    # https://kieai.redpandaai.co); when unset the jobs base URL is used.
+    upload_base_url: str | None = None
+    upload_path: str = "vandad/character-references"
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.base_url)
@@ -73,8 +122,9 @@ class KIEConfig:
             raise ValueError("KIE base_url must be an HTTPS origin without userinfo, path, query or fragment.")
         if not self.api_key.strip():
             raise ValueError("KIE api_key must not be blank.")
-        if self.model != "grok-imagine-video-1-5-preview":
-            raise ValueError("KIE model must be grok-imagine-video-1-5-preview.")
+        if self.model not in _KIE_MODEL_RULES:
+            allowed = ", ".join(sorted(_KIE_MODEL_RULES))
+            raise ValueError(f"KIE model must be one of: {allowed}.")
         if self.resolution not in _CREDITS_PER_SECOND:
             raise ValueError("KIE resolution must be 480p, 720p or 1080p.")
         if self.aspect_ratio not in {"1:1", "16:9", "9:16", "3:2", "2:3", "auto"}:
@@ -86,11 +136,26 @@ class KIEConfig:
         for host in self.download_allowed_hosts:
             if not host or host != host.strip() or "/" in host or ":" in host:
                 raise ValueError("KIE download allowlist must contain exact hostnames.")
+        if self.mode not in _ALLOWED_MODES:
+            raise ValueError("KIE mode must be 'normal' or 'fun'.")
+        if self.upload_base_url is not None:
+            upload_parsed = urlsplit(self.upload_base_url)
+            if (
+                upload_parsed.scheme != "https"
+                or not upload_parsed.hostname
+                or upload_parsed.username
+                or upload_parsed.password
+                or upload_parsed.query
+                or upload_parsed.fragment
+            ):
+                raise ValueError("KIE upload_base_url must be an HTTPS origin without userinfo, query or fragment.")
+        if not self.upload_path.strip() or self.upload_path.strip() != self.upload_path:
+            raise ValueError("KIE upload_path must be a non-empty path without leading/trailing whitespace.")
 
 
 class KIESceneVideoProvider(SceneVideoProvider):
     provider_id = "kie"
-    display_name = "KIE.ai Grok Imagine Video 1.5 Preview"
+    display_name = "KIE.ai Grok Imagine"
     requires_network = True
     supports_health_check = True
     supports_reference_image = True
@@ -99,18 +164,25 @@ class KIESceneVideoProvider(SceneVideoProvider):
     supported_modalities = ("video", "audio")
     supported_resolutions = ("480p", "720p", "1080p")
     supported_aspect_ratios = ("1:1", "16:9", "9:16", "3:2", "2:3", "auto")
-    min_duration_seconds = 1
-    max_duration_seconds = 15
-    max_prompt_characters = 4096
     max_reference_images = 1
 
     def __init__(self, config: KIEConfig, *, client_factory=None) -> None:
         self.config = config
         self.model_id = config.model
+        self._rules = _KIE_MODEL_RULES[config.model]
         self._client_factory = client_factory
         self._status_cache: dict[str, tuple[float, SceneGenerationStatus]] = {}
         self.supported_resolutions = (config.resolution,)
         self.supported_aspect_ratios = (config.aspect_ratio,)
+        # Model-scoped capability surface consumed by the registry resolver
+        # and by SceneVideoService preflight checks.
+        self.min_duration_seconds = self._rules["min_duration"]
+        self.max_duration_seconds = self._rules["max_duration"]
+        self.max_prompt_characters = self._rules["max_prompt_characters"]
+
+    @property
+    def is_image_to_video(self) -> bool:
+        return self.config.model == I2V_MODEL_ID
 
     async def check_health(self) -> SceneVideoHealthResult:
         started = time.perf_counter()
@@ -159,25 +231,45 @@ class KIESceneVideoProvider(SceneVideoProvider):
 
     async def generate_video(self, request: SceneVideoRequest) -> str:
         duration = request.duration_seconds
+        rules = self._rules
         if (
             isinstance(duration, bool)
             or not isinstance(duration, (int, float))
             or not math.isfinite(float(duration))
-            or not 1 <= float(duration) <= 15
+            or not rules["min_duration"] <= float(duration) <= rules["max_duration"]
         ):
             raise SceneVideoPermanentError(
-                "KIE Grok Imagine Video 1.5 requires a duration from 1 through 15 seconds.",
+                f"KIE model {self.config.model} requires a duration from "
+                f"{rules['min_duration']:.0f} through {rules['max_duration']:.0f} seconds.",
                 code="provider_invalid_duration",
             )
         duration_value = float(duration)
-        api_duration = int(duration_value) if duration_value.is_integer() else duration_value
+        if not rules["fractional_duration"] and not duration_value.is_integer():
+            raise SceneVideoPermanentError(
+                f"KIE model {self.config.model} accepts whole-second durations only "
+                f"(received {duration_value}).",
+                code="provider_invalid_duration",
+            )
+        if rules["duration_as_string"]:
+            api_duration: str | int | float = str(int(duration_value))
+        else:
+            api_duration = int(duration_value) if duration_value.is_integer() else duration_value
         prompt = request.prompt.strip()
         if not prompt or len(prompt) > self.max_prompt_characters:
             raise SceneVideoPermanentError(
-                "KIE requires a prompt containing 1 to 4096 characters.",
+                f"KIE requires a prompt containing 1 to {self.max_prompt_characters} characters.",
                 code="provider_invalid_prompt",
             )
-        if not request.reference_image_url and request.aspect_ratio not in self.supported_aspect_ratios:
+        reference_image_url = request.reference_image_url
+        if reference_image_url:
+            reference_image_url = self._validate_reference_image_url(reference_image_url)
+        elif rules["requires_reference_image"]:
+            raise SceneVideoPermanentError(
+                "KIE image-to-video requires a character reference image. Resolve a valid "
+                "reference image before submitting a paid generation.",
+                code="provider_reference_image_missing",
+            )
+        if not reference_image_url and request.aspect_ratio not in self.supported_aspect_ratios:
             raise SceneVideoPermanentError(
                 "The requested aspect ratio does not match the configured KIE aspect ratio.",
                 code="provider_invalid_aspect_ratio",
@@ -202,12 +294,14 @@ class KIESceneVideoProvider(SceneVideoProvider):
             "resolution": self.config.resolution,
             "duration": api_duration,
         }
-        if request.reference_image_url:
+        if reference_image_url:
             # KIE derives output geometry from a single reference image; its
             # playground marks aspect_ratio invalid for this input mode.
-            input_data["image_urls"] = [request.reference_image_url]
+            input_data["image_urls"] = [reference_image_url]
         else:
             input_data["aspect_ratio"] = self.config.aspect_ratio
+        if rules["send_mode"]:
+            input_data["mode"] = self.config.mode
         body = {"model": self.config.model, "input": input_data}
         try:
             payload = await self._request_json("POST", "/api/v1/jobs/createTask", json=body)
@@ -233,6 +327,176 @@ class KIESceneVideoProvider(SceneVideoProvider):
                 code="provider_submission_unknown",
             )
         return f"kie:{task_id}"
+
+    async def upload_reference_image(self, data: bytes, *, file_name: str) -> str:
+        """Host one local reference image on KIE's temporary file storage.
+
+        The documented upload endpoint is free and returns a ``downloadUrl``
+        that generation tasks can fetch; uploaded files expire automatically,
+        so this must be called immediately before the paid submission. The
+        image is validated (format magic bytes, size bounds) before upload.
+        """
+        content_type = self._reference_image_content_type(data)
+        if len(data) > _MAX_REFERENCE_IMAGE_BYTES:
+            raise SceneVideoPermanentError(
+                f"The reference image is {len(data)} bytes; KIE accepts at most "
+                f"{_MAX_REFERENCE_IMAGE_BYTES} bytes per image.",
+                code="provider_reference_image_too_large",
+            )
+        name = file_name.strip()
+        if not name or "/" in name or "\\" in name or len(name) > 200:
+            raise SceneVideoPermanentError(
+                "The reference image file name must be a plain file name.",
+                code="provider_reference_image_invalid",
+            )
+        if not name.lower().endswith(_ALLOWED_IMAGE_SUFFIXES):
+            raise SceneVideoPermanentError(
+                "The reference image file name must end with jpg, jpeg, png or webp.",
+                code="provider_reference_image_invalid",
+            )
+        body = {
+            "base64Data": f"data:{content_type};base64,",
+            "uploadPath": self.config.upload_path,
+            "fileName": name,
+        }
+        import base64 as _base64
+
+        body["base64Data"] += _base64.b64encode(data).decode("ascii")
+        upload_base = self.config.upload_base_url or self.config.base_url
+        url = f"{upload_base.rstrip('/')}/api/v1/file-base64-upload"
+        try:
+            client = self._client()
+            async with client:
+                response = await client.request(
+                    "POST",
+                    url,
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {self.config.api_key}",
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                )
+        except httpx.TimeoutException as exc:
+            raise SceneVideoTransientError(
+                "KIE reference-image upload timed out before any paid submission.",
+                code="provider_timeout",
+            ) from exc
+        except httpx.TransportError as exc:
+            raise SceneVideoTransientError(
+                "KIE reference-image upload failed before any paid submission.",
+                code="provider_unreachable",
+            ) from exc
+        if response.status_code == 401:
+            raise SceneVideoPermanentError(
+                "KIE rejected the API credential for the reference-image upload.",
+                code="provider_unauthorized",
+            )
+        if response.status_code >= 500:
+            raise SceneVideoTransientError(
+                f"KIE reference-image upload failed with HTTP {response.status_code}.",
+                code="provider_server_error",
+            )
+        if not 200 <= response.status_code < 300:
+            raise SceneVideoPermanentError(
+                f"KIE reference-image upload failed with HTTP {response.status_code}.",
+                code="provider_request_failed",
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise SceneVideoPermanentError(
+                "KIE reference-image upload returned invalid JSON.",
+                code="provider_bad_response",
+            ) from exc
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            message = redact_text(str((payload or {}).get("msg") or ""))[:200]
+            raise SceneVideoPermanentError(
+                f"KIE reference-image upload was rejected{(': ' + message) if message else '.'}",
+                code="provider_request_failed",
+            )
+        data_payload = payload.get("data")
+        download_url = data_payload.get("downloadUrl") if isinstance(data_payload, dict) else None
+        if not isinstance(download_url, str) or not download_url.strip():
+            raise SceneVideoPermanentError(
+                "KIE reference-image upload returned no usable downloadUrl.",
+                code="provider_bad_response",
+            )
+        return self._validate_reference_image_url(download_url)
+
+    def _reference_image_content_type(self, data: bytes) -> str:
+        if not data:
+            raise SceneVideoPermanentError(
+                "The reference image is empty.", code="provider_reference_image_invalid"
+            )
+        for magic, content_type in _REFERENCE_IMAGE_MAGIC:
+            if data.startswith(magic):
+                return content_type
+        if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "image/webp"
+        raise SceneVideoPermanentError(
+            "The reference image must be JPEG, PNG or WEBP content.",
+            code="provider_reference_image_invalid",
+        )
+
+    def _validate_reference_image_url(self, value: str) -> str:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            parsed.scheme != "https"
+            or not host
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise SceneVideoPermanentError(
+                "The character reference image must be a public HTTPS URL without query strings.",
+                code="provider_reference_image_invalid",
+            )
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise SceneVideoPermanentError(
+                "The character reference image URL contains an invalid port.",
+                code="provider_reference_image_invalid",
+            ) from exc
+        if port not in (None, 443):
+            raise SceneVideoPermanentError(
+                "The character reference image URL must use the standard HTTPS port.",
+                code="provider_reference_image_invalid",
+            )
+        lowered_path = parsed.path.lower()
+        if lowered_path and not lowered_path.endswith(_ALLOWED_IMAGE_SUFFIXES):
+            raise SceneVideoPermanentError(
+                "The character reference image URL must point to a JPEG, PNG or WEBP file.",
+                code="provider_reference_image_invalid",
+            )
+        try:
+            literal = ipaddress.ip_address(host)
+        except ValueError:
+            literal = None
+        if literal is not None and not literal.is_global:
+            raise SceneVideoPermanentError(
+                "The character reference image host is not public.",
+                code="provider_reference_image_invalid",
+            )
+        if self._client_factory is None and literal is None:
+            try:
+                addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            except OSError as exc:
+                raise SceneVideoPermanentError(
+                    "The character reference image hostname could not be resolved.",
+                    code="provider_reference_image_unreachable",
+                ) from exc
+            if not addresses or any(
+                not ipaddress.ip_address(item[4][0].split("%", 1)[0]).is_global for item in addresses
+            ):
+                raise SceneVideoPermanentError(
+                    "The character reference image hostname resolves to a non-public address.",
+                    code="provider_reference_image_invalid",
+                )
+        return value
 
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         task_id = self._task_id(job_id)
