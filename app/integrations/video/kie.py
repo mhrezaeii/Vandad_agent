@@ -102,7 +102,7 @@ class KIESceneVideoProvider(SceneVideoProvider):
     min_duration_seconds = 1
     max_duration_seconds = 15
     max_prompt_characters = 4096
-    max_reference_images = 7
+    max_reference_images = 1
 
     def __init__(self, config: KIEConfig, *, client_factory=None) -> None:
         self.config = config
@@ -264,14 +264,18 @@ class KIESceneVideoProvider(SceneVideoProvider):
         progress = self._number(payload.get("progress"))
         if progress is not None:
             progress = max(0.0, min(1.0, progress / 100.0 if progress > 1 else progress))
+        duration_value = self._number(payload.get("duration"))
         fail_code = str(payload.get("failCode") or "").strip() or None
         fail_message = str(payload.get("failMsg") or "").strip()
         status = SceneGenerationStatus(
             job_id=job_id,
             state=state,
-            progress=1.0 if state == SceneJobState.COMPLETED.value else (float(progress) if progress is not None else None),
+            progress=(
+                1.0 if state == SceneJobState.COMPLETED.value
+                else (float(progress) if progress is not None else None)
+            ),
             video_url=video_url,
-            duration_seconds=(float(self._number(payload.get("duration"))) if self._number(payload.get("duration")) is not None else None),
+            duration_seconds=float(duration_value) if duration_value is not None else None,
             error_code=(f"kie_{fail_code}" if fail_code else "kie_generation_failed")
             if state == SceneJobState.FAILED.value else None,
             error_message=redact_text(fail_message)[:500] if fail_message else None,
@@ -282,7 +286,10 @@ class KIESceneVideoProvider(SceneVideoProvider):
 
     async def retrieve_video(self, job_id: str) -> AsyncIterator[bytes]:
         cached = self._status_cache.get(self._task_id(job_id))
-        status = cached[1] if cached and time.monotonic() - cached[0] <= 10 else await self.get_generation_status(job_id)
+        if cached and time.monotonic() - cached[0] <= 10:
+            status = cached[1]
+        else:
+            status = await self.get_generation_status(job_id)
         if not status.is_completed or not status.video_url:
             raise SceneVideoPermanentError(
                 "KIE task is not completed or has no output URL.",
@@ -356,7 +363,9 @@ class KIESceneVideoProvider(SceneVideoProvider):
 
         assert response is not None
         if response.status_code == 402:
-            raise SceneVideoQuotaExhaustedError("KIE reports insufficient credits.", code="provider_insufficient_credits")
+            raise SceneVideoQuotaExhaustedError(
+                "KIE reports insufficient credits.", code="provider_insufficient_credits"
+            )
         if response.status_code == 429:
             raise SceneVideoTransientError("KIE rate limit was reached.", code="provider_rate_limited")
         if response.status_code >= 500:
@@ -409,7 +418,9 @@ class KIESceneVideoProvider(SceneVideoProvider):
         try:
             port = parsed.port
         except ValueError as exc:
-            raise SceneVideoPermanentError("KIE media URL contains an invalid port.", code="provider_unsafe_media_url") from exc
+            raise SceneVideoPermanentError(
+                "KIE media URL contains an invalid port.", code="provider_unsafe_media_url"
+            ) from exc
         allowed = {item.lower().rstrip(".") for item in self.config.download_allowed_hosts}
         if (
             parsed.scheme != "https" or not host or parsed.username or parsed.password
@@ -427,11 +438,16 @@ class KIESceneVideoProvider(SceneVideoProvider):
             try:
                 addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
             except OSError as exc:
-                raise SceneVideoTransientError("KIE media hostname could not be resolved.", code="provider_media_dns_failed") from exc
+                raise SceneVideoTransientError(
+                    "KIE media hostname could not be resolved.", code="provider_media_dns_failed"
+                ) from exc
             if not addresses or any(
                 not ipaddress.ip_address(item[4][0].split("%", 1)[0]).is_global for item in addresses
             ):
-                raise SceneVideoPermanentError("KIE media hostname resolves to a non-public address.", code="provider_private_media_ip")
+                raise SceneVideoPermanentError(
+                    "KIE media hostname resolves to a non-public address.",
+                    code="provider_private_media_ip",
+                )
         return value
 
     def _client(self) -> httpx.AsyncClient:

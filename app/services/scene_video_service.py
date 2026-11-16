@@ -579,6 +579,7 @@ class SceneVideoService:
                 "status": job.provider_status or job.status,
                 "estimated_cost_usd": str(estimated) if estimated is not None else None,
                 "reported_cost_usd": str(reported) if reported is not None else None,
+                "credits_consumed": (cost.get("credits_consumed")),
                 "submission_outcome": (job.submission_metadata or {}).get("submission_outcome"),
             })
 
