@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.integrations.video.base import (
+    SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
 )
@@ -117,3 +118,90 @@ async def test_error_mapping():
     provider = _provider(handler)
     with pytest.raises(SceneVideoQuotaExhaustedError):
         await provider.generate_video(_request())
+
+
+class _DropAfterChunk(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"first"
+        raise httpx.ReadError("connection dropped")
+
+    async def aclose(self):
+        return None
+
+
+class _FailBeforeChunk(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        raise httpx.ReadError("connection failed before first byte")
+        yield b""  # pragma: no cover
+
+    async def aclose(self):
+        return None
+
+
+async def test_retrieve_video_resumes_only_from_the_confirmed_range(monkeypatch):
+    ranges = []
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.integrations.video.eightscale.asyncio.sleep", no_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers.get("range"))
+        if len(ranges) == 1:
+            return httpx.Response(200, stream=_DropAfterChunk(), request=request)
+        return httpx.Response(
+            206,
+            headers={"content-range": "bytes 5-10/11"},
+            content=b"second",
+            request=request,
+        )
+
+    provider = _provider(handler)
+    chunks = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
+
+    assert b"".join(chunks) == b"firstsecond"
+    assert ranges == [None, "bytes=5-"]
+
+
+async def test_retrieve_video_retries_when_first_connection_yields_no_bytes(monkeypatch):
+    ranges = []
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.integrations.video.eightscale.asyncio.sleep", no_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers.get("range"))
+        if len(ranges) == 1:
+            return httpx.Response(200, stream=_FailBeforeChunk(), request=request)
+        return httpx.Response(200, content=b"whole-video", request=request)
+
+    provider = _provider(handler)
+    chunks = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
+
+    assert b"".join(chunks) == b"whole-video"
+    assert ranges == [None, None]
+
+
+async def test_retrieve_video_rejects_host_that_ignores_resume_range(monkeypatch):
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.integrations.video.eightscale.asyncio.sleep", no_sleep)
+
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(200, stream=_DropAfterChunk(), request=request)
+        return httpx.Response(200, content=b"whole-video", request=request)
+
+    provider = _provider(handler)
+    with pytest.raises(SceneVideoPermanentError) as exc:
+        _ = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
+
+    assert exc.value.code == "provider_download_range_unsupported"
+    assert calls["count"] == 2
