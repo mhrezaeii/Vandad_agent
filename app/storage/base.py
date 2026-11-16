@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 
 class ArtifactStorageError(Exception):
