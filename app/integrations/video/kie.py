@@ -389,7 +389,9 @@ class KIESceneVideoProvider(SceneVideoProvider):
         # recordInfo's published example uses code 505 with msg=success; accept
         # that response only when it contains a structured task payload.
         if code == 402:
-            raise SceneVideoQuotaExhaustedError("KIE reports insufficient credits.", code="provider_insufficient_credits")
+            raise SceneVideoQuotaExhaustedError(
+                "KIE reports insufficient credits.", code="provider_insufficient_credits"
+            )
         if code == 429:
             raise SceneVideoTransientError("KIE rate limit was reached.", code="provider_rate_limited")
         if code not in (None, 200, 505):
