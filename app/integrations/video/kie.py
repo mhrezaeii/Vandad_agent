@@ -16,7 +16,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from decimal import Decimal
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -266,17 +266,19 @@ class KIESceneVideoProvider(SceneVideoProvider):
             progress = max(0.0, min(1.0, progress / 100.0 if progress > 1 else progress))
         fail_code = str(payload.get("failCode") or "").strip() or None
         fail_message = str(payload.get("failMsg") or "").strip()
-        return SceneGenerationStatus(
+        status = SceneGenerationStatus(
             job_id=job_id,
             state=state,
-            progress=1.0 if state == SceneJobState.COMPLETED.value else progress,
+            progress=1.0 if state == SceneJobState.COMPLETED.value else (float(progress) if progress is not None else None),
             video_url=video_url,
-            duration_seconds=self._number(payload.get("duration")),
+            duration_seconds=(float(self._number(payload.get("duration"))) if self._number(payload.get("duration")) is not None else None),
             error_code=(f"kie_{fail_code}" if fail_code else "kie_generation_failed")
             if state == SceneJobState.FAILED.value else None,
             error_message=redact_text(fail_message)[:500] if fail_message else None,
             raw=raw,
         )
+        self._status_cache[self._task_id(job_id)] = (time.monotonic(), status)
+        return status
 
     async def retrieve_video(self, job_id: str) -> AsyncIterator[bytes]:
         cached = self._status_cache.get(self._task_id(job_id))
@@ -377,6 +379,10 @@ class KIESceneVideoProvider(SceneVideoProvider):
         data = body.get("data")
         # recordInfo's published example uses code 505 with msg=success; accept
         # that response only when it contains a structured task payload.
+        if code == 402:
+            raise SceneVideoQuotaExhaustedError("KIE reports insufficient credits.", code="provider_insufficient_credits")
+        if code == 429:
+            raise SceneVideoTransientError("KIE rate limit was reached.", code="provider_rate_limited")
         if code not in (None, 200, 505):
             message = redact_text(str(body.get("msg") or ""))[:200]
             raise SceneVideoPermanentError(

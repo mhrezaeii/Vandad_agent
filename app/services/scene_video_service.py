@@ -393,7 +393,7 @@ class SceneVideoService:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = exc.code
                 job.error_message = exc.message
-                if provider.provider_id == "wavespeed":
+                if durable_submit_provider:
                     job.submission_metadata = {
                         **(job.submission_metadata or {}),
                         "submission_outcome": "rejected",
@@ -1417,6 +1417,19 @@ class SceneVideoService:
     ) -> None:
         job.error_code = code or "provider_failed"
         job.error_message = message or "The provider reported a failed generation."
+        if job.provider == "kie":
+            # KIE has no documented idempotency key. Never auto-submit a second
+            # paid task after an accepted task reaches a failed terminal state.
+            job.submission_metadata = {
+                **(job.submission_metadata or {}),
+                "failed_provider_job_id": job.provider_job_id,
+                "submission_outcome": "provider_failed_no_auto_retry",
+            }
+            job.provider_job_id = None
+            job.provider_status = None
+            job.attempts = job.max_attempts
+            job.status = SceneVideoJobStatus.FAILED.value
+            return
         if job.attempts < job.max_attempts:
             # Allow a later submit_pending call to resubmit this scene.
             job.submission_metadata = {
