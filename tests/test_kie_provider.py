@@ -53,6 +53,21 @@ async def test_kie_health_and_generation_use_documented_contract():
     assert ("POST", "/api/v1/jobs/createTask") in calls
 
 
+async def test_kie_accepts_fractional_duration_as_documented_number():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/credit"):
+            return httpx.Response(200, json={"code": 200, "data": 60})
+        if request.url.path.endswith("/jobs/createTask"):
+            body = json.loads(request.content)
+            assert body["input"]["duration"] == 7.5
+            return httpx.Response(200, json={"code": 200, "data": {"taskId": "task-7-5"}})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    job_id = await provider.generate_video(_request(7.5))
+    assert job_id == "kie:task-7-5"
+
+
 async def test_kie_blocks_project_scene_when_credits_are_insufficient():
     post_calls = 0
 

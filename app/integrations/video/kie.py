@@ -163,13 +163,14 @@ class KIESceneVideoProvider(SceneVideoProvider):
             isinstance(duration, bool)
             or not isinstance(duration, (int, float))
             or not math.isfinite(float(duration))
-            or int(duration) != duration
-            or not 1 <= int(duration) <= 15
+            or not 1 <= float(duration) <= 15
         ):
             raise SceneVideoPermanentError(
-                "KIE Grok Imagine Video 1.5 requires an integer duration from 1 through 15 seconds.",
+                "KIE Grok Imagine Video 1.5 requires a duration from 1 through 15 seconds.",
                 code="provider_invalid_duration",
             )
+        duration_value = float(duration)
+        api_duration = int(duration_value) if duration_value.is_integer() else duration_value
         prompt = request.prompt.strip()
         if not prompt or len(prompt) > self.max_prompt_characters:
             raise SceneVideoPermanentError(
@@ -200,7 +201,7 @@ class KIESceneVideoProvider(SceneVideoProvider):
             "prompt": prompt,
             "aspect_ratio": self.config.aspect_ratio,
             "resolution": self.config.resolution,
-            "duration": int(duration),
+            "duration": api_duration,
         }
         if request.reference_image_url:
             input_data["image_urls"] = [request.reference_image_url]
