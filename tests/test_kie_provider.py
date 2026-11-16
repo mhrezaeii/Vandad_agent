@@ -133,6 +133,27 @@ async def test_kie_does_not_retry_ambiguous_billable_submit():
     assert calls == 1
 
 
+async def test_kie_marks_malformed_billable_submit_response_as_unknown():
+    post_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal post_calls
+        if request.url.path.endswith("/chat/credit"):
+            return httpx.Response(200, json={"code": 200, "data": 60})
+        if request.url.path.endswith("/jobs/createTask"):
+            post_calls += 1
+            return httpx.Response(200, content=b"not-json")
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    from app.integrations.video.base import SceneVideoTransientError
+
+    with pytest.raises(SceneVideoTransientError) as error:
+        await provider.generate_video(_request())
+    assert error.value.code == "provider_submission_unknown"
+    assert post_calls == 1
+
+
 async def test_kie_rejects_durations_outside_model_contract():
     provider = _provider(lambda request: httpx.Response(404))
     from app.integrations.video.base import SceneVideoPermanentError

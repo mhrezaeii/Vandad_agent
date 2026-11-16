@@ -215,6 +215,13 @@ class KIESceneVideoProvider(SceneVideoProvider):
                 "KIE task submission outcome is unknown. Check KIE task history before retrying.",
                 code="provider_submission_unknown",
             ) from exc
+        except SceneVideoPermanentError as exc:
+            if exc.code == "provider_bad_response":
+                raise SceneVideoTransientError(
+                    "KIE task submission response was ambiguous. Check KIE task history before retrying.",
+                    code="provider_submission_unknown",
+                ) from exc
+            raise
 
         task_id = payload.get("taskId") if isinstance(payload, dict) else None
         if not isinstance(task_id, (str, int)) or not str(task_id).strip():
@@ -396,6 +403,10 @@ class KIESceneVideoProvider(SceneVideoProvider):
             )
         if code == 429:
             raise SceneVideoTransientError("KIE rate limit was reached.", code="provider_rate_limited")
+        if isinstance(code, int) and code >= 500 and code != 505:
+            raise SceneVideoTransientError(
+                f"KIE API returned error code {code}.", code="provider_server_error"
+            )
         if code not in (None, 200, 505):
             message = redact_text(str(body.get("msg") or ""))[:200]
             raise SceneVideoPermanentError(
