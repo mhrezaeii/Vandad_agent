@@ -16,12 +16,11 @@ billing paths of the video provider.
 
 from __future__ import annotations
 
+import asyncio
 import html
-import json
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 import httpx
 
