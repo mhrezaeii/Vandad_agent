@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
+from app.integrations.tts import TextToSpeechError, TtsSettings, synthesize
 from app.integrations.video import (
     SceneJobState,
     SceneVideoCompositionRequest,
@@ -52,7 +53,6 @@ from app.security.redaction import redact_text
 from app.services.artifact_service import ArtifactService
 from app.services.audit_service import AuditService
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
-from app.integrations.tts import TextToSpeechError, TtsSettings, synthesize
 from app.services.video_assembly import (
     build_audio_concat_args,
     build_narration_mux_args,

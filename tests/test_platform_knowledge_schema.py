@@ -1,8 +1,6 @@
 import pytest
 
 
-
-
 def test_parse_payload_flattens_fact_shaped_summary_and_unknowns():
     """Models may return summary/unknowns as fact objects; extraction must survive.
 

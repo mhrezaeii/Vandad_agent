@@ -39,7 +39,7 @@ class DreaminaSettings:
     proxy: str = ""
 
     @classmethod
-    def from_config(cls, config: object) -> "DreaminaSettings":  # noqa: ANN001 - Settings
+    def from_config(cls, config: object) -> DreaminaSettings:  # noqa: ANN001 - Settings
         return cls(
             enabled=bool(getattr(config, "dreamina_enabled", False)),
             daily_limit=int(getattr(config, "dreamina_daily_limit", 6)),

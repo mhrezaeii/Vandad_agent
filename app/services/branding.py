@@ -65,7 +65,7 @@ def render_end_card(
     # Vertical gradient base.
     for y in range(height):
         t = y / max(1, height - 1)
-        color = tuple(int(a + (b - a) * t) for a, b in zip(_BG_TOP, _BG_BOTTOM))
+        color = tuple(int(a + (b - a) * t) for a, b in zip(_BG_TOP, _BG_BOTTOM, strict=False))
         draw.line([(0, y), (width, y)], fill=color)
 
     # Diagonal sweep bands (top-left to bottom-right accent), like the reference.
@@ -74,7 +74,7 @@ def render_end_card(
     band = int(width * 0.55)
     for i in range(band):
         t = i / max(1, band - 1)
-        color = tuple(int(a + (b - a) * t) for a, b in zip(_SWEEP_TOP, _SWEEP_BOTTOM))
+        color = tuple(int(a + (b - a) * t) for a, b in zip(_SWEEP_TOP, _SWEEP_BOTTOM, strict=False))
         x0 = int(-width * 0.35 + i * (width * 1.6 / band))
         alpha = int(210 * (1 - abs(t - 0.5) * 1.2))
         if alpha <= 0:

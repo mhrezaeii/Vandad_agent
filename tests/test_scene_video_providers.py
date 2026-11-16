@@ -914,7 +914,13 @@ async def test_wavespeed_insufficient_credits_maps_to_quota_error():
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url).endswith("/balance"):
             return httpx.Response(200, json={"data": {"balance": 0.30}})
-        return httpx.Response(400, json={"code": 400, "message": "Insufficient credits. Please top up your account to continue."})
+        return httpx.Response(
+            400,
+            json={
+                "code": 400,
+                "message": "Insufficient credits. Please top up your account to continue.",
+            },
+        )
 
     provider = WaveSpeedSceneVideoProvider(
         WaveSpeedConfig(api_key="catalog-test-key"),

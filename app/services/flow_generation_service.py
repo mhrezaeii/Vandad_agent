@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -65,7 +64,7 @@ class FlowSettings:
     proxy: str = ""
 
     @classmethod
-    def from_config(cls, config: object) -> "FlowSettings":  # noqa: ANN001 - Settings
+    def from_config(cls, config: object) -> FlowSettings:  # noqa: ANN001 - Settings
         return cls(
             enabled=bool(getattr(config, "flow_enabled", False)),
             daily_limit=int(getattr(config, "flow_daily_limit", 3)),

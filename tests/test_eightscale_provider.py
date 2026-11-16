@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import httpx
 import json
+
+import httpx
 import pytest
 
 from app.integrations.video.base import (
+    SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
 )
@@ -61,8 +63,6 @@ async def test_sync_flow_returns_url_job_and_retrieves():
 async def test_async_flow_polls_status_then_out_json():
     """Submit -> /status/{id} (presigned out.json) -> completed with video URL."""
     polls = {"n": 0}
-    manifest = {"video_url": "https://m.8scale.com/job-77/out.mp4"}
-
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if request.method == "POST":
@@ -88,8 +88,6 @@ async def test_async_flow_polls_status_then_out_json():
 
 
 async def test_validation_error_in_manifest_maps_to_failed():
-    import json as _json
-
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if request.method == "POST":
@@ -120,3 +118,90 @@ async def test_error_mapping():
     provider = _provider(handler)
     with pytest.raises(SceneVideoQuotaExhaustedError):
         await provider.generate_video(_request())
+
+
+class _DropAfterChunk(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"x" * (1024 * 1024)
+        raise httpx.ReadError("connection dropped")
+
+    async def aclose(self):
+        return None
+
+
+class _FailBeforeChunk(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        raise httpx.ReadError("connection failed before first byte")
+        yield b""  # pragma: no cover
+
+    async def aclose(self):
+        return None
+
+
+async def test_retrieve_video_resumes_only_from_the_confirmed_range(monkeypatch):
+    ranges = []
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.integrations.video.eightscale.asyncio.sleep", no_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers.get("range"))
+        if len(ranges) == 1:
+            return httpx.Response(200, stream=_DropAfterChunk(), request=request)
+        return httpx.Response(
+            206,
+            headers={"content-range": "bytes 1048576-1048581/1048582"},
+            content=b"second",
+            request=request,
+        )
+
+    provider = _provider(handler)
+    chunks = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
+
+    assert b"".join(chunks) == (b"x" * (1024 * 1024)) + b"second"
+    assert ranges == [None, "bytes=1048576-"]
+
+
+async def test_retrieve_video_retries_when_first_connection_yields_no_bytes(monkeypatch):
+    ranges = []
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.integrations.video.eightscale.asyncio.sleep", no_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers.get("range"))
+        if len(ranges) == 1:
+            return httpx.Response(200, stream=_FailBeforeChunk(), request=request)
+        return httpx.Response(200, content=b"whole-video", request=request)
+
+    provider = _provider(handler)
+    chunks = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
+
+    assert b"".join(chunks) == b"whole-video"
+    assert ranges == [None, None]
+
+
+async def test_retrieve_video_rejects_host_that_ignores_resume_range(monkeypatch):
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.integrations.video.eightscale.asyncio.sleep", no_sleep)
+
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(200, stream=_DropAfterChunk(), request=request)
+        return httpx.Response(200, content=b"whole-video", request=request)
+
+    provider = _provider(handler)
+    with pytest.raises(SceneVideoPermanentError) as exc:
+        _ = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
+
+    assert exc.value.code == "provider_download_range_unsupported"
+    assert calls["count"] == 2

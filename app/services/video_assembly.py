@@ -102,22 +102,22 @@ def build_finish_args(
     overlay_scale_height = int(height * _MAX_OVERLAY_HEIGHT_RATIO)
     filters: list[str] = []
     chain = "[0:v]"
-    for index, (image, start, end) in enumerate(overlays):
+    for index, (_image, start, end) in enumerate(overlays):
         scaled = f"ov{index}"
         filters.append(
             f"[{index + 1}:v]scale={overlay_scale_width}:{overlay_scale_height}:"
             f"force_original_aspect_ratio=decrease[{scaled}]"
         )
-        next_chain = f"ov{index}x"
+        next_chain = f"ovx{index}"
         filters.append(
             f"{chain}[{scaled}]overlay=(W-w)/2:(H-h)/2:"
             f"enable='between(t,{start:.3f},{end:.3f})'[{next_chain}]"
         )
-        chain = next_chain
+        chain = f"[{next_chain}]"
     if subtitle_path is not None:
-        escaped = str(subtitle_path).replace("\\", "/").replace(":", "\:").replace("'", "\'")
+        escaped = str(subtitle_path).replace("\\", "/").replace(":", r"\:").replace("'", "\'")
         filters.append(f"{chain}subtitles='{escaped}'[subbed]")
-        chain = "subbed"
+        chain = "[subbed]"
     command: list[str] = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(source_path),
@@ -126,13 +126,14 @@ def build_finish_args(
         command += ["-loop", "1", "-i", str(image)]
     command += [
         "-filter_complex", ";".join(filters),
-        "-map", f"[{chain}]",
-        "-map", "0:a?" if with_audio else "-an",
+        "-map", chain,
+        # The looped image inputs are infinite streams; -shortest ends the
+        # encode at the source video's duration.
+        "-shortest",
+        *(["-map", "0:a?", "-c:a", "aac", "-b:a", "192k"] if with_audio else ["-an"]),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
     ]
-    if with_audio:
-        command += ["-c:a", "aac", "-b:a", "192k"]
     command.append(str(output_path))
     return tuple(command)
 
