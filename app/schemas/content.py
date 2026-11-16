@@ -124,7 +124,10 @@ class SceneProjectCreate(BaseModel):
     screenshots_platform: str | None = Field(
         default=None,
         max_length=100,
-        description="Folder name under assets/platform_screenshots whose real UI screenshots are overlaid during assembly.",
+        description=(
+            "Folder name under assets/platform_screenshots whose real UI "
+            "screenshots are overlaid during assembly."
+        ),
     )
 
 
