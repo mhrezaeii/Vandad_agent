@@ -16,19 +16,19 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
 
 import httpx
 
 from app.integrations.video.base import (
     SceneGenerationStatus,
+    SceneJobState,
     SceneVideoPermanentError,
     SceneVideoProvider,
     SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
     SceneVideoTransientError,
-    SceneJobState,
 )
 
 
