@@ -146,6 +146,16 @@ class Settings(BaseSettings):
     scene_video_output_width: int = Field(default=1080, ge=1, le=8192)
     scene_video_output_height: int = Field(default=1920, ge=1, le=8192)
 
+    # KIE.ai Grok Imagine Video 1.5 Preview (native audio, 1..15 seconds).
+    scene_video_kie_api_key: str | None = None
+    scene_video_kie_base_url: str = "https://api.kie.ai"
+    scene_video_kie_model: str = "grok-imagine-video-1-5-preview"
+    scene_video_kie_resolution: Literal["480p", "720p", "1080p"] = "480p"
+    scene_video_kie_aspect_ratio: str = "9:16"
+    scene_video_kie_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    scene_video_kie_price_per_credit_usd: float = Field(default=0.005, gt=0, le=1)
+    scene_video_kie_download_allowed_hosts: str = ""
+
     # APIMaster is opt-in; no paid request is made unless selected explicitly.
     scene_video_apimaster_api_key: str | None = None
     scene_video_apimaster_base_url: str = "https://apimaster.ai"

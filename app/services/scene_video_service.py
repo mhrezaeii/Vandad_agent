@@ -193,7 +193,7 @@ class SceneVideoService:
     async def submit_pending(
         self, project: ContentProject, *, execution_id: uuid.UUID | None = None
     ) -> dict[str, Any]:
-        """Submit pending scenes with a durable pre-submit fence for WaveSpeed."""
+        """Submit pending scenes with durable pre-submit fences for non-idempotent paid providers."""
         provider = self._provider_for(project)
         jobs = list((await self.session.execute(
             select(SceneVideoJob)
@@ -210,10 +210,11 @@ class SceneVideoService:
         active_submission_ids: set[uuid.UUID] = set()
         now = datetime.now(UTC)
 
-        # A WaveSpeed submit is fenced durably before the external POST. If a
-        # worker dies after WaveSpeed accepts the request but before the ID is
-        # saved, a later worker must reconcile rather than issue a duplicate.
-        if provider.provider_id == "wavespeed":
+        # KIE and WaveSpeed do not document upstream idempotency for create-task
+        # requests. Fence both before their billable POSTs so worker recovery can
+        # never submit a duplicate after an ambiguous acknowledgement.
+        durable_submit_provider = provider.provider_id in {"wavespeed", "kie"}
+        if durable_submit_provider:
             for job in jobs:
                 metadata = job.submission_metadata or {}
                 if job.provider_job_id:
@@ -223,7 +224,7 @@ class SceneVideoService:
                     job.attempts = job.max_attempts
                     job.error_code = "provider_submission_unknown"
                     job.error_message = (
-                        "This scene requires WaveSpeed History reconciliation before retry."
+                        f"This scene requires {provider.display_name} task-history reconciliation before retry."
                     )
                     first_permanent = first_permanent or SceneVideoPermanentError(
                         job.error_message, code="provider_submission_unknown"
@@ -246,7 +247,7 @@ class SceneVideoService:
                 job.attempts = job.max_attempts
                 job.error_code = "provider_submission_unknown"
                 job.error_message = (
-                    "A previous WaveSpeed submit was interrupted. Check prediction history "
+                    f"A previous {provider.display_name} submit was interrupted. Check provider task history "
                     "before any manual retry."
                 )
                 job.submission_metadata = {
@@ -269,6 +270,23 @@ class SceneVideoService:
             )
             and job.attempts < job.max_attempts
         ]
+        if pending_jobs and provider.provider_id == "kie":
+            # Check the entire remaining storyboard before the first paid call.
+            # This prevents partial spend when the account cannot cover all scenes.
+            estimate_credits = getattr(provider, "estimate_credits", None)
+            get_credit_balance = getattr(provider, "get_credit_balance", None)
+            if callable(estimate_credits) and callable(get_credit_balance):
+                required_credits = sum(
+                    (estimate_credits(job.duration_seconds) for job in pending_jobs), Decimal("0")
+                )
+                available_credits = await get_credit_balance()
+                if available_credits < required_credits:
+                    raise SceneVideoQuotaExhaustedError(
+                        f"KIE has {available_credits} credits but the remaining storyboard requires "
+                        f"{required_credits}; no scene was submitted.",
+                        code="provider_insufficient_project_credits",
+                    )
+
         if pending_jobs:
             if not provider.supports_health_check:
                 raise SceneVideoPermanentError(
@@ -315,7 +333,7 @@ class SceneVideoService:
                     "estimated_cost_usd": estimate(job.duration_seconds),
                     "currency": "USD",
                 }
-            if provider.provider_id == "wavespeed":
+            if durable_submit_provider:
                 job.submission_metadata = {
                     **(job.submission_metadata or {}),
                     "submission_outcome": "submitting",
@@ -336,7 +354,7 @@ class SceneVideoService:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = exc.code
                 job.error_message = exc.message
-                if provider.provider_id == "wavespeed":
+                if durable_submit_provider:
                     job.submission_metadata = {
                         **(job.submission_metadata or {}),
                         "submission_outcome": "rejected",
@@ -355,7 +373,7 @@ class SceneVideoService:
                         "submission_outcome": "unknown",
                         "reconcile_before_retry": True,
                     }
-                elif provider.provider_id == "wavespeed" and exc.code in {
+                elif durable_submit_provider and exc.code in {
                     "provider_rate_limited", "provider_preflight_transient"
                 }:
                     job.status = SceneVideoJobStatus.PENDING.value
@@ -387,7 +405,7 @@ class SceneVideoService:
                 job.status = SceneVideoJobStatus.FAILED.value
                 job.error_code = getattr(exc, "code", "provider_error")
                 job.error_message = getattr(exc, "message", str(exc))
-                if provider.provider_id == "wavespeed":
+                if durable_submit_provider:
                     job.attempts = job.max_attempts
                     job.submission_metadata = {
                         **(job.submission_metadata or {}),
@@ -407,7 +425,7 @@ class SceneVideoService:
                 **(job.submission_metadata or {}),
                 "submission_outcome": "submitted",
                 **({"prediction_id": str(provider_job_id).split(":", 1)[1]}
-                   if str(provider_job_id).startswith("wavespeed:") else {}),
+                   if str(provider_job_id).startswith(("wavespeed:", "kie:")) else {}),
             }
             job.submission_metadata.pop("submission_started_at", None)
             submitted += 1
@@ -466,6 +484,8 @@ class SceneVideoService:
                     "reported_cost_usd": str(reported_cost),
                     "actual_cost_usd": str(reported_cost),
                     "provider": provider.provider_id,
+                    **({"credits_consumed": str(status.raw["credits_consumed"])}
+                       if (status.raw or {}).get("credits_consumed") is not None else {}),
                 }
             if (status.raw or {}).get("estimated_cost_usd") is not None:
                 job.cost_metadata = {
@@ -549,7 +569,7 @@ class SceneVideoService:
                 except (InvalidOperation, ValueError):
                     pass
             prediction_id = (job.submission_metadata or {}).get("prediction_id")
-            if prediction_id is None and str(job.provider_job_id or "").startswith("wavespeed:"):
+            if prediction_id is None and str(job.provider_job_id or "").startswith(("wavespeed:", "kie:")):
                 prediction_id = str(job.provider_job_id).split(":", 1)[1]
             predictions.append({
                 "scene_index": job.scene_index,
@@ -1248,6 +1268,8 @@ class SceneVideoService:
         then silence padding), so the combined audio aligns with the assembled
         video. Scenes without narration get exact-length silence.
         """
+        if jobs and getattr(self.registry.get(jobs[0].provider), "supports_native_audio", False):
+            return None
         tts = self._tts_settings
         if tts is None or not tts.provider:
             return None

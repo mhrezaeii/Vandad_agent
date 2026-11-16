@@ -25,6 +25,7 @@ from app.integrations.video.base import (
     SceneVideoValidation,
 )
 from app.integrations.video.generic_http import GenericHttpConfig, GenericHttpSceneVideoProvider
+from app.integrations.video.kie import KIEConfig, KIESceneVideoProvider
 from app.integrations.video.mock import MockSceneVideoProvider
 from app.integrations.video.wavespeed import WaveSpeedConfig, WaveSpeedSceneVideoProvider
 
@@ -167,6 +168,7 @@ def build_scene_video_registry(
     http_config: GenericHttpConfig | None = None,
     apimaster_config: APIMasterConfig | None = None,
     wavespeed_config: WaveSpeedConfig | None = None,
+    kie_config: KIEConfig | None = None,
     wavespeed_composition_provider: SceneVideoProvider | None = None,
     mock_provider: MockSceneVideoProvider | None = None,
 ) -> SceneVideoProviderRegistry:
@@ -183,6 +185,8 @@ def build_scene_video_registry(
         registry.register(GenericHttpSceneVideoProvider(http_config))
     if apimaster_config is not None:
         registry.register(APIMasterSceneVideoProvider(apimaster_config))
+    if kie_config is not None:
+        registry.register(KIESceneVideoProvider(kie_config))
     if wavespeed_config is not None:
         registry.register(WaveSpeedSceneVideoProvider(
             wavespeed_config, composition_provider=wavespeed_composition_provider
@@ -197,6 +201,8 @@ __all__ = [
     "GenericHttpConfig",
     "GenericHttpSceneVideoProvider",
     "MockSceneVideoProvider",
+    "KIEConfig",
+    "KIESceneVideoProvider",
     "SceneGenerationStatus",
     "SceneJobState",
     "SceneVideoError",

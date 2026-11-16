@@ -7,6 +7,7 @@ from typing import Any
 from app.integrations.video import (
     APIMasterConfig,
     GenericHttpConfig,
+    KIEConfig,
     SceneVideoProviderRegistry,
     WaveSpeedConfig,
     build_scene_video_registry,
@@ -80,6 +81,26 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
             max_prompt_characters=getattr(settings, "scene_video_http_max_prompt_characters", None),
             min_duration_seconds=getattr(settings, "scene_video_http_min_duration_seconds", None),
             max_duration_seconds=getattr(settings, "scene_video_http_max_duration_seconds", None),
+        )
+
+    kie_config: KIEConfig | None = None
+    kie_key = _optional_text(getattr(settings, "scene_video_kie_api_key", None))
+    if kie_key:
+        kie_config = KIEConfig(
+            api_key=kie_key,
+            base_url=getattr(settings, "scene_video_kie_base_url", "https://api.kie.ai"),
+            model=getattr(settings, "scene_video_kie_model", "grok-imagine-video-1-5-preview"),
+            resolution=getattr(settings, "scene_video_kie_resolution", "480p"),
+            aspect_ratio=getattr(settings, "scene_video_kie_aspect_ratio", "9:16"),
+            timeout_seconds=getattr(settings, "scene_video_kie_timeout_seconds", 60.0),
+            poll_interval_seconds=getattr(settings, "scene_video_poll_interval_seconds", 3.0),
+            max_poll_attempts=getattr(settings, "scene_video_max_poll_attempts", 300),
+            price_per_credit_usd=getattr(settings, "scene_video_kie_price_per_credit_usd", 0.005),
+            download_allowed_hosts=tuple(
+                host.strip()
+                for host in getattr(settings, "scene_video_kie_download_allowed_hosts", "").split(",")
+                if host.strip()
+            ),
         )
 
     apimaster_config: APIMasterConfig | None = None
@@ -157,6 +178,7 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
         http_config=http_config,
         apimaster_config=apimaster_config,
         wavespeed_config=wavespeed_config,
+        kie_config=kie_config,
         wavespeed_composition_provider=composition_provider,
     )
     if eightscale_config is not None:
