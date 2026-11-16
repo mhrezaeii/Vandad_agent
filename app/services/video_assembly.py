@@ -102,7 +102,7 @@ def build_finish_args(
     overlay_scale_height = int(height * _MAX_OVERLAY_HEIGHT_RATIO)
     filters: list[str] = []
     chain = "[0:v]"
-    for index, (image, start, end) in enumerate(overlays):
+    for index, (_image, start, end) in enumerate(overlays):
         scaled = f"ov{index}"
         filters.append(
             f"[{index + 1}:v]scale={overlay_scale_width}:{overlay_scale_height}:"
