@@ -204,6 +204,10 @@ class SceneVideoService:
         )).scalars())
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+        if provider.provider_id == "kie" and self.storage is None:
+            raise ConflictError(
+                "Artifact storage must be configured before paid KIE generation.",
+            )
 
         # Paid multi-scene providers without their own composition endpoint rely
         # on local FFmpeg assembly. Verify both binaries before spending credits;
