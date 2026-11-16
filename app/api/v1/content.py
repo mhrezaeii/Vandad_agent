@@ -393,10 +393,10 @@ async def assemble_external_clips(
     order; each clip covers one scenario scene. The worker adds Persian TTS
     narration, burned subtitles, screenshot overlays, and the branded end card.
     """
-    from app.services.clip_assembly_service import ClipAssemblyError, ClipAssemblyService  # noqa: PLC0415
     from app.core.config import get_settings  # noqa: PLC0415
     from app.integrations.tts import tts_settings_from  # noqa: PLC0415
-    from app.models import ProjectStatus, WorkflowExecution, WorkflowStatus  # noqa: PLC0415
+    from app.models import ContentProject, ProjectStatus, WorkflowExecution, WorkflowStatus  # noqa: PLC0415
+    from app.services.clip_assembly_service import ClipAssemblyError, ClipAssemblyService  # noqa: PLC0415
 
     project = await service.get_project(project_id, company_id=scope.company_id)
     if project.video_mode != "scene":
@@ -441,8 +441,6 @@ async def assemble_external_clips(
     app_state = request.app.state
 
     async def _run() -> None:
-        from app.models import ContentBrand as _Brand  # noqa: PLC0415
-
         async with app_state.session_factory() as task_session:
             try:
                 task_project = await task_session.get(ContentProject, project_id)
