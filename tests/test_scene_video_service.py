@@ -3,9 +3,8 @@ download, retry, quota exhaustion and cancellation. No real provider calls."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
