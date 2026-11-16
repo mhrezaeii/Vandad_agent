@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import httpx
 import json
+
+import httpx
 import pytest
 
 from app.integrations.video.base import (
@@ -61,8 +62,6 @@ async def test_sync_flow_returns_url_job_and_retrieves():
 async def test_async_flow_polls_status_then_out_json():
     """Submit -> /status/{id} (presigned out.json) -> completed with video URL."""
     polls = {"n": 0}
-    manifest = {"video_url": "https://m.8scale.com/job-77/out.mp4"}
-
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if request.method == "POST":
@@ -88,8 +87,6 @@ async def test_async_flow_polls_status_then_out_json():
 
 
 async def test_validation_error_in_manifest_maps_to_failed():
-    import json as _json
-
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if request.method == "POST":
