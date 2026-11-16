@@ -668,6 +668,7 @@ class SceneVideoService:
                         "status": job.provider_status or job.status,
                         "estimated_cost_usd": (job.cost_metadata or {}).get("estimated_cost_usd"),
                         "reported_cost_usd": (job.cost_metadata or {}).get("reported_cost_usd"),
+                        "credits_consumed": (job.cost_metadata or {}).get("credits_consumed"),
                     }
                     for job in jobs
                 ],

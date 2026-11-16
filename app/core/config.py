@@ -141,8 +141,8 @@ class Settings(BaseSettings):
     # production stays an explicit, billable, operator-initiated request.
     platform_monitor_enabled: bool = True
     platform_monitor_interval_seconds: int = Field(default=21600, ge=60)
-    scene_video_poll_interval_seconds: float = Field(default=30.0, gt=0, le=3600)
-    scene_video_max_poll_attempts: int = Field(default=60, ge=1, le=600)
+    scene_video_poll_interval_seconds: float = Field(default=3.0, gt=0, le=3600)
+    scene_video_max_poll_attempts: int = Field(default=300, ge=1, le=600)
     scene_video_output_width: int = Field(default=1080, ge=1, le=8192)
     scene_video_output_height: int = Field(default=1920, ge=1, le=8192)
 
