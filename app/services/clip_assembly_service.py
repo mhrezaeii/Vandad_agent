@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import tempfile
 import uuid
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +38,6 @@ from app.services.video_assembly import (
     build_scene_audio_fit_args,
     build_silence_args,
     clip_has_audio,
-    concat_scene_clips,
     ffmpeg_binary,
     run_ffmpeg,
 )
@@ -327,8 +325,10 @@ class ClipAssemblyService:
             narration = str(scenes[index].get("narration") or "").strip() if index < len(scenes) else ""
             if narration:
                 raw = workdir / f"raw-{index}.mp3"
-                from app.integrations.tts import synthesize  # noqa: PLC0415
-                from app.integrations.tts import TextToSpeechError  # noqa: PLC0415
+                from app.integrations.tts import (  # noqa: PLC0415
+                    TextToSpeechError,
+                    synthesize,
+                )
 
                 try:
                     raw.write_bytes(await synthesize(narration, tts))
