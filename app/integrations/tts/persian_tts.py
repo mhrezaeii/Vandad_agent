@@ -153,7 +153,7 @@ async def _synthesize_edge(text: str, settings: TtsSettings) -> bytes:
         # A stalled connection must never wedge the assembly; the endpoint
         # normally answers in a few seconds.
         await asyncio.wait_for(_stream(), timeout=90.0)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise TextToSpeechError(
             "Edge text-to-speech timed out.", code="tts_edge_timeout"
         ) from exc
