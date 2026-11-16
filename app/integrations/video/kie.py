@@ -261,7 +261,8 @@ class KIESceneVideoProvider(SceneVideoProvider):
                 (credits * Decimal(str(self.config.price_per_credit_usd))).quantize(Decimal("0.000001"))
             )
             raw["currency"] = "USD"
-        progress = self._number(payload.get("progress"))
+        progress_value = self._number(payload.get("progress"))
+        progress = float(progress_value) if progress_value is not None else None
         if progress is not None:
             progress = max(0.0, min(1.0, progress / 100.0 if progress > 1 else progress))
         duration_value = self._number(payload.get("duration"))
