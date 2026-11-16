@@ -58,6 +58,7 @@ from app.services.video_assembly import (
     build_narration_mux_args,
     build_scene_audio_fit_args,
     build_silence_args,
+    clip_has_audio,
     concat_scene_clips,
     ffmpeg_binary,
     ffprobe_binary,
@@ -1168,6 +1169,13 @@ class SceneVideoService:
                     code="local_assembly_storage_unavailable",
                 )
             clip_paths.append(path)
+
+        provider = self._provider_for(project)
+        if provider.supports_native_audio and not all(clip_has_audio(path) for path in clip_paths):
+            raise SceneVideoPermanentError(
+                "A provider-native audio track is missing from one or more scene clips.",
+                code="native_audio_missing",
+            )
 
         overlays, subtitle_path = self._plan_real_product_overlays(
             project, jobs, output_dir_hint=project.id, width=width, height=height,
