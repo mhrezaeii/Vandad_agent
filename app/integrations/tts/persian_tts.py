@@ -145,9 +145,19 @@ async def _synthesize_edge(text: str, settings: TtsSettings) -> bytes:
     chunks: list[bytes] = []
     try:
         communicate = edge_tts.Communicate(text, settings.voice, rate=rate)
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                chunks.append(chunk["data"])
+
+        async def _stream() -> None:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    chunks.append(chunk["data"])
+
+        # A stalled connection must never wedge the assembly; the endpoint
+        # normally answers in a few seconds.
+        await asyncio.wait_for(_stream(), timeout=90.0)
+    except asyncio.TimeoutError as exc:
+        raise TextToSpeechError(
+            "Edge text-to-speech timed out.", code="tts_edge_timeout"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 - the endpoint is unofficial; fail soft
         raise TextToSpeechError(
             "Edge text-to-speech could not synthesize the narration.", code="tts_edge_failed"

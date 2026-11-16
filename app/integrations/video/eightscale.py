@@ -315,21 +315,37 @@ class EightScaleSceneVideoProvider(SceneVideoProvider):
                 "The 8Scale video host is not in the configured download allowlist.",
                 code="provider_download_host_blocked",
             )
-        async with self._client() as client:
-            async with client.stream("GET", url, timeout=300.0, follow_redirects=False) as response:
-                if response.status_code in (301, 302, 303, 307, 308):
-                    raise SceneVideoPermanentError(
-                        "The 8Scale video URL redirected; refusing an unverified host.",
-                        code="provider_download_redirect",
-                    )
-                if response.status_code != 200:
-                    raise SceneVideoPermanentError(
-                        f"Video download failed (HTTP {response.status_code}).",
+        # Resumable download: the VPN relay drops long transfers mid-body,
+        # so each break resumes from the byte offset already yielded.
+        received = 0
+        for attempt in range(5):
+            try:
+                headers = {"Range": f"bytes={received}-"} if received else {}
+                async with self._client() as client:
+                    async with client.stream("GET", url, headers=headers, timeout=300.0,
+                                             follow_redirects=False) as response:
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            raise SceneVideoPermanentError(
+                                "The 8Scale video URL redirected; refusing an unverified host.",
+                                code="provider_download_redirect",
+                            )
+                        if response.status_code not in (200, 206):
+                            raise SceneVideoPermanentError(
+                                f"Video download failed (HTTP {response.status_code}).",
+                                code="provider_download_failed",
+                            )
+                        async for chunk in response.aiter_bytes(1024 * 1024):
+                            if chunk:
+                                received += len(chunk)
+                                yield chunk
+                        return
+            except httpx.HTTPError as exc:
+                if received == 0 or attempt == 4:
+                    raise SceneVideoTransientError(
+                        f"Video download failed after {received} bytes ({type(exc).__name__}).",
                         code="provider_download_failed",
-                    )
-                async for chunk in response.aiter_bytes(1024 * 1024):
-                    if chunk:
-                        yield chunk
+                    ) from exc
+                await asyncio.sleep(2 * (attempt + 1))
 
     def _validate_download_host(self, url: str) -> None:  # pragma: no cover - trivial guard
         if not url.lower().startswith("https://"):

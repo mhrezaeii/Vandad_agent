@@ -44,3 +44,8 @@ web/.next/
 web/out/
 web/.env.local
 artifacts/
+
+# Google session secrets (never commit)
+assets/flow-cookies.json
+data/
+config/
