@@ -122,7 +122,7 @@ async def test_error_mapping():
 
 class _DropAfterChunk(httpx.AsyncByteStream):
     async def __aiter__(self):
-        yield b"first"
+        yield b"x" * (1024 * 1024)
         raise httpx.ReadError("connection dropped")
 
     async def aclose(self):
@@ -152,7 +152,7 @@ async def test_retrieve_video_resumes_only_from_the_confirmed_range(monkeypatch)
             return httpx.Response(200, stream=_DropAfterChunk(), request=request)
         return httpx.Response(
             206,
-            headers={"content-range": "bytes 5-10/11"},
+            headers={"content-range": "bytes 1048576-1048581/1048582"},
             content=b"second",
             request=request,
         )
@@ -160,8 +160,8 @@ async def test_retrieve_video_resumes_only_from_the_confirmed_range(monkeypatch)
     provider = _provider(handler)
     chunks = [chunk async for chunk in provider.retrieve_video("https://static.8scale.com/out.mp4")]
 
-    assert b"".join(chunks) == b"firstsecond"
-    assert ranges == [None, "bytes=5-"]
+    assert b"".join(chunks) == (b"x" * (1024 * 1024)) + b"second"
+    assert ranges == [None, "bytes=1048576-"]
 
 
 async def test_retrieve_video_retries_when_first_connection_yields_no_bytes(monkeypatch):
