@@ -177,7 +177,7 @@ class KIESceneVideoProvider(SceneVideoProvider):
                 "KIE requires a prompt containing 1 to 4096 characters.",
                 code="provider_invalid_prompt",
             )
-        if request.aspect_ratio not in self.supported_aspect_ratios:
+        if not request.reference_image_url and request.aspect_ratio not in self.supported_aspect_ratios:
             raise SceneVideoPermanentError(
                 "The requested aspect ratio does not match the configured KIE aspect ratio.",
                 code="provider_invalid_aspect_ratio",
@@ -199,12 +199,15 @@ class KIESceneVideoProvider(SceneVideoProvider):
 
         input_data = {
             "prompt": prompt,
-            "aspect_ratio": self.config.aspect_ratio,
             "resolution": self.config.resolution,
             "duration": api_duration,
         }
         if request.reference_image_url:
+            # KIE derives output geometry from a single reference image; its
+            # playground marks aspect_ratio invalid for this input mode.
             input_data["image_urls"] = [request.reference_image_url]
+        else:
+            input_data["aspect_ratio"] = self.config.aspect_ratio
         body = {"model": self.config.model, "input": input_data}
         try:
             payload = await self._request_json("POST", "/api/v1/jobs/createTask", json=body)

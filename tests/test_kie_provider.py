@@ -10,12 +10,13 @@ from app.integrations.video import SceneJobState, SceneVideoRequest
 from app.integrations.video.kie import KIEConfig, KIESceneVideoProvider
 
 
-def _request(duration: int = 15) -> SceneVideoRequest:
+def _request(duration: int | float = 15, reference_image_url: str | None = None) -> SceneVideoRequest:
     return SceneVideoRequest(
         scene_id="project:0",
         prompt="A cinematic vertical product film with natural Persian dialogue.",
         duration_seconds=duration,
         aspect_ratio="9:16",
+        reference_image_url=reference_image_url,
     )
 
 
@@ -66,6 +67,24 @@ async def test_kie_accepts_fractional_duration_as_documented_number():
     provider = _provider(handler)
     job_id = await provider.generate_video(_request(7.5))
     assert job_id == "kie:task-7-5"
+
+
+async def test_kie_image_to_video_omits_aspect_ratio_for_single_reference_image():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/credit"):
+            return httpx.Response(200, json={"code": 200, "data": 60})
+        if request.url.path.endswith("/jobs/createTask"):
+            body = json.loads(request.content)
+            assert body["input"]["image_urls"] == ["https://assets.example.test/reference.png"]
+            assert "aspect_ratio" not in body["input"]
+            return httpx.Response(200, json={"code": 200, "data": {"taskId": "image-task"}})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    job_id = await provider.generate_video(
+        _request(reference_image_url="https://assets.example.test/reference.png")
+    )
+    assert job_id == "kie:image-task"
 
 
 async def test_kie_blocks_project_scene_when_credits_are_insufficient():
