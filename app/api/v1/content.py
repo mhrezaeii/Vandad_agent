@@ -25,8 +25,8 @@ from app.schemas.content import (
     ProjectScriptApproval,
     SceneProjectCreate,
     SceneVideoJobRead,
-    SceneVideoStartRequest,
     SceneVideoRejectRequest,
+    SceneVideoStartRequest,
 )
 from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
