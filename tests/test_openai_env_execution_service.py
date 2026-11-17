@@ -1,13 +1,16 @@
 """Budget enforcement for environment-configured OpenAI requests."""
 
-from decimal import Decimal
 import uuid
+from decimal import Decimal
 
+import httpx
 import pytest
 from sqlalchemy import select
 
 from app.core.config import Settings
 from app.core.exceptions import ConflictError
+from app.integrations.providers.base import ProviderPermanentError
+from app.integrations.providers.openai_env import OpenAIEnvError
 from app.models import AgentTask, Company, ProviderUsageRecord
 from app.services.openai_env_execution_service import OpenAIEnvExecutionService
 from app.services.provider_budget_service import ProviderBudgetService
@@ -91,3 +94,100 @@ async def test_environment_openai_reservations_enforce_agent_task_spend_ceiling(
             idempotency_key="env-gpt-task-second",
             task_id=task.id,
         )
+
+
+
+async def test_ambiguous_openai_transport_failure_is_not_retryable_and_keeps_reservation(
+    db_session, monkeypatch
+):
+    company = Company(
+        name="Ambiguous GPT Failure",
+        slug=f"ambiguous-gpt-{uuid.uuid4().hex[:8]}",
+    )
+    db_session.add(company)
+    await db_session.flush()
+    await ProviderBudgetService(db_session).set_budget(
+        company.id,
+        "llm_openai",
+        monthly_limit_usd=Decimal("5.00"),
+        per_operation_limit_usd=Decimal("0.40"),
+    )
+    monkeypatch.setattr(
+        "app.services.openai_env_execution_service.get_settings",
+        lambda: Settings(openai_api_key="test-key", openai_model="test-model", _env_file=None),
+    )
+
+    async def fail_after_dispatch(**kwargs):
+        raise httpx.ReadTimeout("private transport details")
+
+    monkeypatch.setattr(
+        "app.services.openai_env_execution_service.openai_chat_completion",
+        fail_after_dispatch,
+    )
+    with pytest.raises(ProviderPermanentError) as captured:
+        await OpenAIEnvExecutionService(db_session).execute(
+            company_id=company.id,
+            system="system",
+            user="possibly billable request",
+            operation="content.scenario.generate",
+            idempotency_key="env-gpt-ambiguous",
+        )
+
+    assert captured.value.is_transient is False
+    assert "private transport details" not in str(captured.value)
+    record = await db_session.scalar(
+        select(ProviderUsageRecord).where(
+            ProviderUsageRecord.company_id == company.id,
+            ProviderUsageRecord.idempotency_key == "env-gpt-ambiguous",
+        )
+    )
+    assert record is not None
+    assert record.status == "unknown"
+    assert record.error_code == "openai_transport_outcome_unknown"
+    assert record.reserved_amount_usd == Decimal("0.400000")
+
+
+async def test_definitive_openai_rejection_releases_unused_reservation(db_session, monkeypatch):
+    company = Company(
+        name="Rejected GPT Request",
+        slug=f"rejected-gpt-{uuid.uuid4().hex[:8]}",
+    )
+    db_session.add(company)
+    await db_session.flush()
+    await ProviderBudgetService(db_session).set_budget(
+        company.id,
+        "llm_openai",
+        monthly_limit_usd=Decimal("5.00"),
+        per_operation_limit_usd=Decimal("0.40"),
+    )
+    monkeypatch.setattr(
+        "app.services.openai_env_execution_service.get_settings",
+        lambda: Settings(openai_api_key="test-key", openai_model="test-model", _env_file=None),
+    )
+
+    async def reject_before_acceptance(**kwargs):
+        raise OpenAIEnvError("provider rejected request", definitive_rejection=True)
+
+    monkeypatch.setattr(
+        "app.services.openai_env_execution_service.openai_chat_completion",
+        reject_before_acceptance,
+    )
+    with pytest.raises(ProviderPermanentError):
+        await OpenAIEnvExecutionService(db_session).execute(
+            company_id=company.id,
+            system="system",
+            user="rejected request",
+            operation="content.scenario.generate",
+            idempotency_key="env-gpt-rejected",
+        )
+
+    record = await db_session.scalar(
+        select(ProviderUsageRecord).where(
+            ProviderUsageRecord.company_id == company.id,
+            ProviderUsageRecord.idempotency_key == "env-gpt-rejected",
+        )
+    )
+    assert record is not None
+    assert record.status == "settled"
+    assert record.actual_cost_usd == Decimal("0")
+    assert record.reserved_amount_usd == Decimal("0")
