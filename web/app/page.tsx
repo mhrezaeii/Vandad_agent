@@ -83,6 +83,9 @@ export default function HomePage() {
   const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
   const [llmConnectionStatus, setLlmConnectionStatus] = useState("");
+  const [platformName, setPlatformName] = useState("");
+  const [platformUrl, setPlatformUrl] = useState("");
+  const [platformType, setPlatformType] = useState("website");
   const [sceneProviderId, setSceneProviderId] = useState("");
   const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
   const [characterKey, setCharacterKey] = useState("");
@@ -306,6 +309,29 @@ export default function HomePage() {
     void streamEvents();
     return () => controller.abort();
   }, [selectedTask, companyId, load]);
+
+  const createPlatform = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await run(async () => {
+      const name = platformName.trim();
+      const baseUrl = platformUrl.trim();
+      if (!name || !baseUrl.startsWith("https://")) {
+        throw new Error("نام پلتفرم و آدرس عمومی HTTPS معتبر الزامی است.");
+      }
+      await api("/platforms", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          platform_type: platformType,
+          base_url: baseUrl,
+          integration_type: "api",
+          status: "active",
+        }),
+      });
+      setPlatformName("");
+      setPlatformUrl("");
+    }, "پلتفرم مرجع ثبت شد.");
+  };
 
   const createLlmConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -943,6 +969,17 @@ export default function HomePage() {
               <div className="notice section">آدرس API از NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود.</div>
             </div>
             <div className="card section">
+            <div className="card section">
+              <h2 style={{ fontSize: 16, marginTop: 0 }}>افزودن منبع دانش / پلتفرم</h2>
+              <p className="muted small">منابع عمومی که می‌خواهی پیش از ساخت سناریو رصد و تحلیل شوند را اینجا ثبت کن.</p>
+              <form className="form-grid" onSubmit={createPlatform}>
+                <div className="field"><label>نام پلتفرم</label><input value={platformName} onChange={(event) => setPlatformName(event.target.value)} placeholder="وب‌سایت یا شبکه اجتماعی" required /></div>
+                <div className="field"><label>نوع</label><select value={platformType} onChange={(event) => setPlatformType(event.target.value)}><option value="website">وب‌سایت</option><option value="social_media">شبکه اجتماعی</option><option value="admin_panel">پنل مدیریت</option><option value="api_service">سرویس API</option><option value="other">سایر</option></select></div>
+                <div className="field full"><label>آدرس عمومی منبع</label><input dir="ltr" type="url" value={platformUrl} onChange={(event) => setPlatformUrl(event.target.value)} placeholder="https://example.com" required /></div>
+                <div className="field full"><button className="button" type="submit" disabled={loading || !companyId.trim()}>ثبت پلتفرم</button></div>
+              </form>
+              <div className="list section">{platforms.map((item) => <div className="row-item" key={item.id}><div><strong>{item.name}</strong><p dir="ltr">{item.base_url || item.platform_type}</p></div><Status value="active" /></div>)}{!platforms.length && <div className="empty">هنوز منبعی ثبت نشده است.</div>}</div>
+            </div>
               <h2 style={{ fontSize: 16, marginTop: 0 }}>اتصال مدل زبانی (LLM)</h2>
               <p className="muted small">کلید به‌صورت رمزنگاری‌شده در مخزن Credential ذخیره و با endpoint واقعی /models اعتبارسنجی می‌شود؛ کلید در پاسخ API یا مرورگر ذخیره نمی‌ماند.</p>
               <form className="form-grid" onSubmit={createLlmConnection}>
