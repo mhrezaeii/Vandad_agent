@@ -157,7 +157,6 @@ export default function HomePage() {
     if (!sceneProviders.length) return;
     if (sceneProviderId && sceneProviders.some((provider) => provider.provider_id === sceneProviderId)) return;
     const preferred = sceneProviders.find((provider) => provider.is_default)
-      ?? sceneProviders.find((provider) => provider.provider_id === "mock")
       ?? sceneProviders[0];
     setSceneProviderId(preferred.provider_id);
   }, [sceneProviders, sceneProviderId]);
@@ -383,10 +382,10 @@ export default function HomePage() {
     await run(async () => {
       if (!contentBrandId) throw new Error("ابتدا یک برند انتخاب کنید.");
       if (selectedPlatformIds.length === 0) {
-          throw new Error("برای این برند حداقل یک پلتفرم مرجع انتخاب کنید.");
-        }
+        throw new Error("برای این برند حداقل یک پلتفرم مرجع انتخاب کنید.");
+      }
       await api(`/content/brands/${contentBrandId}/platforms`, {
-          method: "PUT",
+        method: "PUT",
         body: JSON.stringify({ platform_ids: selectedPlatformIds }),
       });
       setNotice("در حال رصد پلتفرم‌های انتخاب‌شده و بروزرسانی دانش تأییدشده…");
@@ -397,18 +396,17 @@ export default function HomePage() {
       setNotice("رصد و تحلیل تمام شد؛ در حال ارسال دانش تأییدشده برای ساخت سناریو…");
 
       if (!characterKey) throw new Error("برای تولید با KIE انتخاب تصویر مرجع شخصیت الزامی است.");
-      let project: ContentProject;
-      project = await api<ContentProject>("/content/scene-projects", {
-          method: "POST",
+      let project = await api<ContentProject>("/content/scene-projects", {
+        method: "POST",
           body: JSON.stringify({
             brand_id: contentBrandId,
             topic: contentTopic,
             target_duration_seconds: 30,
             provider_id: sceneProviderId || undefined,
             character_key: characterKey || undefined,
-            generation_mode: "single_shot",
-          }),
-        });
+          generation_mode: "single_shot",
+        }),
+      });
       setSelectedContentProjectId(project.id);
       setSelectedContentProject(project);
       project = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-scenario`, {
