@@ -346,10 +346,10 @@ export default function HomePage() {
           },
         }),
       });
-      const activation = await api<{ success: boolean; message: string }>(`/connections/${connection.id}/activate`, {
+      const activation = await api<{ success: boolean; status_after: string; message: string }>(`/connections/${connection.id}/activate`, {
         method: "POST",
       });
-      if (!activation.success) throw new Error(activation.message || "اتصال LLM تأیید نشد.");
+      if (!activation.success || activation.status_after !== "connected") throw new Error(activation.message || "اتصال LLM تأیید نشد؛ وضعیت اتصال باید connected باشد.");
       setLlmApiKey("");
       setLlmConnectionStatus("اتصال LLM با موفقیت اعتبارسنجی و فعال شد.");
     }, "اتصال LLM ذخیره و فعال شد.");
