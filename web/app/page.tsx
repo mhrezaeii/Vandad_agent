@@ -176,12 +176,15 @@ export default function HomePage() {
   const run = async (action: () => Promise<unknown>, success: string) => {
     setError("");
     setNotice("");
+    setLoading(true);
     try {
       await action();
       setNotice(success);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "عملیات انجام نشد.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -716,7 +719,7 @@ export default function HomePage() {
                   <input dir="ltr" value={llmConnectionId} onChange={(event) => setLlmConnectionId(event.target.value)} placeholder="UUID اتصال OpenAI-compatible" required />
                 </div>
                 <div className="field full actions">
-                  <button className="button" type="submit">شروع تولید و ساخت سناریو</button>
+                  <button className="button" type="submit" disabled={loading}>{loading ? "در حال اجرا…" : "شروع تولید و ساخت سناریو"}</button>
                 </div>
               </form>
             </div>
