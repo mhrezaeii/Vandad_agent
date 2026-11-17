@@ -157,6 +157,11 @@ async def monitor_brand_platforms(
 ) -> dict:
     """Refresh public sources and evidence-backed knowledge for a brand's linked platforms."""
     await service.get_brand(brand_id, company_id=scope.company_id)
+    linked_platforms = await service.list_brand_platforms(
+        brand_id, company_id=scope.company_id
+    )
+    if not linked_platforms:
+        raise ConflictError("Select at least one platform for this brand before monitoring.")
     monitor_service = PlatformMonitorService(
         service.session,
         request.app.state.provider_registry,
@@ -177,7 +182,7 @@ async def monitor_brand_platforms(
         raise ConflictError("The selected brand has no active linked platforms.")
     if result["status"] in {"refresh_failed", "partial_failure"}:
         raise ConflictError(
-            "None of the selected platforms could be refreshed; no new scenario was generated.",
+            "One or more selected platforms could not be refreshed; no new scenario was generated.",
             details=result["platforms"],
         )
     if result["status"] == "no_knowledge":
