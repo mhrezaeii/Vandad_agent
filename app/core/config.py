@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # --- GPT (scenario + evidence extraction) ----------------------------------
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-6-luna"
     openai_timeout_seconds: float = Field(default=180.0, gt=0, le=600)
     openai_max_completion_tokens: int = Field(default=5000, ge=256, le=32768)
 
