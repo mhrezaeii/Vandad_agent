@@ -65,7 +65,7 @@ async def test_monitor_skips_when_no_llm_connection(
 
     result = await monitor.monitor_platform(platform)
     assert result["status"] == "skipped"
-    assert "no active llm_openai connection" in result["detail"]
+    assert result["detail"] == "OPENAI_API_KEY is not configured"
 
 
 async def test_monitor_skips_unchanged_documents(
