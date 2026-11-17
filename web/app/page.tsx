@@ -387,7 +387,7 @@ export default function HomePage() {
     await run(async () => {
       await api(`/content/scene-projects/${project.id}/generate-video`, {
         method: "POST",
-        body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
+        body: JSON.stringify({ provider_id: "kie" }),
       });
     }, "Workflow تولید ویدیو به صف ارسال شد.");
   };

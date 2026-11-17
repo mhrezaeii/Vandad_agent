@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
 from app.integrations.providers import ProviderExecutor, ProviderRegistry
 from app.integrations.providers.base import ProviderError
 from app.models import Platform, PlatformKnowledgeSnapshot, PlatformSourceDocument

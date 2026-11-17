@@ -192,11 +192,3 @@ class PlatformMonitorService:
             "successful_platforms": successful_platforms,
         }
 
-    async def _llm_connection_id(self, company_id: uuid.UUID) -> uuid.UUID | None:
-        return await self.session.scalar(
-            select(PlatformConnection.id).where(
-                PlatformConnection.company_id == company_id,
-                PlatformConnection.provider == "llm_openai",
-                PlatformConnection.status == "connected",
-            ).order_by(PlatformConnection.created_at.desc()).limit(1)
-        )
