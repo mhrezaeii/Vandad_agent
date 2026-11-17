@@ -17,6 +17,7 @@ type ScenarioScene = { index?: number; scene_index?: number; title?: string; sce
 type Scenario = { title?: string; hook?: string; opening_hook?: string; summary?: string; visual_style?: string; scenes?: ScenarioScene[]; cta?: string; cta_pronunciation_text?: string; caption?: string; hashtags?: string[] };
 type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "avatar" | "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
 type CharacterImage = { key: string; platform: string; name: string; valid: boolean; error?: string };
+type LlmConnection = { id: string; name: string; provider: string; status: string };
 type Platform = { id: string; name: string; base_url?: string; platform_type?: string };
 
 const nav: { id: Tab; label: string; icon: string }[] = [
@@ -78,6 +79,10 @@ export default function HomePage() {
   const [contentBrandId, setContentBrandId] = useState("");
   const [contentTopic, setContentTopic] = useState("");
   const [videoConnectionId, setVideoConnectionId] = useState("");
+  const [llmBaseUrl, setLlmBaseUrl] = useState("https://api.openai.com/v1");
+  const [llmModel, setLlmModel] = useState("");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmConnectionStatus, setLlmConnectionStatus] = useState("");
   const [sceneProviderId, setSceneProviderId] = useState("");
   const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
   const [characterKey, setCharacterKey] = useState("");
@@ -301,6 +306,54 @@ export default function HomePage() {
     void streamEvents();
     return () => controller.abort();
   }, [selectedTask, companyId, load]);
+
+  const createLlmConnection = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await run(async () => {
+      const baseUrl = llmBaseUrl.trim().replace(/\\/$/, "");
+      const model = llmModel.trim();
+      const apiKey = llmApiKey.trim();
+      if (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://")) {
+        throw new Error("آدرس Base URL باید با http:// یا https:// شروع شود.");
+      }
+      if (!model || !apiKey) throw new Error("مدل و API Key الزامی هستند.");
+      let platform = platforms.find((item) => item.slug === "llm-openai");
+      if (!platform) {
+        platform = await api<Platform>("/platforms", {
+          method: "POST",
+          body: JSON.stringify({
+            name: "OpenAI-compatible LLM",
+            slug: "llm-openai",
+            platform_type: "api_service",
+            base_url: baseUrl,
+            description: "Tenant-owned OpenAI-compatible language model endpoint",
+            integration_type: "api",
+          }),
+        });
+      }
+      const connection = await api<LlmConnection>("/connections", {
+        method: "POST",
+        body: JSON.stringify({
+          platform_id: platform.id,
+          name: `LLM ${new Date().toISOString()}`,
+          provider: "llm_openai",
+          configuration: { url: baseUrl, model },
+          credential: {
+            credential_type: "api_key",
+            storage_type: "encrypted",
+            secret_reference: `llm-api-key-${Date.now()}`,
+            value: apiKey,
+          },
+        }),
+      });
+      const activation = await api<{ success: boolean; message: string }>(`/connections/${connection.id}/activate`, {
+        method: "POST",
+      });
+      if (!activation.success) throw new Error(activation.message || "اتصال LLM تأیید نشد.");
+      setLlmApiKey("");
+      setLlmConnectionStatus("اتصال LLM با موفقیت اعتبارسنجی و فعال شد.");
+    }, "اتصال LLM ذخیره و فعال شد.");
+  };
 
   const createContentProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -882,11 +935,24 @@ export default function HomePage() {
         )}
 
         {tab === "settings" && (
-          <div className="card section" style={{ maxWidth: 680 }}>
-            <h2 style={{ fontSize: 16, marginTop: 0 }}>تنظیمات اتصال</h2>
-            <div className="field"><label>Company ID (خالی = عضویت تک‌شرکتی در Production یا شرکت پیش‌فرض در توسعه)</label><input dir="ltr" value={companyId} onChange={(event) => setCompanyId(event.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
-            <div className="actions" style={{ marginTop: 14 }}><button className="button" onClick={saveCompany}>ذخیره و بارگذاری مجدد</button><button className="button ghost" onClick={() => { setCompanyId(""); window.localStorage.removeItem("vandad.companyId"); void load(); }}>استفاده از شرکت پیش‌فرض</button></div>
-            <div className="notice section">آدرس API از متغیر NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. در حالت توسعه مقدار پیش‌فرض http://localhost:8000/api/v1 است. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود؛ Backend نقش و عضویت شرکت را مجدداً بررسی می‌کند.</div>
+          <div className="section" style={{ maxWidth: 760 }}>
+            <div className="card">
+              <h2 style={{ fontSize: 16, marginTop: 0 }}>تنظیمات شرکت و API</h2>
+              <div className="field"><label>Company ID</label><input dir="ltr" value={companyId} onChange={(event) => setCompanyId(event.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
+              <div className="actions" style={{ marginTop: 14 }}><button className="button" onClick={saveCompany}>ذخیره و بارگذاری مجدد</button><button className="button ghost" onClick={() => { setCompanyId(""); window.localStorage.removeItem("vandad.companyId"); void load(); }}>استفاده از شرکت پیش‌فرض</button></div>
+              <div className="notice section">آدرس API از NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود.</div>
+            </div>
+            <div className="card section">
+              <h2 style={{ fontSize: 16, marginTop: 0 }}>اتصال مدل زبانی (LLM)</h2>
+              <p className="muted small">کلید به‌صورت رمزنگاری‌شده در مخزن Credential ذخیره و با endpoint واقعی /models اعتبارسنجی می‌شود؛ کلید در پاسخ API یا مرورگر ذخیره نمی‌ماند.</p>
+              <form className="form-grid" onSubmit={createLlmConnection}>
+                <div className="field full"><label>OpenAI-compatible Base URL</label><input dir="ltr" value={llmBaseUrl} onChange={(event) => setLlmBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" required /></div>
+                <div className="field full"><label>Model ID</label><input dir="ltr" value={llmModel} onChange={(event) => setLlmModel(event.target.value)} placeholder="مدل ارائه‌دهنده" required /></div>
+                <div className="field full"><label>API Key</label><input dir="ltr" type="password" autoComplete="new-password" value={llmApiKey} onChange={(event) => setLlmApiKey(event.target.value)} required /></div>
+                <div className="field full"><button className="button" type="submit" disabled={loading || !companyId.trim()}>{loading ? "در حال اعتبارسنجی…" : "ذخیره و تست اتصال LLM"}</button></div>
+              </form>
+              {llmConnectionStatus && <div className="notice">{llmConnectionStatus}</div>}
+            </div>
           </div>
         )}
 
