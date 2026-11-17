@@ -78,11 +78,29 @@ def review_scenario(
             f"scene durations total {total:.1f}s but the target is {target_duration_seconds}s."
         )
 
-    if language == "fa":
-        for position, text in enumerate(
-            [scene.narration for scene in scenario.scenes] + [scenario.title], start=1
-        ):
+    if language.split("-", 1)[0].strip().lower() == "fa":
+        # Every spoken or written Persian surface must really be Persian: the
+        # title, the complete narration, the CTA (spoken in single-shot mode)
+        # and each scene's narration/on-screen text/subtitle. A pure-Latin
+        # value here means the scenario prompt failed and must be regenerated,
+        # never silently submitted to a paid video provider. Brand languages are
+        # stored as "fa-IR", so match the language subtag, not the exact string.
+        persian_targets: list[tuple[str, str]] = [
+            ("title", scenario.title),
+            ("narration", scenario.narration),
+            ("cta", scenario.cta or ""),
+        ]
+        for scene in scenario.scenes:
+            where = f"scene {scene.index + 1}"
+            persian_targets.extend(
+                [
+                    (f"{where} narration", scene.narration),
+                    (f"{where} on_screen_text", scene.on_screen_text or ""),
+                    (f"{where} subtitle_text", scene.subtitle_text or ""),
+                ]
+            )
+        for label, text in persian_targets:
             if text.strip() and not _ARABIC_SCRIPT.search(text):
-                issues.append(f"text {position} must be Persian but has no Persian characters.")
+                issues.append(f"{label} must be Persian but has no Persian characters.")
 
     return issues

@@ -210,3 +210,30 @@ def test_review_scenario_passes_valid_and_flags_problems():
     )
     issues = review_scenario(non_persian, target_duration_seconds=30)
     assert any("Persian" in issue for issue in issues)
+
+
+def test_review_scenario_requires_every_spoken_and_written_surface_in_persian():
+    """Title, narration, CTA, on-screen text and subtitles must all be Persian."""
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    english = normalize_scenario(
+        {
+            **raw,
+            "narration": "English only full narration",
+            "cta": "Start now",
+            "scenes": [
+                {**raw["scenes"][0], "on_screen_text": "BUY NOW"},
+                {**raw["scenes"][1], "subtitle_text": "English subtitle"},
+            ],
+        },
+        request,
+    )
+
+    issues = review_scenario(english, target_duration_seconds=30, language="fa-IR")
+    persian_issues = [issue for issue in issues if "must be Persian" in issue]
+    assert any(issue.startswith("narration") for issue in persian_issues)
+    assert any(issue.startswith("cta") for issue in persian_issues)
+    assert any("scene 1 on_screen_text" in issue for issue in persian_issues)
+    assert any("scene 2 subtitle_text" in issue for issue in persian_issues)
