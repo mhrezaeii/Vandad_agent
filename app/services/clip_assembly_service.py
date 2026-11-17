@@ -1,11 +1,9 @@
 """Assemble a final deliverable from operator-provided clips.
 
-For clips produced outside the paid pipeline (Google Flow free quota, Hoosha,
-any external source): drop them into ``assets/clips/<project_id>/`` named
+For operator-provided clips from an external source: drop them into ``assets/clips/<project_id>/`` named
 ``01.mp4``, ``02.mp4``, ... in playback order. The service reads them in
-order, attaches the scenario's per-scene Persian narration (TTS), burns
-subtitles, applies platform-screenshot overlays, appends the branded end
-card, and stores the final artifact. No paid provider is involved.
+order, preserves their existing audio, burns subtitles, applies platform-
+screenshot overlays, appends the branded end card, and stores the final artifact.
 """
 
 from __future__ import annotations
@@ -17,7 +15,6 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.tts import TtsSettings
 from app.integrations.video import SceneVideoProviderRegistry
 from app.integrations.video.base import SceneVideoPermanentError
 from app.models import (
@@ -31,12 +28,8 @@ from app.models import (
 from app.services.artifact_service import ArtifactService
 from app.services.branding import render_end_card
 from app.services.video_assembly import (
-    build_audio_concat_args,
     build_concat_args,
     build_endcard_video_args,
-    build_narration_mux_args,
-    build_scene_audio_fit_args,
-    build_silence_args,
     clip_has_audio,
     ffmpeg_binary,
     run_ffmpeg,
@@ -62,7 +55,6 @@ class ClipAssemblyService:
         registry: SceneVideoProviderRegistry,
         storage: ArtifactStorage,
         *,
-        tts_settings: TtsSettings | None = None,
         screenshots_root: str | Path | None = None,
         clips_root: str | Path | None = None,
         end_card_seconds: float = 3.0,
@@ -70,7 +62,6 @@ class ClipAssemblyService:
         self.session = session
         self.registry = registry
         self.storage = storage
-        self._tts_settings = tts_settings
         self._screenshots_root = Path(screenshots_root) if screenshots_root else None
         self._clips_root = Path(clips_root) if clips_root else None
         self._end_card_seconds = float(end_card_seconds)
@@ -157,17 +148,8 @@ class ClipAssemblyService:
                 width=width, height=height, with_audio=True,
             ))
 
-            # Stage 4: narration — one fitted track per clip + end-card silence.
-            narration = await self._narration_track(
-                ffmpeg, workdir, clips, scenes, durations, self._end_card_seconds
-            )
+            # Preserve the audio already present in the supplied clips.
             final = merged
-            if narration is not None:
-                final = workdir / f"vandad-final-{project.id}.mp4"
-                await run_ffmpeg(build_narration_mux_args(
-                    ffmpeg=ffmpeg, video_path=merged, narration_audio_path=narration,
-                    output_path=final,
-                ))
 
             preview = bytearray()
             async def chunks(path=final):
@@ -201,7 +183,7 @@ class ClipAssemblyService:
             "production_path": "operator_clips",
             "clip_count": len(clips),
             "end_card_seconds": self._end_card_seconds,
-            "narration": "tts" if narration is not None else "silent",
+            "narration": "source_audio_only",
             "artifact_id": str(artifact.id),
             "size_bytes": artifact.size_bytes,
             "sha256": artifact.sha256,
@@ -308,55 +290,3 @@ class ClipAssemblyService:
         path.write_text(ass, encoding="utf-8")
         return path
 
-    async def _narration_track(
-        self,
-        ffmpeg: str,
-        workdir: Path,
-        clips: list[Path],
-        scenes: list[dict[str, Any]],
-        durations: list[float],
-        end_card_seconds: float,
-    ) -> Path | None:
-        tts = self._tts_settings
-        if tts is None or not tts.provider:
-            return None
-        fitted: list[Path] = []
-        for index, seconds in enumerate(durations):
-            narration = str(scenes[index].get("narration") or "").strip() if index < len(scenes) else ""
-            if narration:
-                raw = workdir / f"raw-{index}.mp3"
-                from app.integrations.tts import (  # noqa: PLC0415
-                    TextToSpeechError,
-                    synthesize,
-                )
-
-                try:
-                    raw.write_bytes(await synthesize(narration, tts))
-                except TextToSpeechError as exc:
-                    raise ClipAssemblyError(str(exc), code=exc.code) from exc
-                fitted_path = workdir / f"fit-{index}.wav"
-                await run_ffmpeg(build_scene_audio_fit_args(
-                    ffmpeg=ffmpeg, source_audio=raw, output_path=fitted_path,
-                    scene_seconds=seconds,
-                ))
-            else:
-                fitted_path = workdir / f"silence-{index}.wav"
-                await run_ffmpeg(build_silence_args(
-                    ffmpeg=ffmpeg, seconds=seconds, output_path=fitted_path
-                ))
-            fitted.append(fitted_path)
-        tail = workdir / "silence-endcard.wav"
-        await run_ffmpeg(build_silence_args(
-            ffmpeg=ffmpeg, seconds=end_card_seconds, output_path=tail
-        ))
-        fitted.append(tail)
-        concat_list = workdir / "narration-list.txt"
-        concat_list.write_text(
-            "".join("file '" + p.as_posix() + "'" + chr(10) for p in fitted),
-            encoding="utf-8",
-        )
-        narration_full = workdir / "narration-full.wav"
-        await run_ffmpeg(build_audio_concat_args(
-            ffmpeg=ffmpeg, concat_list=concat_list, output_path=narration_full
-        ))
-        return narration_full

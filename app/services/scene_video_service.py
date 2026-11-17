@@ -67,7 +67,6 @@ from app.services.scene_novelty import (
     visual_fingerprint,
 )
 from app.services.video_assembly import (
-    build_narration_mux_args,
     clip_has_audio,
     concat_scene_clips,
     ffmpeg_binary,

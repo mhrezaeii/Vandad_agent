@@ -7,15 +7,15 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 - Python 3.12+, FastAPI, Pydantic v2
 - PostgreSQL 16, SQLAlchemy async, Alembic
 - Redis-backed workflow queue and worker
-- Provider adapters for OpenAI-compatible LLM APIs, browser automation and AI video APIs
-- APIMaster scene-video adapter (Wan video models), generic HTTP scene-video adapter and mock provider
+- GPT scenario generation through the tenant-scoped OpenAI connection
+- KIE.ai Grok Imagine as the only active video-generation provider
 - AI-provider-native video generation, editing/composition and tenant-scoped artifact storage
 - Next.js 15 + React 19 + TypeScript frontend, Docker Compose, pytest and Ruff
 
 ## Start locally
 
 ```powershell
-# Generate unique local database, Redis, n8n and credential-encryption secrets.
+# Generate unique local database, Redis and credential-encryption secrets.
 .\scripts\setup.ps1
 # Add the provider API keys to .env (see "Provider credentials" below).
 docker compose up -d --build
@@ -24,7 +24,7 @@ docker compose up -d --build
 - API health: `http://localhost:8000/api/v1/health`
 - OpenAPI: `http://localhost:8000/docs`
 - PostgreSQL and Redis are required for normal API/worker operation.
-- The API container applies Alembic migrations before serving. Start the UI with `docker compose --profile ui up -d --build web`; it is available at `http://localhost:3000`. n8n is optional and is not started by default; enable it explicitly with `docker compose --profile automation up -d n8n`.
+- The API container applies Alembic migrations before serving. Start the UI with `docker compose --profile ui up -d --build web`; it is available at `http://localhost:3000`.
 
 For host frontend development:
 
@@ -58,8 +58,8 @@ The test suite expects an isolated test database and Redis DB 1. See `.github/wo
 ## Provider credentials and first-run setup
 
 - The LLM API key is entered once in UI → Settings → LLM Connection, stored encrypted in the tenant credential vault, and immediately tested against the provider `/models` endpoint. The UI creates the required platform and `llm_openai` connection for you. The content flow automatically selects the newest connected LLM connection for the company.
-- Select one scene-video provider in `.env` using `SCENE_VIDEO_PROVIDER` and provide its matching key: `SCENE_VIDEO_WAVESPEED_API_KEY`, `SCENE_VIDEO_KIE_API_KEY`, `SCENE_VIDEO_APIMASTER_API_KEY`, `SCENE_VIDEO_8SCALE_API_KEY`, or the generic HTTP contract. The Content Studio now selects the backend-configured default provider automatically.
-- `SCENE_VIDEO_PROVIDER=mock` is local/test-only. It is not a real AI video service and production explicitly rejects it.
+- GPT is configured once in UI → Settings → LLM Connection. Use the official OpenAI API endpoint and a GPT model; the API key is stored encrypted in the tenant credential vault.
+- KIE is the only video provider in this release. Set `SCENE_VIDEO_PROVIDER=kie` and `SCENE_VIDEO_KIE_API_KEY` in `.env`. The default generation mode is `single_shot`; it requires a character reference image and sends one paid image-to-video request after scenario approval. No other video provider is registered or selectable.
 - After the API is healthy, create the first tenant once with `docker compose exec api python -m app.cli.bootstrap_company --name "Your Company" --slug "your-company"`. Copy the printed UUID into the UI Settings → Company ID (or `NEXT_PUBLIC_COMPANY_ID` before building the UI). The command is idempotent for the same slug. Do not use wildcard bootstrap authorization in production.
 
 ## Product architecture
@@ -107,12 +107,7 @@ Vandad uses one unified AI-only video production path: GPT-assisted scenario and
 - **Provider-side generation/composition:** a provider may return a complete
   video directly or generate clips and compose them through its own explicit
   AI capability. Vandad does not perform creative local video assembly.
-- **APIMaster:** supports scene generation; it is not treated as a final
-  composition provider unless that capability is explicitly implemented.
-- **Generic HTTP:** provider-side composition is enabled only when an
-  authorised composition endpoint is configured with `SCENE_VIDEO_HTTP_COMPOSE_PATH`.
-- **Mock:** produces synthetic, non-playable fixtures for automated tests and
-  local development only; production rejects it.
+
 
 Creative video production does not require character-generation systems,
 FFmpeg, FFprobe, local TTS, local lip-sync or traditional editing software. Storage, integrity checks and metadata

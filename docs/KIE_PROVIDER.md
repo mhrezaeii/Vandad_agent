@@ -77,9 +77,7 @@ body field `generation_mode`):
 4. The single provider MP4 (native audio preserved, no local TTS overlay) is
    the final deliverable via the existing single-clip passthrough path.
 
-The previous multi-scene storyboard pipeline remains the default
-(`generation_mode="multi_scene"`); a prepared project refuses a silent mode
-switch instead of creating additional paid jobs.
+The initial release defaults to `generation_mode="single_shot"`. Multi-scene generation remains disabled as a future controlled evaluation.
 
 ## Character reference image
 
@@ -144,7 +142,7 @@ valid dimensions/codec and a duration matching the paid request (within a
 small tolerance) are required, otherwise finalization fails closed. The probe
 facts are stored in `assembly_metadata.output_validation`. Multi-scene projects
 are concatenated locally with FFmpeg. Native audio is preserved and the local
-TTS mux is skipped for KIE so the generated Persian soundtrack is not silently
+The KIE-native audio track is preserved so the generated Persian soundtrack is not silently
 overwritten. FFmpeg and ffprobe are installed in the project runtime Docker
 image.
 
