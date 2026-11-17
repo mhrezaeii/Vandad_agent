@@ -794,7 +794,7 @@ class SceneVideoService:
             job.submission_metadata = {
                 **(job.submission_metadata or {}),
                 "submission_outcome": "submitted",
-                **({"prediction_id": str(provider_job_id).split(":", 1)[1]}
+                **({"task_id": str(provider_job_id).split(":", 1)[1]}
                    if str(provider_job_id).startswith("kie:") else {}),
             }
             job.submission_metadata.pop("submission_started_at", None)
@@ -1032,7 +1032,7 @@ class SceneVideoService:
                 "scene_predictions": [
                     {
                         "scene_index": job.scene_index,
-                        "prediction_id": (job.submission_metadata or {}).get("prediction_id"),
+                        "task_id": (job.submission_metadata or {}).get("task_id"),
                         "provider_job_id": job.provider_job_id,
                         "model_id": (job.cost_metadata or {}).get("model"),
                         "status": job.provider_status or job.status,
