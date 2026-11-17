@@ -86,6 +86,17 @@ class PlatformMonitorService:
             ).limit(1)
         )) is not None
         if not has_snapshot or crawl["created"] or crawl["changed"]:
+            if connection_id is None:
+                from app.core.config import get_settings
+
+                secret = get_settings().openai_api_key
+                if not secret or not secret.get_secret_value().strip():
+                    return {
+                        **base,
+                        "status": "skipped",
+                        "detail": "OPENAI_API_KEY is not configured",
+                        "documents": crawl,
+                    }
             snapshot = await PlatformKnowledgeService(
                 self.session, self.registry, self.executor, self._keys
             ).extract(platform=platform, connection_id=connection_id)
