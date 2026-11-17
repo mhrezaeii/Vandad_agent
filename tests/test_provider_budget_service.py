@@ -365,20 +365,6 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     assert kie["min_duration_seconds"] == 6.0
     assert kie["max_duration_seconds"] == 30.0
 
-    wavespeed = next(item for item in models if item["provider_id"] == "wavespeed")
-    assert wavespeed["model_id"] == "wavespeed-ai/ltx-2.3/text-to-video"
-    assert wavespeed["supports_health_check"] is True
-    assert wavespeed["input_modalities"] == ["text"]
-    assert wavespeed["supported_modalities"] == ["video"]
-    assert wavespeed["supported_aspect_ratios"] == ["9:16"]
-    assert wavespeed["supported_resolutions"] == ["480p", "720p", "1080p"]
-    assert wavespeed["supports_seed"] is True
-    assert wavespeed["max_reference_images"] == 0
-    assert wavespeed["min_duration_seconds"] == 5
-    assert wavespeed["max_duration_seconds"] == 20
-    assert wavespeed["supported_durations"] is None
-
-
 async def test_budget_api_is_company_scoped(client, db_session):
     owner = Company(name="Budget API Owner", slug=f"budget-api-owner-{uuid.uuid4().hex[:8]}")
     stranger = Company(name="Budget API Stranger", slug=f"budget-api-stranger-{uuid.uuid4().hex[:8]}")
@@ -518,22 +504,22 @@ async def test_provider_telemetry_is_company_scoped_and_aggregates_latency(db_se
 
 
 
-async def test_settled_video_usage_keeps_prediction_ids_and_cost_breakdown(db_session):
+async def test_settled_kie_usage_keeps_task_ids_and_cost_breakdown(db_session):
     company = Company(name="Video Prediction Ledger", slug=f"video-ledger-{uuid.uuid4().hex[:8]}")
     db_session.add(company)
     await db_session.flush()
     service = ProviderBudgetService(db_session)
     await service.set_budget(
         company.id,
-        "wavespeed",
+        "kie",
         monthly_limit_usd=Decimal("1.00"),
         per_operation_limit_usd=Decimal("0.10"),
     )
     reservation = await service.reserve(
         company.id,
-        "wavespeed",
+        "kie",
         "content.scene.generate_video",
-        idempotency_key=f"wavespeed-{uuid.uuid4()}",
+        idempotency_key=f"kie-{uuid.uuid4()}",
         require_budget=True,
     )
     assert reservation is not None
@@ -542,23 +528,23 @@ async def test_settled_video_usage_keeps_prediction_ids_and_cost_breakdown(db_se
         usage={
             "cost_usd": "0.10",
             "currency": "USD",
-            "model": "wavespeed",
+            "model": "grok-imagine/image-to-video",
             "estimated_scene_cost_usd": "0.10",
             "reported_scene_cost_usd": "0.10",
             "scene_predictions": [{
                 "scene_index": 0,
-                "prediction_id": "pred-123",
+                "task_id": "task-123",
                 "provider_job_id": "wavespeed:pred-123",
-                "model_id": "wavespeed-ai/ltx-2.3/text-to-video",
+                "model_id": "kie-ai/ltx-2.3/text-to-video",
                 "status": "completed",
                 "estimated_cost_usd": "0.10",
                 "reported_cost_usd": "0.10",
             }],
         },
     )
-    assert reservation.usage_payload["scene_predictions"][0]["prediction_id"] == "pred-123"
+    assert reservation.usage_payload["scene_predictions"][0]["task_id"] == "task-123"
     assert reservation.usage_payload["scene_predictions"][0]["model_id"] == (
-        "wavespeed-ai/ltx-2.3/text-to-video"
+        "kie-ai/ltx-2.3/text-to-video"
     )
 
 
@@ -599,16 +585,16 @@ async def test_reserved_reservation_is_reused_with_allow_reuse_flag(db_session):
     await db_session.flush()
     service = ProviderBudgetService(db_session)
     await service.set_budget(
-        company.id, "wavespeed",
+        company.id, "kie",
         monthly_limit_usd=Decimal("10.00"), per_operation_limit_usd=Decimal("2.00"),
     )
     key = f"scene-video:{uuid.uuid4()}"
-    first = await service.reserve(company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key)
+    first = await service.reserve(company.id, "kie", "content.scene.generate_video", idempotency_key=key)
 
     reused = await service.reserve(
-        company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key, allow_reuse=True,
+        company.id, "kie", "content.scene.generate_video", idempotency_key=key, allow_reuse=True,
     )
     assert reused.id == first.id
     # Without the flag the live reservation still blocks.
     with pytest.raises(ConflictError, match="duplicate paid execution"):
-        await service.reserve(company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key)
+        await service.reserve(company.id, "kie", "content.scene.generate_video", idempotency_key=key)
