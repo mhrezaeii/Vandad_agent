@@ -86,7 +86,12 @@ def test_kie_settings_documented_in_env_example_load_into_settings():
     from app.core.config import Settings
 
     example_path = Path(__file__).resolve().parents[1] / ".env.example"
-    settings = Settings(_env_file=example_path, _secrets_dir=None, scene_video_provider="kie", scene_video_generation_mode="single_shot")
+    settings = Settings(
+        _env_file=example_path,
+        _secrets_dir=None,
+        scene_video_provider="kie",
+        scene_video_generation_mode="single_shot",
+    )
 
     assert settings.scene_video_kie_base_url == "https://api.kie.ai"
     # The documented default model is the single-shot image-to-video contract.
