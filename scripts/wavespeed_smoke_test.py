@@ -19,8 +19,13 @@ from urllib.parse import urlsplit
 import httpx
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
+    # Only load .env when this file is executed as a script. Importing it (for
+    # example from the unit tests) must not mutate the process environment for
+    # every other test in the session.
+    if __name__ == "__main__":
+        from dotenv import load_dotenv
+
+        load_dotenv()
 except ImportError:
     # The application settings loader still reads .env; this standalone script
     # also works with explicitly exported environment variables.
