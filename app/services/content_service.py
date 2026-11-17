@@ -33,6 +33,7 @@ from app.models import (
     ContentBrandStatus,
     ContentProject,
     Platform,
+    PlatformConnection,
     ProjectStatus,
     Workflow,
     WorkflowDefinitionStatus,
@@ -552,6 +553,31 @@ class ContentService:
         return project
 
     # --------------------------------------------------------- script + video
+    async def resolve_llm_connection_id(
+        self,
+        company_id: uuid.UUID,
+        connection_id: uuid.UUID | None = None,
+    ) -> uuid.UUID:
+        """Resolve a connected OpenAI-compatible LLM binding for this tenant."""
+        statement = select(PlatformConnection.id).where(
+            PlatformConnection.company_id == company_id,
+            PlatformConnection.provider == "llm_openai",
+            PlatformConnection.status == "connected",
+        )
+        if connection_id is not None:
+            statement = statement.where(PlatformConnection.id == connection_id)
+        else:
+            statement = statement.order_by(
+                PlatformConnection.updated_at.desc(),
+                PlatformConnection.created_at.desc(),
+            )
+        resolved = await self.session.scalar(statement.limit(1))
+        if resolved is None:
+            raise ConflictError(
+                "No connected OpenAI-compatible LLM connection is configured for this company."
+            )
+        return resolved
+
     async def generate_script(
         self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID,
         task_id: uuid.UUID | None = None,

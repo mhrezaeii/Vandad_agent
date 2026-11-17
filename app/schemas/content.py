@@ -96,7 +96,7 @@ class ContentConnectionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    connection_id: uuid.UUID
+    connection_id: uuid.UUID | None = None
 
 
 class ContentProjectCreate(BaseModel):

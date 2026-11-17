@@ -77,7 +77,6 @@ export default function HomePage() {
   const [contentMode, setContentMode] = useState<"avatar" | "scene">("scene");
   const [contentBrandId, setContentBrandId] = useState("");
   const [contentTopic, setContentTopic] = useState("");
-  const [llmConnectionId, setLlmConnectionId] = useState("");
   const [videoConnectionId, setVideoConnectionId] = useState("");
   const [sceneProviderId, setSceneProviderId] = useState("apimaster");
   const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
@@ -299,9 +298,6 @@ export default function HomePage() {
     await run(async () => {
       if (!contentBrandId) throw new Error("ابتدا یک برند انتخاب کنید.");
       if (contentMode === "scene") {
-        if (!llmConnectionId.trim()) {
-          throw new Error("برای شروع خودکار فرایند، شناسه اتصال LLM را وارد کنید.");
-        }
         if (selectedPlatformIds.length === 0) {
           throw new Error("برای این برند حداقل یک پلتفرم مرجع انتخاب کنید.");
         }
@@ -312,7 +308,7 @@ export default function HomePage() {
         setNotice("در حال رصد پلتفرم‌های انتخاب‌شده و بروزرسانی دانش تأییدشده…");
         await api(`/content/brands/${contentBrandId}/monitor`, {
           method: "POST",
-          body: JSON.stringify({ connection_id: llmConnectionId.trim() }),
+          body: JSON.stringify({}),
         });
         setNotice("رصد و تحلیل تمام شد؛ در حال ارسال دانش تأییدشده برای ساخت سناریو…");
       }
@@ -339,7 +335,7 @@ export default function HomePage() {
         setSelectedContentProject(project);
         project = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-scenario`, {
           method: "POST",
-          body: JSON.stringify({ connection_id: llmConnectionId.trim() }),
+          body: JSON.stringify({}),
         });
       }
       setSelectedContentProjectId(project.id);
@@ -352,12 +348,11 @@ export default function HomePage() {
 
   const generateProjectScript = async (project: ContentProject) => {
     await run(async () => {
-      if (!llmConnectionId.trim()) throw new Error("شناسه اتصال LLM را وارد کنید.");
       const prefix = project.video_mode === "scene" ? "/content/scene-projects" : "/content/projects";
       const action = project.video_mode === "scene" ? "generate-scenario" : "generate-script";
       await api(`${prefix}/${project.id}/${action}`, {
         method: "POST",
-        body: JSON.stringify({ connection_id: llmConnectionId.trim() }),
+        body: JSON.stringify({}),
       });
     }, "درخواست تولید سناریو ثبت شد.");
   };
@@ -716,7 +711,7 @@ export default function HomePage() {
                 </div>
                 <div className="field">
                   <label>اتصال LLM برای تولید سناریو</label>
-                  <input dir="ltr" value={llmConnectionId} onChange={(event) => setLlmConnectionId(event.target.value)} placeholder="UUID اتصال OpenAI-compatible" required />
+                  <p className="muted small">اتصال فعال LLM شرکت به‌صورت خودکار انتخاب می‌شود.</p>
                 </div>
                 <div className="field full actions">
                   <button className="button" type="submit" disabled={loading}>{loading ? "در حال اجرا…" : "شروع تولید و ساخت سناریو"}</button>
