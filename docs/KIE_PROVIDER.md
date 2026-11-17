@@ -31,6 +31,9 @@ Mandatory vs optional settings:
   character reference image (`character_key` or `character_image_url`).
 - **Optional (documented defaults):** every other `SCENE_VIDEO_KIE_*` variable,
   the polling interval/attempt settings, and the upload host/path override.
+  The upload host defaults to the documented file service
+  `https://kieai.redpandaai.co` (`SCENE_VIDEO_KIE_UPLOAD_BASE_URL`); it is a
+  different origin from the jobs API, which answers the upload path with 404.
 
 Two models are supported by the adapter:
 
@@ -89,7 +92,8 @@ lists the available keys and validates each image. Two sources are supported:
 - `character_key` (recommended): a local registry image. Before the paid
   submission the file is validated (JPEG/PNG/WEBP magic bytes, 1KB..10MB) and
   uploaded through KIE's documented base64 file-upload endpoint
-  (`POST /api/file-base64-upload`, free) which returns a public
+  (`POST https://kieai.redpandaai.co/api/file-base64-upload`, free) which
+  returns a public
   `downloadUrl` that the generation task fetches. The image bytes are really
   transmitted to KIE — the character is never "just mentioned in the prompt".
   The adapter then fetches the returned URL once before the credit check to

@@ -78,6 +78,11 @@ _KIE_MODEL_RULES = {
 # mode enum is fun/normal/spicy with spicy reserved for internal task_id flows.
 _ALLOWED_MODES = {"normal", "fun"}
 
+# The documented file-upload service is a separate origin from the jobs API.
+# Uploading to the jobs host returns HTTP 404, so the default must be this
+# host; operators may still override it via SCENE_VIDEO_KIE_UPLOAD_BASE_URL.
+DEFAULT_UPLOAD_BASE_URL = "https://kieai.redpandaai.co"
+
 # Reference images must be re-fetchable by KIE: public HTTPS, no userinfo,
 # standard port, and never a private/reserved address.
 _ALLOWED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
@@ -103,16 +108,17 @@ class KIEConfig:
     # Grok Imagine image-to-video mode ("normal" or "fun"; "spicy" is not
     # available for external image inputs and is rejected by this adapter).
     mode: str = "normal"
-    # Optional override for the file-upload host (documented mirror base is
-    # https://kieai.redpandaai.co); when unset the jobs base URL is used.
+    # File-upload host. KIE documents https://kieai.redpandaai.co for uploads,
+    # which is a different origin than the jobs API; unset/blank falls back to
+    # that documented host instead of the jobs base URL.
     upload_base_url: str | None = None
     upload_path: str = "vandad/character-references"
 
     def __post_init__(self) -> None:
-        # A blank optional upload host means "use the jobs base URL"; treat the
-        # common .env `VAR=` form as unset instead of failing validation.
-        if self.upload_base_url is not None and not self.upload_base_url.strip():
-            object.__setattr__(self, "upload_base_url", None)
+        # A blank optional upload host (the common .env `VAR=` form) means
+        # "use the documented upload service".
+        if self.upload_base_url is None or not self.upload_base_url.strip():
+            object.__setattr__(self, "upload_base_url", DEFAULT_UPLOAD_BASE_URL)
         parsed = urlsplit(self.base_url)
         if (
             parsed.scheme != "https"
@@ -142,17 +148,16 @@ class KIEConfig:
                 raise ValueError("KIE download allowlist must contain exact hostnames.")
         if self.mode not in _ALLOWED_MODES:
             raise ValueError("KIE mode must be 'normal' or 'fun'.")
-        if self.upload_base_url is not None:
-            upload_parsed = urlsplit(self.upload_base_url)
-            if (
-                upload_parsed.scheme != "https"
-                or not upload_parsed.hostname
-                or upload_parsed.username
-                or upload_parsed.password
-                or upload_parsed.query
-                or upload_parsed.fragment
-            ):
-                raise ValueError("KIE upload_base_url must be an HTTPS origin without userinfo, query or fragment.")
+        upload_parsed = urlsplit(str(self.upload_base_url))
+        if (
+            upload_parsed.scheme != "https"
+            or not upload_parsed.hostname
+            or upload_parsed.username
+            or upload_parsed.password
+            or upload_parsed.query
+            or upload_parsed.fragment
+        ):
+            raise ValueError("KIE upload_base_url must be an HTTPS origin without userinfo, query or fragment.")
         if not self.upload_path.strip() or self.upload_path.strip() != self.upload_path:
             raise ValueError("KIE upload_path must be a non-empty path without leading/trailing whitespace.")
 
@@ -371,7 +376,7 @@ class KIESceneVideoProvider(SceneVideoProvider):
         import base64 as _base64
 
         body["base64Data"] += _base64.b64encode(data).decode("ascii")
-        upload_base = self.config.upload_base_url or self.config.base_url
+        upload_base = str(self.config.upload_base_url)
         url = f"{upload_base.rstrip('/')}/api/file-base64-upload"
         try:
             client = self._client()

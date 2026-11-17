@@ -169,7 +169,7 @@ async def test_i2v_uploads_local_reference_image_via_documented_base64_endpoint(
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append((request.method, request.url.path))
+        calls.append((request.method, request.url.host, request.url.path))
         if request.url.path.endswith("/file-base64-upload"):
             body = json.loads(request.content)
             assert request.headers["Authorization"] == "Bearer test-secret"
@@ -193,7 +193,9 @@ async def test_i2v_uploads_local_reference_image_via_documented_base64_endpoint(
     assert hosted_url == (
         "https://tempfile.example.test/vandad/character-references/character.png"
     )
-    assert ("POST", "/api/file-base64-upload") in calls
+    # Uploads live on the documented upload host, NOT the jobs API origin
+    # (the jobs host answers that path with HTTP 404).
+    assert ("POST", "kieai.redpandaai.co", "/api/file-base64-upload") in calls
 
 
 async def test_i2v_upload_rejects_unsupported_image_content_and_oversize():
