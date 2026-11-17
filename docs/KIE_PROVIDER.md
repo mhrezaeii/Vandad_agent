@@ -42,9 +42,10 @@ Two models are supported by the adapter:
 | `grok-imagine/image-to-video` (default) | image-to-video | 6..30 s, whole seconds, serialized as a string (`"20"`) | mandatory (exactly one) | 5000 chars |
 | `grok-imagine-video-1-5-preview` (legacy per-scene text-to-video) | text-to-video | 1..15 s (integer or fractional number) | optional | 4096 chars |
 
-Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. KIE
-prices video at 2.4 / 4.5 / 8 credits per second for 480p / 720p / 1080p, so a
-20-second 480p single-shot generation costs about 48 credits. Verify current
+Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. The image-to-video model prices at 2.4 / 4.5 / 8 credits per second for
+480p / 720p / 1080p, so a 20-second 480p single-shot generation costs about
+48 credits. These rates do not describe the separate Grok Imagine Video 1.5
+Preview text-to-video model. Verify current
 pricing on kie.ai before relying on the estimate; the adapter's preflight
 checks the live credit balance against the same per-second rates, and the
 authoritative usage is the task's reported `creditsConsumed` (converted to a
