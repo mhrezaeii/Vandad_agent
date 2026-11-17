@@ -547,9 +547,8 @@ class SceneVideoService:
         active_submission_ids: set[uuid.UUID] = set()
         now = datetime.now(UTC)
 
-        # KIE and WaveSpeed do not document upstream idempotency for create-task
-        # requests. Fence both before their billable POSTs so worker recovery can
-        # never submit a duplicate after an ambiguous acknowledgement.
+        # KIE does not document upstream idempotency for create-task requests.
+        # Fence its billable POST before dispatch so recovery cannot duplicate it.
         durable_submit_provider = provider.provider_id == "kie"
         if durable_submit_provider:
             for job in jobs:
@@ -1455,7 +1454,7 @@ class SceneVideoService:
         """Concatenate the validated scene clips locally with FFmpeg.
 
         Used when the provider generated the scene clips but cannot compose
-        the final storyboard video itself (e.g. WaveSpeed text-to-video).
+        the final KIE storyboard video itself.
         Deterministic media stitching only — no creative generation.
         """
         artifact_service = ArtifactService(
