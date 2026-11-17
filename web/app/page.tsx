@@ -82,6 +82,7 @@ export default function HomePage() {
   const [sceneProviderId, setSceneProviderId] = useState("apimaster");
   const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
   const [characterKey, setCharacterKey] = useState("");
+  const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([]);
   const [selectedContentProjectId, setSelectedContentProjectId] = useState<string | null>(null);
   const [selectedContentProject, setSelectedContentProject] = useState<ContentProject | null>(null);
   const [videoFeedback, setVideoFeedback] = useState("");
@@ -130,6 +131,22 @@ export default function HomePage() {
     if (saved) window.localStorage.setItem("vandad.companyId", saved);
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    if (!contentBrandId) {
+      setSelectedPlatformIds([]);
+      return () => { active = false; };
+    }
+    api<{ id: string }[]>(`/content/brands/${contentBrandId}/platforms`)
+      .then((linked) => {
+        if (active) setSelectedPlatformIds(linked.map((item) => item.id));
+      })
+      .catch(() => {
+        if (active) setSelectedPlatformIds([]);
+      });
+    return () => { active = false; };
+  }, [contentBrandId]);
 
   const selectedDefinition = useMemo(
     () => catalog.find((agent) => agent.key === taskAgent),
@@ -278,9 +295,25 @@ export default function HomePage() {
     event.preventDefault();
     await run(async () => {
       if (!contentBrandId) throw new Error("ابتدا یک برند انتخاب کنید.");
-      if (contentMode === "scene" && !llmConnectionId.trim()) {
-        throw new Error("برای شروع خودکار فرایند، شناسه اتصال LLM را وارد کنید.");
+      if (contentMode === "scene") {
+        if (!llmConnectionId.trim()) {
+          throw new Error("برای شروع خودکار فرایند، شناسه اتصال LLM را وارد کنید.");
+        }
+        if (selectedPlatformIds.length === 0) {
+          throw new Error("برای این برند حداقل یک پلتفرم مرجع انتخاب کنید.");
+        }
+        await api(`/content/brands/${contentBrandId}/platforms`, {
+          method: "PUT",
+          body: JSON.stringify({ platform_ids: selectedPlatformIds }),
+        });
+        setNotice("در حال رصد پلتفرم‌های انتخاب‌شده و بروزرسانی دانش تأییدشده…");
+        await api(`/content/brands/${contentBrandId}/monitor`, {
+          method: "POST",
+          body: JSON.stringify({ connection_id: llmConnectionId.trim() }),
+        });
+        setNotice("رصد و تحلیل تمام شد؛ در حال ارسال دانش تأییدشده برای ساخت سناریو…");
       }
+
       let project: ContentProject;
       if (contentMode === "avatar") {
         project = await api<ContentProject>("/content/projects", {
@@ -311,7 +344,7 @@ export default function HomePage() {
       setVideoPreviewUrl("");
       videoPreviewProjectRef.current = null;
       setContentTopic("");
-    }, "پروژه ساخته شد و تولید سناریو به‌صورت خودکار آغاز شد.");
+    }, "رصد پلتفرم‌ها انجام شد و تولید سناریو به‌صورت خودکار آغاز شد.");
   };
 
   const generateProjectScript = async (project: ContentProject) => {
@@ -634,6 +667,28 @@ export default function HomePage() {
                   <select value={sceneProviderId} onChange={(event) => setSceneProviderId(event.target.value)}>
                     {sceneProviders.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.display_name}</option>)}
                   </select>
+                </div>
+                <div className="field full">
+                  <label>پلتفرم‌های مرجع این برند</label>
+                  <div className="platform-choice-list">
+                    {platforms.map((platform) => (
+                      <label className="platform-choice" key={platform.id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedPlatformIds.includes(platform.id)}
+                          onChange={(event) => setSelectedPlatformIds((current) =>
+                            event.target.checked
+                              ? [...current, platform.id]
+                              : current.filter((id) => id !== platform.id)
+                          )}
+                        />
+                        <span>{platform.name}</span>
+                        <small>{platform.platform_type || "platform"}</small>
+                      </label>
+                    ))}
+                    {!platforms.length && <span className="muted small">ابتدا پلتفرم‌ها را در بخش اتصال‌ها ثبت کنید.</span>}
+                  </div>
+                  <span className="muted small">در شروع تولید، منابع عمومی این پلتفرم‌ها دوباره بررسی می‌شوند؛ اگر محتوایی تغییر نکرده باشد از آخرین دانش تأییدشده استفاده می‌شود.</span>
                 </div>
                 <div className="field full">
                   <label>موضوع، هدف و پیام ویدیو</label>

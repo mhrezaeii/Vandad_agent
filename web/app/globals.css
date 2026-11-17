@@ -128,3 +128,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .content-video-player { width:100%; max-height:620px; background:#05080e; border:1px solid var(--line); border-radius:12px; }
 @media (max-width:900px) { .content-review-grid { grid-template-columns:1fr; } }
 @media (max-width:760px) { .content-intro { align-items:flex-start; flex-direction:column; } .content-video-player { max-height:480px; } }
+
+
+.platform-choice-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:7px; border:1px solid var(--line); background:#0c1726; border-radius:10px; padding:10px; }
+.platform-choice { display:flex; align-items:center; gap:8px; padding:7px 8px; border:1px solid #263a53; border-radius:8px; background:#111d2d; color:#dce8f8; cursor:pointer; }
+.platform-choice input { width:15px; height:15px; margin:0; accent-color:#69a7ff; }
+.platform-choice span { font-size:11px; flex:1; }
+.platform-choice small { color:var(--muted); font-size:9px; }

@@ -30,6 +30,7 @@ from app.schemas.content import (
 )
 from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
+from app.services.platform_monitor_service import PlatformMonitorService
 
 
 async def get_content_service(request: Request) -> AsyncIterator[ContentService]:
@@ -146,6 +147,42 @@ async def list_brand_platforms(
 
 
 # -------------------------------------------------------------------- projects
+@router.post("/brands/{brand_id}/monitor")
+async def monitor_brand_platforms(
+    brand_id: uuid.UUID,
+    payload: ContentConnectionRequest,
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> dict:
+    """Refresh public sources and evidence-backed knowledge for a brand's linked platforms."""
+    await service.get_brand(brand_id, company_id=scope.company_id)
+    monitor_service = PlatformMonitorService(
+        service.session,
+        request.app.state.provider_registry,
+        request.app.state.provider_executor,
+        request.app.state.master_key_box,
+    )
+    try:
+        result = await monitor_service.monitor_brand(
+            brand_id=brand_id,
+            company_id=scope.company_id,
+            connection_id=payload.connection_id,
+        )
+    except ValueError as exc:
+        raise ConflictError(str(exc)) from exc
+    if result["status"] == "no_linked_platforms":
+        raise ConflictError("Select at least one platform for this brand before monitoring.")
+    if result["status"] == "no_active_platforms":
+        raise ConflictError("The selected brand has no active linked platforms.")
+    if result["status"] == "no_knowledge":
+        raise ConflictError(
+            "No platform knowledge snapshot is available; check the platform sources and retry.",
+            details=result["platforms"],
+        )
+    return result
+
+
 @router.post("/projects", response_model=ContentProjectRead, status_code=201)
 async def create_project(
     payload: ContentProjectCreate,

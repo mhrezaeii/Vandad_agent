@@ -215,6 +215,17 @@ async def test_character_and_legacy_avatar_routes_are_not_exposed(client, header
     assert legacy_video.status_code == 404
 
 
+async def test_brand_monitor_requires_linked_platforms(client, headers):
+    brand_id = await _brand_id(client, headers)
+    response = await client.post(
+        f"/api/v1/content/brands/{brand_id}/monitor",
+        json={"connection_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "platform" in response.json()["detail"].lower()
+
+
 async def test_reject_video_requires_a_completed_scene_project(client, headers):
     brand_id = await _brand_id(client, headers)
     created = await client.post(
