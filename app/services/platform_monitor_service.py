@@ -131,19 +131,33 @@ class PlatformMonitorService:
         resolved_connection_id = connection.id
 
         platform_refs = list((await self.session.execute(
-            select(Platform.id, Platform.slug).where(
+            select(Platform.id, Platform.slug, Platform.status).where(
                 Platform.company_id == company_id,
                 Platform.id.in_(platform_ids),
-                Platform.status == "active",
             ).order_by(Platform.created_at)
         )).all())
-        if not platform_refs:
+        active_platforms = [item for item in platform_refs if item.status == "active"]
+        if not active_platforms:
             return {"status": "no_active_platforms", "platforms": [], "snapshot_count": 0}
 
         results: list[dict[str, Any]] = []
-        for platform_id, platform_slug in platform_refs:
+        for platform_id, platform_slug, platform_status in platform_refs:
+            if platform_status != "active":
+                results.append({
+                    "platform_id": str(platform_id),
+                    "platform": platform_slug,
+                    "status": "skipped",
+                    "detail": "platform is not active",
+                })
+                continue
             platform = await self.session.get(Platform, platform_id)
             if platform is None:
+                results.append({
+                    "platform_id": str(platform_id),
+                    "platform": platform_slug,
+                    "status": "error",
+                    "detail": "platform not found",
+                })
                 continue
             try:
                 result = await self.monitor_platform(
@@ -181,8 +195,8 @@ class PlatformMonitorService:
         )
         if snapshot_id is None:
             status = "no_knowledge"
-        elif successful_platforms == 0:
-            status = "refresh_failed"
+        elif successful_platforms != len(platform_refs):
+            status = "partial_failure"
         else:
             status = "completed"
         return {
