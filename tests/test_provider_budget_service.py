@@ -534,8 +534,8 @@ async def test_settled_kie_usage_keeps_task_ids_and_cost_breakdown(db_session):
             "scene_predictions": [{
                 "scene_index": 0,
                 "task_id": "task-123",
-                "provider_job_id": "wavespeed:pred-123",
-                "model_id": "kie-ai/ltx-2.3/text-to-video",
+                "provider_job_id": "kie:task-123",
+                "model_id": "grok-imagine/image-to-video",
                 "status": "completed",
                 "estimated_cost_usd": "0.10",
                 "reported_cost_usd": "0.10",
@@ -544,7 +544,7 @@ async def test_settled_kie_usage_keeps_task_ids_and_cost_breakdown(db_session):
     )
     assert reservation.usage_payload["scene_predictions"][0]["task_id"] == "task-123"
     assert reservation.usage_payload["scene_predictions"][0]["model_id"] == (
-        "kie-ai/ltx-2.3/text-to-video"
+        "grok-imagine/image-to-video"
     )
 
 
