@@ -1,6 +1,6 @@
 # Architecture and implementation status
 
-Last reviewed: 2026-11-12 (product/documentation alignment)
+Last reviewed: 2026-11-17 (KIE-only video and native-audio decision)
 
 ## Intended runtime shape
 
@@ -66,7 +66,7 @@ Current state: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owne
 
 Provider adapters are infrastructure, not product agents. They should expose stable capability contracts and return normalized results/errors/usage. Product services and agents should not hard-code vendor-specific HTTP details.
 
-The GPT scenario adapter uses the tenant-scoped OpenAI connection. KIE.ai Grok Imagine is the only active video adapter in this initial release. Its image-to-video model accepts one character reference image and returns a complete video with provider-native audio. Other video services and gateways are intentionally absent from the runtime registry; they will be researched and compared in a later phase.
+The GPT scenario adapter uses the backend OpenAI environment configuration. KIE.ai Grok Imagine is the sole active video provider by explicit product decision: WaveSpeed and other video providers were intentionally removed from the initial runtime scope. KIE returns the final MP4 with provider-native audio; the pipeline preserves and validates that audio rather than replacing it with local TTS or lip-sync. The adapter supports the configured KIE image-to-video model and the Grok Imagine Video 1.5 Preview text-to-video model; the selected model is controlled by SCENE_VIDEO_KIE_MODEL.
 
 Provider routing should later support:
 - explicit provider/model choice and a deterministic fallback policy;
@@ -145,7 +145,7 @@ Vandad does not create, register, manage or maintain persistent characters, bran
 - [x] Add tenant-scoped rolling provider request/error/latency telemetry and admin-only manual spend reconciliation.
 - [x] Add KIE-specific model capability checks, preflight validation and durable submit fencing; no alternative video provider is enabled in this phase.
 - [ ] Populate verified model constraints for language, modality, duration and aspect ratio; do not infer undocumented provider limits.
-- Deferred to a later phase: benchmark alternative video APIs and gateways on accepted output quality and total cost before adding any new provider.
+- Deferred: do not reintroduce WaveSpeed or another video provider as part of this release. Any future provider addition requires a separate product decision and explicit architecture/configuration review.
 
 Paid autonomous execution remains gated until staging and credentialed end-to-end tests verify the task ceiling/context propagation, provider routing and live probes against real vendor behavior.
 
