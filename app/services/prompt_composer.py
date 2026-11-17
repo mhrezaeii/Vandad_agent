@@ -87,7 +87,9 @@ def compose_single_shot_prompt(
             "image as the sole character source. Do not edit, retouch, restyle, redraw, "
             "replace, beautify, crop or otherwise alter the source image. Animate from "
             "this reference only; preserve the same face, age, hair, clothing, accessories, "
-            "proportions and identity in every generated frame. Do not invent a substitute."
+            "proportions and identity in every generated frame. Do not invent a substitute. "
+            "CHARACTER CONSISTENCY (mandatory): The reference image is authoritative. "
+            "Never introduce a different person or replace the supplied character."
         )
         if character_block:
             lines.append(
