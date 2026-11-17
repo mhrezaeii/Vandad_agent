@@ -33,11 +33,15 @@ function Set-EnvLine([string]$Name, [string]$Value) {
 }
 
 $content = Get-Content ".env.example" -Raw
-Set-EnvLine "POSTGRES_PASSWORD" (New-RandomHex 24)
-Set-EnvLine "REDIS_PASSWORD" (New-RandomHex 24)
+$postgresPassword = New-RandomHex 24
+$redisPassword = New-RandomHex 24
+Set-EnvLine "POSTGRES_PASSWORD" $postgresPassword
+Set-EnvLine "DATABASE_URL" "postgresql+asyncpg://vandad:$postgresPassword@localhost:15432/vandad_agent"
+Set-EnvLine "REDIS_PASSWORD" $redisPassword
+Set-EnvLine "REDIS_URL" "redis://:$redisPassword@localhost:6379/0"
 Set-EnvLine "N8N_ENCRYPTION_KEY" (New-RandomHex 32)
 Set-EnvLine "CREDENTIAL_MASTER_KEYS" ('{"1":"' + (New-RandomBase64 32) + '"}')
-Set-Content -Path ".env" -Value $content -Encoding utf8
+[System.IO.File]::WriteAllText((Join-Path $root ".env"), $content, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host ""
 Write-Host "Created .env with unique local secrets." -ForegroundColor Green
