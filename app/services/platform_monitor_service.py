@@ -128,6 +128,7 @@ class PlatformMonitorService:
         )
         if connection is None:
             raise ValueError("A connected llm_openai connection for this company is required.")
+        resolved_connection_id = connection.id
 
         platform_refs = list((await self.session.execute(
             select(Platform.id, Platform.slug).where(
@@ -146,7 +147,7 @@ class PlatformMonitorService:
                 continue
             try:
                 result = await self.monitor_platform(
-                    platform, connection_id=connection.id
+                    platform, connection_id=resolved_connection_id
                 )
                 await self.session.commit()
                 results.append(result)
@@ -170,13 +171,25 @@ class PlatformMonitorService:
                 PlatformKnowledgeSnapshot.platform_id.in_(platform_ids),
             ).order_by(PlatformKnowledgeSnapshot.extracted_at.desc()).limit(1)
         )
+        successful_platforms = sum(
+            1 for item in results
+            if item.get("status") == "ok"
+            or (
+                item.get("status") == "skipped"
+                and item.get("detail") == "documents unchanged"
+            )
+        )
+        if snapshot_id is None:
+            status = "no_knowledge"
+        elif successful_platforms == 0:
+            status = "refresh_failed"
+        else:
+            status = "completed"
         return {
-            "status": "completed" if snapshot_id is not None else "no_knowledge",
+            "status": status,
             "platforms": results,
             "snapshot_available": snapshot_id is not None,
-            "successful_platforms": sum(
-                1 for item in results if item.get("status") in {"ok", "skipped"}
-            ),
+            "successful_platforms": successful_platforms,
         }
 
     async def _llm_connection_id(self, company_id: uuid.UUID) -> uuid.UUID | None:

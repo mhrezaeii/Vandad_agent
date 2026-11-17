@@ -175,6 +175,11 @@ async def monitor_brand_platforms(
         raise ConflictError("Select at least one platform for this brand before monitoring.")
     if result["status"] == "no_active_platforms":
         raise ConflictError("The selected brand has no active linked platforms.")
+    if result["status"] == "refresh_failed":
+        raise ConflictError(
+            "None of the selected platforms could be refreshed; no new scenario was generated.",
+            details=result["platforms"],
+        )
     if result["status"] == "no_knowledge":
         raise ConflictError(
             "No platform knowledge snapshot is available; check the platform sources and retry.",
