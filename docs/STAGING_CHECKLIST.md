@@ -18,6 +18,10 @@ Set these in the API environment before starting with ENVIRONMENT=staging:
 - CREDENTIAL_MASTER_KEYS and CREDENTIAL_ACTIVE_KEY_VERSION: staging-only
   encryption keys; never reuse development or production keys.
 - ARTIFACT_STORAGE_ROOT: persistent writable storage.
+- N8N_ENCRYPTION_KEY: if the optional n8n automation profile is enabled, generate
+  a unique high-entropy key once and persist it across restarts/redeployments;
+  changing it can make stored n8n credentials unreadable. Never use the
+  `.env.example` placeholder in a deployed environment.
 - Provider credentials and company budgets only for providers approved for the
   staging test.
 
