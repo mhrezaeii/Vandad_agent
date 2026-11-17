@@ -13,8 +13,8 @@ type SceneProvider = { provider_id: string; display_name: string; requires_netwo
 type Budget = { provider_id: string; monthly_limit_usd: string; per_operation_limit_usd: string; enabled: boolean };
 type EventItem = { id: string; sequence: number; event_type: string; payload: Record<string, unknown>; created_at: string };
 type Brand = { id: string; name: string; display_name?: string; industry?: string; status: string };
-type ScenarioScene = { scene_index?: number; title?: string; visual_prompt?: string; prompt?: string; narration?: string; on_screen_text?: string; duration_seconds?: number };
-type Scenario = { title?: string; hook?: string; summary?: string; scenes?: ScenarioScene[]; caption?: string; hashtags?: string[] };
+type ScenarioScene = { index?: number; scene_index?: number; title?: string; scene_type?: string; visual_prompt?: string; prompt?: string; camera_direction?: string; transition?: string; narration?: string; pronunciation_text?: string; on_screen_text?: string; subtitle_text?: string; duration_seconds?: number };
+type Scenario = { title?: string; hook?: string; opening_hook?: string; summary?: string; visual_style?: string; scenes?: ScenarioScene[]; cta?: string; cta_pronunciation_text?: string; caption?: string; hashtags?: string[] };
 type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "avatar" | "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
 type CharacterImage = { key: string; platform: string; name: string; valid: boolean; error?: string };
 type Platform = { id: string; name: string; base_url?: string; platform_type?: string };
@@ -722,7 +722,7 @@ export default function HomePage() {
                     <button type="button" className={`content-project-row ${selectedContentProjectId === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectContentProject(project.id)}>
                       <span className="content-project-main">
                         <strong>{project.video_title || project.topic}</strong>
-                        <small dir="ltr">{project.video_mode} · {project.id.slice(0, 8)}</small>
+                        <small dir="ltr">{project.video_mode} · {project.scene_options?.revision_number ? `نسخه ${String(project.scene_options.revision_number)}` : "نسخه اصلی"} · {project.id.slice(0, 8)}</small>
                       </span>
                       <Status value={project.status} />
                     </button>
@@ -747,7 +747,7 @@ export default function HomePage() {
                       <div className="scenario-review">
                         <h3>سناریو برای تأیید شما</h3>
                         {selectedContentProject.scenario.title && <h4>{selectedContentProject.scenario.title}</h4>}
-                        {selectedContentProject.scenario.hook && <p><strong>قلاب شروع:</strong> {selectedContentProject.scenario.hook}</p>}
+                        {(selectedContentProject.scenario.opening_hook || selectedContentProject.scenario.hook) && <p><strong>قلاب شروع:</strong> {selectedContentProject.scenario.opening_hook || selectedContentProject.scenario.hook}</p>}
                         {selectedContentProject.scenario.summary && <p>{selectedContentProject.scenario.summary}</p>}
                         <div className="scene-review-list">
                           {(selectedContentProject.scenario.scenes || []).map((scene, index) => (
@@ -755,10 +755,16 @@ export default function HomePage() {
                               <div className="scene-review-heading"><strong>صحنه {index + 1}{scene.title ? ` · ${scene.title}` : ""}</strong><span>{scene.duration_seconds ? `${scene.duration_seconds} ثانیه` : ""}</span></div>
                               {scene.visual_prompt || scene.prompt ? <p><strong>تصویر:</strong> {scene.visual_prompt || scene.prompt}</p> : null}
                               {scene.narration && <p><strong>گویندگی:</strong> {scene.narration}</p>}
+                              {scene.pronunciation_text && <p><strong>متن تلفظ با اعراب:</strong> {scene.pronunciation_text}</p>}
+                              {scene.camera_direction && <p><strong>حرکت دوربین:</strong> {scene.camera_direction}</p>}
+                              {scene.transition && <p><strong>گذار:</strong> {scene.transition}</p>}
+                              {scene.subtitle_text && <p><strong>زیرنویس:</strong> {scene.subtitle_text}</p>}
                               {scene.on_screen_text && <p><strong>متن روی تصویر:</strong> {scene.on_screen_text}</p>}
                             </article>
                           ))}
                         </div>
+                        {selectedContentProject.scenario.cta && <p><strong>دعوت به اقدام:</strong> {selectedContentProject.scenario.cta}</p>}
+                        {selectedContentProject.scenario.cta_pronunciation_text && <p><strong>تلفظ CTA:</strong> {selectedContentProject.scenario.cta_pronunciation_text}</p>}
                         {selectedContentProject.scenario.caption && <p><strong>کپشن:</strong> {selectedContentProject.scenario.caption}</p>}
                         {selectedContentProject.scenario.hashtags?.length ? <p className="muted">{selectedContentProject.scenario.hashtags.join(" ")}</p> : null}
                       </div>
@@ -786,6 +792,12 @@ export default function HomePage() {
                       </div>
                     )}
 
+                    {selectedContentProject.video_mode === "scene" && selectedContentProject.status === "approved" && (
+                      <div className="human-gate">
+                        <p>سناریو تأیید شده است اما تولید ویدیو هنوز شروع نشده؛ می‌توانید ارسال را دوباره انجام دهید.</p>
+                        <button className="button" onClick={() => void generateProjectVideo(selectedContentProject)}>شروع تولید ویدیو</button>
+                      </div>
+                    )}
                     {selectedContentProject.status === "completed" && (
                       <div className="video-review">
                         <h3>بازبینی ویدیوی تولیدشده</h3>
