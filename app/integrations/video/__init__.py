@@ -1,14 +1,7 @@
-"""Scene-video provider registry.
-
-Providers are resolved by their stable ``provider_id`` (persisted on every
-``SceneVideoJob``). The local mock provider is always available; the generic
-HTTP adapter is registered only when an operator supplies an explicit,
-authorised HTTP contract.
-"""
+"""KIE scene-video provider registry (mock is test-only)."""
 
 from __future__ import annotations
 
-from app.integrations.video.apimaster import APIMasterConfig, APIMasterSceneVideoProvider
 from app.integrations.video.base import (
     SceneGenerationStatus,
     SceneJobState,
@@ -24,10 +17,8 @@ from app.integrations.video.base import (
     SceneVideoTransientError,
     SceneVideoValidation,
 )
-from app.integrations.video.generic_http import GenericHttpConfig, GenericHttpSceneVideoProvider
 from app.integrations.video.kie import KIEConfig, KIESceneVideoProvider
 from app.integrations.video.mock import MockSceneVideoProvider
-from app.integrations.video.wavespeed import WaveSpeedConfig, WaveSpeedSceneVideoProvider
 
 
 class SceneVideoProviderRegistryError(Exception):
@@ -166,47 +157,26 @@ class SceneVideoProviderRegistry:
         return len(self._providers)
 
 
-DEFAULT_SCENE_VIDEO_PROVIDER = "mock"
+DEFAULT_SCENE_VIDEO_PROVIDER = "kie"
 
 
 def build_scene_video_registry(
     *,
-    include_mock: bool = True,
-    http_config: GenericHttpConfig | None = None,
-    apimaster_config: APIMasterConfig | None = None,
-    wavespeed_config: WaveSpeedConfig | None = None,
+    include_mock: bool = False,
     kie_config: KIEConfig | None = None,
-    wavespeed_composition_provider: SceneVideoProvider | None = None,
     mock_provider: MockSceneVideoProvider | None = None,
 ) -> SceneVideoProviderRegistry:
-    """Build the scene-video registry.
-
-    ``mock`` produces synthetic clips and never touches the network. The
-    ``generic_http`` provider is registered only when a configuration is
-    supplied; there is no silent fallback to any vendor.
-    """
+    """Build a registry containing KIE and, only when requested, the test mock."""
     registry = SceneVideoProviderRegistry()
     if include_mock:
         registry.register(mock_provider or MockSceneVideoProvider())
-    if http_config is not None:
-        registry.register(GenericHttpSceneVideoProvider(http_config))
-    if apimaster_config is not None:
-        registry.register(APIMasterSceneVideoProvider(apimaster_config))
     if kie_config is not None:
         registry.register(KIESceneVideoProvider(kie_config))
-    if wavespeed_config is not None:
-        registry.register(WaveSpeedSceneVideoProvider(
-            wavespeed_config, composition_provider=wavespeed_composition_provider
-        ))
     return registry
 
 
 __all__ = [
-    "APIMasterConfig",
-    "APIMasterSceneVideoProvider",
     "DEFAULT_SCENE_VIDEO_PROVIDER",
-    "GenericHttpConfig",
-    "GenericHttpSceneVideoProvider",
     "MockSceneVideoProvider",
     "KIEConfig",
     "KIESceneVideoProvider",
@@ -225,7 +195,5 @@ __all__ = [
     "SceneVideoQualityResult",
     "SceneVideoTransientError",
     "SceneVideoValidation",
-    "WaveSpeedConfig",
-    "WaveSpeedSceneVideoProvider",
     "build_scene_video_registry",
 ]

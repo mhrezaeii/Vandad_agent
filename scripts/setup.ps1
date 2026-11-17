@@ -41,13 +41,12 @@ Set-EnvLine "POSTGRES_PASSWORD" $postgresPassword
 Set-EnvLine "DATABASE_URL" "postgresql+asyncpg://vandad:$postgresPassword@localhost:15432/vandad_agent"
 Set-EnvLine "REDIS_PASSWORD" $redisPassword
 Set-EnvLine "REDIS_URL" "redis://:$redisPassword@localhost:6379/0"
-Set-EnvLine "N8N_ENCRYPTION_KEY" (New-RandomHex 32)
 Set-EnvLine "CREDENTIAL_MASTER_KEYS" ('{"1":"' + (New-RandomBase64 32) + '"}')
 [System.IO.File]::WriteAllText((Join-Path $root ".env"), $content, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host ""
 Write-Host "Created .env with unique local secrets." -ForegroundColor Green
-Write-Host "Next: add your LLM/video provider credentials and configure the first company."
+Write-Host "Next: add SCENE_VIDEO_KIE_API_KEY to .env, configure GPT from UI Settings, then bootstrap the first company."
 Write-Host "Do not regenerate CREDENTIAL_MASTER_KEYS after storing encrypted provider credentials."
 Write-Host ""
 Write-Host "Start infrastructure with: docker compose up -d --build"
