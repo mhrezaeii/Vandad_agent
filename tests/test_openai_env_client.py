@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from app.core.config import Settings
 import app.integrations.providers.openai_env as openai_env
+from app.core.config import Settings
 
 
 class _Response:
