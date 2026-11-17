@@ -90,8 +90,9 @@ class Settings(BaseSettings):
     openai_max_completion_tokens: int = Field(default=5000, ge=256, le=32768)
 
     # --- Current content production providers: GPT + KIE only ------------------
-    # GPT credentials/model are configured in the tenant LLM connection vault
-    # from the UI. KIE is the sole video-generation provider in this phase.
+    # GPT credentials/model are configured only through backend environment
+    # variables (OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL). Never expose
+    # provider secrets through the browser. KIE is the sole video provider.
     scene_video_provider: str = "kie"
     scene_video_daily_quota: int | None = Field(default=None, ge=0)
     scene_video_max_scene_attempts: int = Field(default=3, ge=1, le=10)
