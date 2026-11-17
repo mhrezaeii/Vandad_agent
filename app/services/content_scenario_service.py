@@ -15,7 +15,6 @@ from app.models import (
     BrandPlatformLink,
     ContentBrand,
     ContentProject,
-    PlatformConnection,
     PlatformKnowledgeSnapshot,
     ProjectStatus,
 )
@@ -52,7 +51,7 @@ class ContentScenarioService:
         *,
         company_id: uuid.UUID,
         project_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None = None,
         timeout_seconds: float = 180.0,
         task_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
@@ -72,14 +71,6 @@ class ContentScenarioService:
         brand = await self.session.get(ContentBrand, project.brand_id)
         if brand is None or brand.company_id != company_id or brand.status != "active":
             raise NotFoundError("Active content brand not found for this company.")
-
-        connection = await self.session.get(PlatformConnection, connection_id)
-        if (
-            connection is None
-            or connection.company_id != company_id
-            or connection.provider != "llm_openai"
-        ):
-            raise ConflictError("An llm_openai connection for this company is required.")
 
         platform_ids = list((await self.session.scalars(
             select(BrandPlatformLink.platform_id).where(

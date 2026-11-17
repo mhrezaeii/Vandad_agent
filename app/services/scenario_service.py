@@ -195,7 +195,7 @@ class ScenarioService:
         self,
         *,
         company_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None,
         request: ScenarioRequest,
         timeout_seconds: float = 120.0,
         operation: str = "execute",
@@ -221,7 +221,7 @@ class ScenarioService:
         self,
         *,
         company_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None,
         system: str,
         user: str,
         timeout_seconds: float,
@@ -234,6 +234,18 @@ class ScenarioService:
             if isinstance(raw, dict):
                 return raw
             return {"content": raw}
+
+        if connection_id is None:
+            from app.integrations.providers.openai_env import OpenAIEnvError, openai_chat_completion
+            try:
+                return await openai_chat_completion(
+                    system=system, user=user, timeout_seconds=timeout_seconds,
+                    temperature=0.4, max_tokens=2000, json_mode=True,
+                )
+            except OpenAIEnvError as error:
+                raise ScenarioGenerationError(
+                    str(error), code="openai_request_failed", retryable=True
+                ) from error
 
         budget_key = idempotency_key or hashlib.sha256(
             f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode()

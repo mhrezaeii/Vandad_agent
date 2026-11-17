@@ -86,10 +86,6 @@ class PlatformMonitorService:
             ).limit(1)
         )) is not None
         if not has_snapshot or crawl["created"] or crawl["changed"]:
-            connection_id = connection_id or await self._llm_connection_id(platform.company_id)
-            if connection_id is None:
-                return {**base, "status": "skipped", "detail": "no active llm_openai connection",
-                        "documents": crawl}
             snapshot = await PlatformKnowledgeService(
                 self.session, self.registry, self.executor, self._keys
             ).extract(platform=platform, connection_id=connection_id)
@@ -106,7 +102,7 @@ class PlatformMonitorService:
         *,
         brand_id: uuid.UUID,
         company_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         """Refresh every active platform explicitly linked to one content brand."""
         platform_ids = list((await self.session.scalars(
@@ -118,17 +114,7 @@ class PlatformMonitorService:
         if not platform_ids:
             return {"status": "no_linked_platforms", "platforms": [], "snapshot_count": 0}
 
-        connection = await self.session.scalar(
-            select(PlatformConnection).where(
-                PlatformConnection.id == connection_id,
-                PlatformConnection.company_id == company_id,
-                PlatformConnection.provider == "llm_openai",
-                PlatformConnection.status == "connected",
-            )
-        )
-        if connection is None:
-            raise ValueError("A connected llm_openai connection for this company is required.")
-        resolved_connection_id = connection.id
+        resolved_connection_id = connection_id
 
         platform_refs = list((await self.session.execute(
             select(Platform.id, Platform.slug, Platform.status).where(

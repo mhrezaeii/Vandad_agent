@@ -189,7 +189,7 @@ class PlatformKnowledgeService:
         self._keys = master_key_box
 
     async def extract(
-        self, *, platform: Platform, connection_id: uuid.UUID, max_documents: int = 20,
+        self, *, platform: Platform, connection_id: uuid.UUID | None = None, max_documents: int = 20,
         task_id: uuid.UUID | None = None,
     ) -> PlatformKnowledgeSnapshot:
         documents = list((await self.session.scalars(
@@ -203,37 +203,44 @@ class PlatformKnowledgeService:
                 "No discovered source documents exist. Run platform discovery first.",
                 code="knowledge_sources_missing",
             )
-        if connection_id is None:
-            raise NotFoundError("LLM connection not found.")
-
         system, user = build_knowledge_prompt(platform, documents)
-        budget_key = hashlib.sha256(
-            f"{platform.company_id}:{platform.id}:{connection_id}:{system}:{user}".encode()
-        ).hexdigest()
-        try:
-            result = await LlmExecutionService(
-                self.session, self.registry, self.executor, self._keys
-            ).execute(
-                company_id=platform.company_id,
-                connection_id=connection_id,
-                configuration_overrides={
-                    "params": {"system": system, "user": user},
-                    "response_format": "json_object",
-                    "temperature": 0.1,
-                    "max_tokens": 5000,
-                },
-                timeout_seconds=180.0,
-                operation="platform.knowledge.extract",
-                idempotency_key=f"knowledge:{budget_key}",
-                task_id=task_id,
-            )
-        except ProviderError as error:
-            raise PlatformKnowledgeExtractionError(
-                error.message,
-                code=error.code or "llm_failure",
-                retryable=error.is_transient,
-            ) from error
-        metadata = result.metadata or {}
+        if connection_id is None:
+            from app.integrations.providers.openai_env import OpenAIEnvError, openai_chat_completion
+            try:
+                metadata = await openai_chat_completion(
+                    system=system, user=user, timeout_seconds=180.0,
+                    temperature=0.1, max_tokens=5000, json_mode=True,
+                )
+            except OpenAIEnvError as error:
+                raise PlatformKnowledgeExtractionError(
+                    str(error), code="openai_request_failed", retryable=True
+                ) from error
+        else:
+            budget_key = hashlib.sha256(
+                f"{platform.company_id}:{platform.id}:{connection_id}:{system}:{user}".encode()
+            ).hexdigest()
+            try:
+                result = await LlmExecutionService(
+                    self.session, self.registry, self.executor, self._keys
+                ).execute(
+                    company_id=platform.company_id,
+                    connection_id=connection_id,
+                    configuration_overrides={
+                        "params": {"system": system, "user": user},
+                        "response_format": "json_object",
+                        "temperature": 0.1,
+                        "max_tokens": 5000,
+                    },
+                    timeout_seconds=180.0,
+                    operation="platform.knowledge.extract",
+                    idempotency_key=f"knowledge:{budget_key}",
+                    task_id=task_id,
+                )
+            except ProviderError as error:
+                raise PlatformKnowledgeExtractionError(
+                    error.message, code=error.code or "llm_failure", retryable=error.is_transient
+                ) from error
+            metadata = result.metadata or {}
         raw = metadata.get("content")
         allowed_urls = {document.url for document in documents}
         knowledge = _parse_payload(raw, allowed_urls)

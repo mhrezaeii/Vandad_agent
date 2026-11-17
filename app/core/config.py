@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # Hard cap per artifact; streaming writes abort beyond it.
     artifact_max_size_bytes: int = Field(default=2 * 1024**3, ge=1)
 
+    # --- GPT (scenario + evidence extraction) ----------------------------------
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4.1-mini"
+    openai_timeout_seconds: float = Field(default=180.0, gt=0, le=600)
+    openai_max_completion_tokens: int = Field(default=5000, ge=256, le=32768)
+
     # --- Current content production providers: GPT + KIE only ------------------
     # GPT credentials/model are configured in the tenant LLM connection vault
     # from the UI. KIE is the sole video-generation provider in this phase.
