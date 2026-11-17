@@ -593,6 +593,7 @@ class _SingleShotProvider(MockSceneVideoProvider):
 
     provider_id = "mockshot"
     supports_reference_image = True
+    requires_reference_image = True
     supports_native_audio = True
     min_duration_seconds = 6
     max_duration_seconds = 30

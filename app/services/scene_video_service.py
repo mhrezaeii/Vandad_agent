@@ -128,9 +128,6 @@ def _scenario_pronunciation_text(scenario: Scenario) -> str:
         (scene.pronunciation_text or scene.narration).strip()
         for scene in sorted(scenario.scenes, key=lambda item: item.index)
     ]
-    cta = (scenario.cta_pronunciation_text or scenario.cta).strip()
-    if cta:
-        parts.append(cta)
     return " ".join(part for part in parts if part)
 
 

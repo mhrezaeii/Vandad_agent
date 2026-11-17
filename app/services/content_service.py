@@ -1147,11 +1147,13 @@ class ContentService:
             },
         )
         await self.session.flush()
-        return await self.generate_scene_video(
+        revision = await self.generate_scene_video(
             revision.id,
             scope=scope,
             provider_id=provider_id or source.scene_video_provider,
         )
+        await self.session.refresh(revision)
+        return revision
 
     async def cancel_scene_video(
         self, project_id: uuid.UUID, *, scope: CompanyScope

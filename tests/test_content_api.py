@@ -226,7 +226,7 @@ async def test_brand_monitor_requires_linked_platforms(client, headers):
         headers=headers,
     )
     assert response.status_code == 409
-    assert "platform" in response.json()["detail"].lower()
+    assert "platform" in response.json()["error"]["message"].lower()
 
 
 async def test_reject_video_requires_a_completed_scene_project(client, headers):
@@ -251,7 +251,7 @@ async def test_reject_video_requires_a_completed_scene_project(client, headers):
         headers=headers,
     )
     assert rejected.status_code == 409
-    assert "completed" in rejected.json()["detail"].lower()
+    assert "completed" in rejected.json()["error"]["message"].lower()
 
 
 async def test_rejected_video_creates_immutable_new_revision(
