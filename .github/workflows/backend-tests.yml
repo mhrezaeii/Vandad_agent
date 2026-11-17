@@ -84,7 +84,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install frontend dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
       - name: Lint frontend
         run: npm run lint
       - name: Build frontend
