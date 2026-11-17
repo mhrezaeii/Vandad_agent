@@ -715,6 +715,12 @@ export default function HomePage() {
                       </div>
                     )}
 
+                    {selectedContentProject.status === "script_failed" && (
+                      <div className="human-gate">
+                        <p>تولید سناریو ناموفق بود؛ می‌توانید از همین‌جا دوباره تلاش کنید.</p>
+                        <button className="button ghost" onClick={() => void generateProjectScript(selectedContentProject)}>تلاش مجدد برای تولید سناریو</button>
+                      </div>
+                    )}
                     {selectedContentProject.status === "script_ready" && (
                       <div className="human-gate">
                         <p>سناریو آماده است. قبل از تأیید شما هیچ درخواست تولید ویدیویی ارسال نمی‌شود.</p>
