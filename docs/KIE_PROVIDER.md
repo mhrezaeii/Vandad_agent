@@ -1,8 +1,8 @@
-# KIE.ai Grok Imagine — image-to-video (single-shot) and Video 1.5 Preview
+# KIE.ai Grok Imagine — sole video provider and native-audio delivery
 
 ## Configuration
 
-KIE is an opt-in scene-video provider. Keep the API key in the local `.env`
+KIE is the only active video provider in this release, selected by product decision. WaveSpeed and other video providers were intentionally removed from the runtime scope; there is no automatic provider fallback. Keep the API key in the local `.env`
 file only; never commit it or send it to the browser.
 
 ```dotenv
@@ -42,7 +42,7 @@ Two models are supported by the adapter:
 | `grok-imagine/image-to-video` (default) | image-to-video | 6..30 s, whole seconds, serialized as a string (`"20"`) | mandatory (exactly one) | 5000 chars |
 | `grok-imagine-video-1-5-preview` (legacy per-scene text-to-video) | text-to-video | 1..15 s (integer or fractional number) | optional | 4096 chars |
 
-Both models return an MP4 with native audio; audio cannot be disabled. KIE
+Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. KIE
 prices video at 2.4 / 4.5 / 8 credits per second for 480p / 720p / 1080p, so a
 20-second 480p single-shot generation costs about 48 credits. Verify current
 pricing on kie.ai before relying on the estimate; the adapter's preflight
@@ -163,3 +163,28 @@ reproduction and RTL on-screen text, but KIE/Grok does not contractually
 guarantee Persian speech quality. The Persian script remains testable in the
 database (`project.scenario`, the job's `prompt`/`narration`); the audible
 result of the first paid run must be accepted manually.
+
+
+## Product decision: KIE-only video and provider-native audio
+
+The initial release intentionally uses KIE.ai as the sole video provider and
+uses the audio returned by KIE as part of the generated MP4. This is a product
+decision, not an accidental consequence of missing adapters. WaveSpeed has
+been removed from the active runtime, registry, configuration and deployment
+path. Do not restore it as a fallback or silently route a failed KIE request
+to another vendor.
+
+The KIE adapter supports these distinct model contracts:
+
+- `grok-imagine-video-1-5-preview`: text-to-video, 1–15 seconds, native
+  audio; the supplier-published 480p price reviewed for this option is
+  approximately USD 0.012/second.
+- `grok-imagine/image-to-video`: image-to-video, one required reference
+  image, 6–30 seconds, native audio; its credit-based pricing is documented
+  separately above.
+
+The code default remains `grok-imagine/image-to-video` unless
+`SCENE_VIDEO_KIE_MODEL` is explicitly set. Do not describe the 1.5 Preview
+price as the price of the image-to-video model. A real credentialed run is
+still required to validate the selected model's output quality, Persian
+speech, duration, actual credits consumed and final MP4 audio stream.
