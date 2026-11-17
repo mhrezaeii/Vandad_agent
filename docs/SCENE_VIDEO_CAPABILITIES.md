@@ -1,9 +1,10 @@
 # Initial KIE video-provider and native-audio capability contract
 
-The initial production scope intentionally registers KIE.ai Grok Imagine only.
-Alternative video APIs, gateways and model hosts are not configured, selectable,
-or called by the application. Their quality and cost will be evaluated in a
-later phase before any adapter is added.
+The initial production scope intentionally registers KIE.ai Grok Imagine only,
+by explicit product decision. WaveSpeed and other video APIs, gateways and
+model hosts were intentionally removed; they are not configured, selectable,
+used as fallback, or called by the application. A future provider addition
+requires a separate product decision.
 
 ## Runtime catalogue
 
@@ -33,10 +34,16 @@ The local mock implementation exists only for deterministic unit and pipeline
 tests. It is not registered by the normal KIE runtime and cannot be selected
 from the production Content Studio.
 
-## Future provider evaluation
+## Model selection and future changes
 
-Any additional provider must be evaluated in a separate phase against accepted
-output quality, Persian speech quality, reference-character fidelity,
-successful completion rate, retry behavior, latency, actual cost per accepted
-video, and quota/availability. It must not be added to .env.example or the
-runtime registry before that evaluation is approved.
+The adapter also supports KIE's `grok-imagine-video-1-5-preview` text-to-video
+model (1–15 seconds, provider-native audio). The configured model is controlled
+by `SCENE_VIDEO_KIE_MODEL`; the current code default is
+`grok-imagine/image-to-video`. The supplier-published 480p price reviewed for
+Grok Imagine Video 1.5 Preview is USD 0.012/second; do not apply that price to
+the image-to-video model.
+
+Do not add WaveSpeed or another vendor as an automatic fallback. Any future
+provider change requires an explicit product decision, contract/capability
+review, and credentialed acceptance against Persian audio quality, successful
+completion rate, retries, latency, actual cost per accepted video, and quota.
