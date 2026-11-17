@@ -665,7 +665,7 @@ export default function HomePage() {
                 <div className="field">
                   <label>Scene Provider</label>
                   <select value={sceneProviderId} onChange={(event) => setSceneProviderId(event.target.value)}>
-                    {sceneProviders.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.display_name}</option>)}
+                    {sceneProviders.filter((provider) => !characterKey || provider.supports_reference_image).map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.display_name}</option>)}
                   </select>
                 </div>
                 <div className="field full">
@@ -696,7 +696,14 @@ export default function HomePage() {
                 </div>
                 <div className="field">
                   <label>شخصیت / تصویر مرجع (اختیاری)</label>
-                  <select value={characterKey} onChange={(event) => setCharacterKey(event.target.value)}>
+                  <select value={characterKey} onChange={(event) => {
+                    const nextKey = event.target.value;
+                    setCharacterKey(nextKey);
+                    if (nextKey) {
+                      const referenceProvider = sceneProviders.find((provider) => provider.supports_reference_image);
+                      if (referenceProvider) setSceneProviderId(referenceProvider.provider_id);
+                    }
+                  }}>
                     <option value="">بدون تصویر مرجع</option>
                     {characterImages.filter((item) => item.valid).map((item) => (
                       <option key={item.key} value={item.key}>{item.platform} · {item.name}</option>
