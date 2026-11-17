@@ -20,6 +20,7 @@ def test_settings_defaults_are_valid(monkeypatch):
     assert settings.environment == "local"
     assert settings.log_level == "INFO"
     assert settings.db_pool_size == 5
+    assert settings.scene_video_provider == "kie"
 
 
 def test_settings_rejects_non_asyncpg_database_url():
@@ -82,7 +83,7 @@ def test_kie_settings_documented_in_env_example_load_into_settings():
     from app.core.config import Settings
 
     example_path = Path(__file__).resolve().parents[1] / ".env.example"
-    settings = Settings(_env_file=example_path, _secrets_dir=None)
+    settings = Settings(_env_file=example_path, _secrets_dir=None, scene_video_provider="kie")
 
     assert settings.scene_video_kie_base_url == "https://api.kie.ai"
     # The documented default model is the single-shot image-to-video contract.

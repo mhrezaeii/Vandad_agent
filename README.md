@@ -17,7 +17,7 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 ```powershell
 # Generate unique local database, Redis and credential-encryption secrets.
 .\scripts\setup.ps1
-# Add the provider API keys to .env (see "Provider credentials" below).
+# Add the KIE API key to .env and configure GPT from the UI.
 docker compose up -d --build
 ```
 
@@ -57,7 +57,6 @@ The test suite expects an isolated test database and Redis DB 1. See `.github/wo
 
 ## Provider credentials and first-run setup
 
-- The LLM API key is entered once in UI → Settings → LLM Connection, stored encrypted in the tenant credential vault, and immediately tested against the provider `/models` endpoint. The UI creates the required platform and `llm_openai` connection for you. The content flow automatically selects the newest connected LLM connection for the company.
 - GPT is configured once in UI → Settings → LLM Connection. Use the official OpenAI API endpoint and a GPT model; the API key is stored encrypted in the tenant credential vault.
 - KIE is the only video provider in this release. Set `SCENE_VIDEO_PROVIDER=kie` and `SCENE_VIDEO_KIE_API_KEY` in `.env`. The default generation mode is `single_shot`; it requires a character reference image and sends one paid image-to-video request after scenario approval. No other video provider is registered or selectable.
 - After the API is healthy, create the first tenant once with `docker compose exec api python -m app.cli.bootstrap_company --name "Your Company" --slug "your-company"`. Copy the printed UUID into the UI Settings → Company ID (or `NEXT_PUBLIC_COMPANY_ID` before building the UI). The command is idempotent for the same slug. Do not use wildcard bootstrap authorization in production.
