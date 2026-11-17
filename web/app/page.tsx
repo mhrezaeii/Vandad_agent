@@ -18,7 +18,7 @@ type Scenario = { title?: string; hook?: string; opening_hook?: string; summary?
 type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "avatar" | "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
 type CharacterImage = { key: string; platform: string; name: string; valid: boolean; error?: string };
 type LlmConnection = { id: string; name: string; provider: string; status: string };
-type Platform = { id: string; name: string; base_url?: string; platform_type?: string };
+type Platform = { id: string; name: string; slug: string; base_url?: string; platform_type?: string };
 
 const nav: { id: Tab; label: string; icon: string }[] = [
   { id: "overview", label: "نمای کلی", icon: "◫" },
@@ -310,7 +310,7 @@ export default function HomePage() {
   const createLlmConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     await run(async () => {
-      const baseUrl = llmBaseUrl.trim().replace(/\\/$/, "");
+      const baseUrl = llmBaseUrl.trim().replace(/\/+$/, "");
       const model = llmModel.trim();
       const apiKey = llmApiKey.trim();
       if (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://")) {
