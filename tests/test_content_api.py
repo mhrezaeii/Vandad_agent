@@ -312,6 +312,14 @@ async def test_rejected_video_creates_immutable_new_revision(
     assert source.final_artifact_id is not None
     assert "Operator revision feedback" not in source.scenario["scenes"][0]["visual_prompt"]
 
+    duplicate = await client.post(
+        f"/api/v1/content/scene-projects/{source_id}/reject-video",
+        json={"feedback": "دوباره کلیک شد"},
+        headers=headers,
+    )
+    assert duplicate.status_code == 409
+    assert "newer video revision" in duplicate.json()["error"]["message"].lower()
+
 
 async def test_video_endpoints_hide_unfinished_projects(client, headers):
     await _brand_id(client, headers)
