@@ -46,7 +46,7 @@ Set-EnvLine "CREDENTIAL_MASTER_KEYS" ('{"1":"' + (New-RandomBase64 32) + '"}')
 
 Write-Host ""
 Write-Host "Created .env with unique local secrets." -ForegroundColor Green
-Write-Host "Next: add SCENE_VIDEO_KIE_API_KEY to .env, configure GPT from UI Settings, then bootstrap the first company."
+Write-Host "Next: add OPENAI_API_KEY and SCENE_VIDEO_KIE_API_KEY to backend .env, then bootstrap the first company."
 Write-Host "Do not regenerate CREDENTIAL_MASTER_KEYS after storing encrypted provider credentials."
 Write-Host ""
 Write-Host "Start infrastructure with: docker compose up -d --build"
