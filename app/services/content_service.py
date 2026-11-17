@@ -199,7 +199,6 @@ SCENE_SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
             "node_type": "content.generate_scenario",
             "name": "generate persian scenario",
             "configuration": {
-                "connection_id": "__LLM_CONNECTION__",
                 "target_duration_seconds": 30,
             },
             "input_mapping": {"project_id": "$trigger.project_id"},
@@ -734,10 +733,10 @@ class ContentService:
         project_id: uuid.UUID,
         *,
         scope: CompanyScope,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None = None,
         task_id: uuid.UUID | None = None,
     ) -> ContentProject:
-        """Start scenario generation through the existing text API connection."""
+        """Start GPT scenario generation using the backend environment key."""
         project = await self.get_project(project_id, company_id=scope.company_id)
         if project.video_mode != "scene":
             raise ConflictError("This project does not use the scene pipeline.")

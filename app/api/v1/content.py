@@ -172,7 +172,6 @@ async def monitor_brand_platforms(
         result = await monitor_service.monitor_brand(
             brand_id=brand_id,
             company_id=scope.company_id,
-            connection_id=await service.resolve_llm_connection_id(scope.company_id, payload.connection_id),
         )
     except ValueError as exc:
         raise ConflictError(str(exc)) from exc
@@ -350,9 +349,8 @@ async def generate_scene_scenario(
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
-    connection_id = await service.resolve_llm_connection_id(scope.company_id, payload.connection_id)
     project = await service.generate_scene_scenario(
-        project_id, scope=scope, connection_id=connection_id
+        project_id, scope=scope, connection_id=None
     )
     return ContentProjectRead.model_validate(project)
 

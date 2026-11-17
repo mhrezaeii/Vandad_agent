@@ -7,7 +7,7 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 - Python 3.12+, FastAPI, Pydantic v2
 - PostgreSQL 16, SQLAlchemy async, Alembic
 - Redis-backed workflow queue and worker
-- GPT scenario generation through the tenant-scoped OpenAI connection
+- GPT scenario and evidence extraction through backend-only OPENAI_API_KEY
 - KIE.ai Grok Imagine as the only active video-generation provider
 - AI-provider-native video generation, editing/composition and tenant-scoped artifact storage
 - Next.js 15 + React 19 + TypeScript frontend, Docker Compose, pytest and Ruff
@@ -17,7 +17,7 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 ```powershell
 # Generate unique local database, Redis and credential-encryption secrets.
 .\scripts\setup.ps1
-# Add the KIE API key to .env and configure GPT from the UI.
+# Add the KIE API key to .env and set OPENAI_API_KEY and configure GPT model in backend .env.
 docker compose up -d --build
 ```
 
@@ -57,7 +57,7 @@ The test suite expects an isolated test database and Redis DB 1. See `.github/wo
 
 ## Provider credentials and first-run setup
 
-- GPT is configured once in UI → Settings → LLM Connection. Use the official OpenAI API endpoint and a GPT model; the API key is stored encrypted in the tenant credential vault.
+- GPT is configured only in the backend `.env`: `OPENAI_API_KEY`, `OPENAI_BASE_URL` and `OPENAI_MODEL`. The default model is `gpt-4.1-mini`. The key is never sent to the browser. Scenario generation and platform-knowledge extraction use this same key.
 - KIE is the only video provider in this release. Set `SCENE_VIDEO_PROVIDER=kie` and `SCENE_VIDEO_KIE_API_KEY` in `.env`. The default generation mode is `single_shot`; it requires a character reference image and sends one paid image-to-video request after scenario approval. No other video provider is registered or selectable.
 - After the API is healthy, create the first tenant once with `docker compose exec api python -m app.cli.bootstrap_company --name "Your Company" --slug "your-company"`. Copy the printed UUID into the UI Settings → Company ID (or `NEXT_PUBLIC_COMPANY_ID` before building the UI). The command is idempotent for the same slug. Do not use wildcard bootstrap authorization in production.
 
@@ -73,7 +73,7 @@ The backend is organized around these boundaries:
 6. **Provider fabric** — provider registry and adapters; credentials are resolved through the secret boundary.
 7. **Video pipeline** — scenario/storyboard handoff to AI video providers, provider-side video generation/composition, quality checks and artifact delivery.
 
-The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned capability router, durable task events, Monitoring / Content scenario handlers and an approval-gated Video Production Agent. The intended product flow is platform monitoring → Company Brain → GPT-based scenario → storyboard/video prompt → AI video provider → quality control → final video delivery. The Video Production Agent must use one unified AI video production path; there is no character-generation or talking-avatar product workflow. Paid dispatch requires a company budget. Aggregate end-to-end validation remains a release gate. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
+The implementation has both a workflow execution lifecycle and an agent-task lifecycle. They are not interchangeable: workflow executions run validated workflow graphs; agent tasks represent higher-level agent requests. The feature stack includes a PostgreSQL transactional outbox, dedicated agent worker, code-owned capability router, durable task events, Monitoring / Content scenario handlers and an approval-gated Video Production Agent. The initial product flow is public platform monitoring → GPT evidence extraction → GPT scenario → human approval → KIE video generation → final video delivery. The Video Production Agent must use one unified AI video production path; there is no character-generation or talking-avatar product workflow. Paid dispatch requires a company budget. Aggregate end-to-end validation remains a release gate. See [Agent Execution Runtime](docs/AGENT_EXECUTION_RUNTIME.md) for runtime guarantees and remaining production gates.
 
 See [Architecture and implementation status](docs/ARCHITECTURE.md).
 

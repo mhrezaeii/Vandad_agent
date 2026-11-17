@@ -24,6 +24,8 @@ def test_settings_defaults_are_valid(monkeypatch):
     assert settings.db_pool_size == 5
     assert settings.scene_video_provider == "kie"
     assert settings.scene_video_generation_mode == "single_shot"
+    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.openai_model == "gpt-4.1-mini"
 
 
 def test_settings_rejects_non_asyncpg_database_url():
@@ -94,6 +96,8 @@ def test_kie_settings_documented_in_env_example_load_into_settings():
     )
 
     assert settings.scene_video_kie_base_url == "https://api.kie.ai"
+    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.openai_model == "gpt-4.1-mini"
     # The documented default model is the single-shot image-to-video contract.
     assert settings.scene_video_kie_model == "grok-imagine/image-to-video"
     assert settings.scene_video_kie_resolution == "480p"

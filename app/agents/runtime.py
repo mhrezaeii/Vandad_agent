@@ -165,12 +165,11 @@ class MonitoringAgentHandler:
 
             if capability in {"platform.knowledge.extract", "platform.monitor"}:
                 context.raise_if_cancelled()
+                raw_connection_id = payload.get("connection_id")
                 try:
-                    connection_id = uuid.UUID(str(payload["connection_id"]))
-                except (KeyError, ValueError, TypeError) as exc:
-                    raise ValueError(
-                        "Knowledge extraction requires a valid connection_id."
-                    ) from exc
+                    connection_id = uuid.UUID(str(raw_connection_id)) if raw_connection_id else None
+                except (ValueError, TypeError) as exc:
+                    raise ValueError("connection_id must be a valid UUID when supplied.") from exc
                 await context.report_progress("monitoring.knowledge.started")
                 snapshot = await PlatformKnowledgeService(
                     session,
@@ -220,7 +219,6 @@ class ContentAgentHandler:
                 raise ValueError(f"Content scenario tasks require a valid {field}.") from exc
 
         project_id = _required_uuid("project_id")
-        connection_id = _required_uuid("connection_id")
         from app.services.content_scenario_service import ContentScenarioService
 
         async with context.session_factory() as session:
@@ -232,7 +230,7 @@ class ContentAgentHandler:
             ).generate(
                 company_id=context.company_id,
                 project_id=project_id,
-                connection_id=connection_id,
+                connection_id=None,
                 timeout_seconds=max(
                     1.0, min(float(context.payload.get("timeout_seconds", 180)), 180.0)
                 ),
