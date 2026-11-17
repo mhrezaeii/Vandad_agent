@@ -14,6 +14,7 @@ def test_settings_defaults_are_valid(monkeypatch):
     monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.delenv("SCENE_VIDEO_PROVIDER", raising=False)
     monkeypatch.delenv("SCENE_VIDEO_GENERATION_MODE", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
     settings = Settings(
         database_url="postgresql+asyncpg://u:p@localhost:5432/db",
         redis_url="redis://localhost:6379/0",
@@ -88,6 +89,7 @@ def test_kie_settings_documented_in_env_example_load_into_settings():
     from app.core.config import Settings
 
     example_path = Path(__file__).resolve().parents[1] / ".env.example"
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
     settings = Settings(
         _env_file=example_path,
         _secrets_dir=None,
