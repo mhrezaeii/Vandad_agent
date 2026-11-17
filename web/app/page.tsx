@@ -879,7 +879,8 @@ export default function HomePage() {
               </form>
               <div className="list section">{platforms.map((item) => <div className="row-item" key={item.id}><div><strong>{item.name}</strong><p dir="ltr">{item.base_url || item.platform_type}</p></div><Status value="active" /></div>)}{!platforms.length && <div className="empty">هنوز منبعی ثبت نشده است.</div>}</div>
             </div>
-              <div className="notice section">
+            <div className="card section">
+              <div className="notice">
                 تنظیم GPT فقط در فایل backend <code>.env</code> انجام می‌شود:
                 <span dir="ltr">OPENAI_API_KEY</span> و <span dir="ltr">OPENAI_MODEL</span>.
                 کلید OpenAI و KIE نباید در فایل‌های <code>web/.env*</code> یا متغیرهای <code>NEXT_PUBLIC_*</code> قرار بگیرند.
