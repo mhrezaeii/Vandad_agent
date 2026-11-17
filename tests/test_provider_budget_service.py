@@ -46,6 +46,15 @@ async def test_budget_reserves_per_operation_and_settles_reported_usd_cost(db_se
     assert reservation.reserved_amount_usd == Decimal("0")
     assert reservation.usage_payload["total_tokens"] == 120
 
+    # Duplicate worker completion must not overwrite an already settled cost.
+    await service.settle(
+        reservation,
+        usage={"cost_usd": "1.99", "total_tokens": 999, "model": "duplicate-worker"},
+    )
+    assert reservation.actual_cost_usd == Decimal("1.25")
+    assert reservation.usage_payload["total_tokens"] == 120
+    assert reservation.model == "model-a"
+
 
 async def test_unknown_provider_cost_remains_reserved(db_session):
     company = Company(name="Unknown Cost", slug=f"unknown-cost-{uuid.uuid4().hex[:8]}")

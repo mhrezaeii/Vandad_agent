@@ -270,6 +270,10 @@ class ProviderBudgetService:
         )
         if record is None:
             raise ConflictError("The provider usage reservation is no longer available.")
+        # Settlement is idempotent. A second worker may reach this point after
+        # another worker has already committed the final provider cost.
+        if record.status == "settled":
+            return record
         now = datetime.now(UTC)
         if error_code:
             # A provider error may occur after the vendor accepted/billed the

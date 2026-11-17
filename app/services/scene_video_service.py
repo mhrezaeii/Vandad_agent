@@ -908,11 +908,15 @@ class SceneVideoService:
             parsed_id = uuid.UUID(str(reservation_id))
         except (TypeError, ValueError):
             return
+        # Read without locking here. ProviderBudgetService.settle owns the
+        # canonical lock order (parent AgentTask first, usage row second).
+        # Taking the usage-row lock before the parent task here would invert
+        # that order against concurrent child reservations and could deadlock.
         reservation = await self.session.scalar(
             select(ProviderUsageRecord).where(
                 ProviderUsageRecord.id == parsed_id,
                 ProviderUsageRecord.company_id == project.company_id,
-            ).with_for_update()
+            )
         )
         if reservation is None or reservation.status == "settled":
             return
