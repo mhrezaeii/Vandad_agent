@@ -52,6 +52,32 @@ authoritative usage is the task's reported `creditsConsumed` (converted to a
 USD ledger amount with `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD` — an accounting
 assumption, not a billing statement).
 
+### Budget planning at the configured credit price
+
+With the example `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD=0.005`, the image-to-video
+credit schedule implies these planning estimates:
+
+| Resolution | Credits/second | Estimated USD/second | 30 seconds | 60 seconds |
+|---|---:|---:|---:|---:|
+| 480p | 2.4 | $0.0120 | $0.36 | $0.72 |
+| 720p | 4.5 | $0.0225 | $0.675 | $1.35 |
+| 1080p | 8.0 | $0.0400 | $1.20 | $2.40 |
+
+The sub-$1 target for a 30–60 second final video is therefore compatible with
+480p generation on raw estimated credits only; 720p/1080p do not meet that
+target for a 60-second output. These estimates exclude retries and any
+supplier-side charges not represented by `creditsConsumed`. The application
+checks the estimated project cost against the company's per-operation budget
+before reservation, and settles the ledger from reported consumed credits.
+
+**Duration caveat:** the initial production default is single-shot, which
+submits exactly one image-to-video task and supports at most 30 seconds. The
+60-second figure above is a planning estimate only; it requires multi-scene
+generation and local assembly. Multi-scene mode is not part of the initial
+accepted production path until its separate end-to-end quality and audio
+acceptance is completed. Do not interpret the $0.72 estimate as evidence that
+60-second production has already passed acceptance.
+
 ## Single-shot mode (one prompt, one submission)
 
 With `generation_mode="single_shot"` (platform default via
