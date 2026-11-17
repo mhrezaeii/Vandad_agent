@@ -563,6 +563,30 @@ async def test_script_failure_syncs_project_and_retry_creates_new_execution(
     assert old_execution.idempotency_key is None
 
 
+async def test_reference_image_projects_choose_i2v_safe_generation_mode(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    short_project = await content_service.create_scene_project(
+        scope=_scope(company.id), brand_id=brand.id, topic="ویدیوی کاراکتر",
+        target_duration_seconds=30, character_key="Vandiyar/Emerald Blazer",
+    )
+    assert short_project.scene_options["generation_mode"] == "single_shot"
+    long_project = await content_service.create_scene_project(
+        scope=_scope(company.id), brand_id=brand.id, topic="کمپین بلند کاراکتر",
+        target_duration_seconds=60, character_key="Vandiyar/Emerald Blazer",
+    )
+    assert long_project.scene_options["generation_mode"] == "multi_scene"
+    assert long_project.scene_options["scene_count"] == 6
+    explicit_multi = await content_service.create_scene_project(
+        scope=_scope(company.id), brand_id=brand.id, topic="انتخاب صریح چندصحنه‌ای",
+        target_duration_seconds=30, generation_mode="multi_scene",
+        character_key="Vandiyar/Emerald Blazer",
+    )
+    assert explicit_multi.scene_options["generation_mode"] == "multi_scene"
+
+
 # ------------------------------------------------------- single-shot pipeline
 class _SingleShotProvider(MockSceneVideoProvider):
     """Mock provider with the documented image-to-video capability surface."""

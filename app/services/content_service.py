@@ -656,6 +656,10 @@ class ContentService:
         character_key = (character_key or "").strip() or None
         character_image_url = (character_image_url or "").strip() or None
         character_description = (character_description or "").strip() or None
+        if generation_mode is None and (character_key or character_image_url):
+            resolved_mode = "single_shot" if target_duration_seconds <= 30 else "multi_scene"
+            if target_duration_seconds > 30 and scene_count is None:
+                scene_count = min(6, max(2, target_duration_seconds // 6))
         if character_key and character_image_url:
             raise UnprocessableEntityError(
                 "Provide either character_key or character_image_url, not both.",
@@ -839,6 +843,7 @@ class ContentService:
             brand = await self.session.get(ContentBrand, project.brand_id)
             if brand is None or brand.company_id != scope.company_id:
                 raise NotFoundError("Brand not found for this project.")
+            has_reference_source = bool(options.get("character_key") or options.get("character_image_url"))
             required_durations = tuple(
                 float(scene["duration_seconds"])
                 for scene in scenario_scenes
@@ -861,6 +866,7 @@ class ContentService:
                     ordered_ids,
                     require_composition=requires_provider_composition,
                     require_quality_review=requires_provider_quality_review,
+                    require_reference_image=has_reference_source,
                     required_durations=required_durations,
                     required_aspect_ratio=required_aspect_ratio,
                     required_language=brand.language,

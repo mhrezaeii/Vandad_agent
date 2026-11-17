@@ -70,6 +70,7 @@ class SceneVideoProviderRegistry:
         require_composition: bool = False,
         require_lipsync: bool = False,
         require_quality_review: bool = False,
+        require_reference_image: bool = False,
         required_durations: tuple[float, ...] = (),
         required_aspect_ratio: str | None = None,
         required_language: str | None = None,
@@ -88,6 +89,8 @@ class SceneVideoProviderRegistry:
             if require_lipsync and not provider.supports_lipsync:
                 continue
             if require_quality_review and not provider.supports_quality_review:
+                continue
+            if require_reference_image and not provider.supports_reference_image:
                 continue
             if provider.min_duration_seconds is not None and any(
                 duration < provider.min_duration_seconds for duration in required_durations
@@ -125,6 +128,7 @@ class SceneVideoProviderRegistry:
         require_composition: bool = False,
         require_lipsync: bool = False,
         require_quality_review: bool = False,
+        require_reference_image: bool = False,
         required_durations: tuple[float, ...] = (),
         required_aspect_ratio: str | None = None,
         required_language: str | None = None,
@@ -137,6 +141,7 @@ class SceneVideoProviderRegistry:
                     require_composition=require_composition,
                     require_lipsync=require_lipsync,
                     require_quality_review=require_quality_review,
+                    require_reference_image=require_reference_image,
                     required_durations=required_durations,
                     required_aspect_ratio=required_aspect_ratio,
                     required_language=required_language,
