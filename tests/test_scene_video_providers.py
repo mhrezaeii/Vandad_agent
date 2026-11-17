@@ -9,6 +9,7 @@ from app.integrations.video import (
     SceneJobState,
     SceneVideoProviderRegistry,
     SceneVideoProviderRegistryError,
+    SceneVideoQuotaExhaustedError,
     SceneVideoRequest,
 )
 
@@ -42,7 +43,7 @@ async def test_mock_provider_is_idempotent_by_key():
 async def test_mock_provider_enforces_its_test_quota():
     provider = MockSceneVideoProvider(quota_limit_per_day=1)
     await provider.generate_video(request("one"))
-    with pytest.raises(Exception):
+    with pytest.raises(SceneVideoQuotaExhaustedError):
         await provider.generate_video(request("two"))
 
 

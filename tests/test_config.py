@@ -12,6 +12,7 @@ from app.integrations.video.factory import build_video_registry_from_settings
 def test_settings_defaults_are_valid(monkeypatch):
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("SCENE_VIDEO_PROVIDER", raising=False)
     settings = Settings(
         database_url="postgresql+asyncpg://u:p@localhost:5432/db",
         redis_url="redis://localhost:6379/0",
