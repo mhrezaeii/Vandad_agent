@@ -10,14 +10,14 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
-_TOKEN_RE = re.compile(r"[a-z0-9\\u0600-\\u06ff]+", re.IGNORECASE)
-_VISUAL_LINE_RE = re.compile(r"(?:^|\\s)VISUAL(?: PROMPT)?:\\s*(.+?)\\s*$", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"[a-z0-9\u0600-\u06ff]+", re.IGNORECASE)
+_VISUAL_LINE_RE = re.compile(r"(?:^|\s)VISUAL(?: PROMPT)?:\s*(.+?)\s*$", re.IGNORECASE)
 
 
 def normalize_visual_signature(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value or "").casefold()
     normalized = normalized.translate(str.maketrans({"ي": "ی", "ك": "ک"}))
-    normalized = re.sub(r"[\\u064B-\\u065F\\u0670\\u06D6-\\u06ED]", "", normalized)
+    normalized = re.sub(r"[\u064B-\u065F\u0670\u06D6-\u06ED]", "", normalized)
     return " ".join(_TOKEN_RE.findall(normalized))
 
 

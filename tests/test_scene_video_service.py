@@ -3,6 +3,7 @@ download, retry, quota exhaustion and cancellation. No real provider calls."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -1159,7 +1160,7 @@ async def test_multi_scene_local_character_image_is_uploaded_only_once(
         db_session, provider, characters_root=tmp_path / "Paltform_charactar"
     )
 
-    await service.prepare_scenes(
+    jobs = await service.prepare_scenes(
         project, _scenario(count=3, duration=5.0), provider_id="mockupload"
     )
     await db_session.commit()
@@ -1170,6 +1171,32 @@ async def test_multi_scene_local_character_image_is_uploaded_only_once(
     # A storyboard reuses one character: exactly one free upload is performed.
     assert len(provider.uploads) == 1
     assert [request.reference_image_url for request in provider.requests] == [hosted] * 3
+    original_bytes = (character_root / "Emerald Blazer.png").read_bytes()
+    expected_sha256 = hashlib.sha256(original_bytes).hexdigest()
+    assert provider.uploads[0][0] == original_bytes
+    assert project.scene_options["character_image_sha256"] == expected_sha256
+    assert all(job.submission_metadata["character_image_sha256"] == expected_sha256 for job in jobs)
+    assert all("REFERENCE IMAGE (immutable source)" in job.prompt for job in jobs)
+
+
+async def test_prepare_scenes_rejects_duplicate_visuals_inside_one_storyboard(
+    db_session, content_service, company_and_platform
+):
+    from app.core.exceptions import ConflictError
+    company, _ = company_and_platform
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    scope = CompanyScope(company_id=company.id, principal=Principal(subject="t", company_ids=frozenset({"*"})))
+    project = await content_service.create_scene_project(
+        scope=scope, brand_id=brand.id, topic="تست جلوگیری از صحنه تکراری",
+        target_duration_seconds=12, generation_mode="multi_scene",
+    )
+    await db_session.commit()
+    scenario = _scenario(count=2, duration=6.0)
+    scenes = [scenario.scenes[0], scenario.scenes[1].model_copy(update={"visual_prompt": scenario.scenes[0].visual_prompt})]
+    scenario = scenario.model_copy(update={"scenes": scenes})
+    service = _service(db_session, MockSceneVideoProvider())
+    with pytest.raises(ConflictError, match="repeats a visual"):
+        await service.prepare_scenes(project, scenario, provider_id="mock")
 
 
 async def test_single_shot_never_silently_switches_to_multi_scene_jobs(

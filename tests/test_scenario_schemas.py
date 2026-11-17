@@ -110,9 +110,9 @@ def test_normalize_rejects_scene_without_visual_prompt():
 def test_pronunciation_text_preserves_words_and_rejects_rewrites():
     request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
-    raw["scenes"][0]["pronunciation_text"] = "سَلام فارسی"
+    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارسی صَحنه 1"
     scenario = normalize_scenario(raw, request)
-    assert scenario.scenes[0].pronunciation_text == "سَلام فارسی"
+    assert scenario.scenes[0].pronunciation_text == "رِوایت فارسی صَحنه 1"
     raw["scenes"][0]["pronunciation_text"] = "درود فارسی"
     with pytest.raises(ValueError, match="exact narration words"):
         normalize_scenario(raw, request)
@@ -123,10 +123,11 @@ def test_production_fa_scenario_requires_vowelized_pronunciation_text():
     raw = _raw_scenario(count=2, duration=15.0)
     with pytest.raises(ValueError, match="pronunciation_text with diacritics"):
         normalize_scenario(raw, request)
-    raw["scenes"][0]["pronunciation_text"] = "سَلام فارسی"
-    raw["scenes"][1]["pronunciation_text"] = "دُرُست فارسی"
+    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارسی صَحنه 1"
+    raw["scenes"][1]["pronunciation_text"] = "رِوایت فارسی صَحنه 2"
+    raw["cta_pronunciation_text"] = "هَمین حالا شُروع کُنید"
     scenario = normalize_scenario(raw, request)
-    assert scenario.scenes[0].pronunciation_text == "سَلام فارسی"
+    assert scenario.scenes[0].pronunciation_text == "رِوایت فارسی صَحنه 1"
 
 
 def test_storyboard_prompt_requests_vowelized_text_and_uses_brand_lexicon():
