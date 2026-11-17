@@ -1,8 +1,9 @@
 """Server-side OpenAI Chat Completions client configured only from environment."""
 from __future__ import annotations
 
-import httpx
 from typing import Any
+
+import httpx
 
 from app.core.config import get_settings
 
