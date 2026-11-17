@@ -843,7 +843,6 @@ class ContentService:
         if self.scene_video_registry is None:
             raise ConflictError("The scene-video provider registry is unavailable; generation was not reserved.")
         estimated_project_cost_usd: Decimal | None = None
-        estimated_cost_cap_usd: Decimal | None = None
         if selected_provider and self.scene_video_registry is not None:
             scenario_scenes = (project.scenario or {}).get("scenes", [])
             # Scene clips always come from the selected provider; the final
@@ -889,11 +888,13 @@ class ContentService:
                 and isinstance(scene.get("duration_seconds"), (int, float))
                 and not isinstance(scene.get("duration_seconds"), bool)
             )
+            total_duration = sum(required_durations) or float(
+                (project.scenario or {}).get("target_duration_seconds") or 0
+            )
             if single_shot_mode:
                 # Single-shot submits ONE whole-video request. The registry's
-                # per-duration capability check is bypassed here so the
-                # explicit single-shot bounds validation below can fail with
-                # an actionable message instead of a generic resolver error.
+                # per-scene capability check is bypassed; validate the complete
+                # duration against the selected model below.
                 required_durations = ()
             divisor = gcd(int(brand.video_width), int(brand.video_height))
             required_aspect_ratio = (
@@ -915,43 +916,33 @@ class ContentService:
                     details=[{"field": "provider_id", "value": selected_provider}],
                 ) from exc
             selected_provider = selected.provider_id
-            if selected_provider == "wavespeed":
-                estimate_cost = getattr(selected, "estimate_cost_usd", None)
-                if callable(estimate_cost):
-                    estimated_project_cost_usd = sum(
-                        (Decimal(str(estimate_cost(duration))) for duration in required_durations),
-                        Decimal("0"),
+            estimate_cost = getattr(selected, "estimate_cost_usd", None)
+            estimate_durations = (total_duration,) if single_shot_mode else required_durations
+            if callable(estimate_cost) and estimate_durations:
+                estimated_project_cost_usd = sum(
+                    (Decimal(str(estimate_cost(duration))) for duration in estimate_durations),
+                    Decimal("0"),
+                )
+                company_budget = await self.session.scalar(
+                    select(CompanyProviderBudget).where(
+                        CompanyProviderBudget.company_id == scope.company_id,
+                        CompanyProviderBudget.provider_id == selected_provider,
                     )
-                    estimated_cost_cap_usd = Decimal(str(
-                        get_settings().scene_video_wavespeed_max_project_cost_usd
-                    ))
-                    if estimated_project_cost_usd > estimated_cost_cap_usd:
-                        raise UnprocessableEntityError(
-                            "Estimated WaveSpeed project cost exceeds the configured per-project cap.",
-                            details=[
-                                {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
-                                {"field": "max_project_cost_usd", "value": str(estimated_cost_cap_usd)},
-                            ],
-                        )
-                    company_budget = await self.session.scalar(
-                        select(CompanyProviderBudget).where(
-                            CompanyProviderBudget.company_id == scope.company_id,
-                            CompanyProviderBudget.provider_id == selected_provider,
-                        )
+                )
+                if (
+                    company_budget is not None
+                    and estimated_project_cost_usd > Decimal(str(company_budget.per_operation_limit_usd))
+                ):
+                    raise ConflictError(
+                        "Estimated video cost exceeds the company's per-operation budget.",
+                        details=[
+                            {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
+                            {
+                                "field": "per_operation_limit_usd",
+                                "value": str(company_budget.per_operation_limit_usd),
+                            },
+                        ],
                     )
-                    if company_budget is not None and estimated_project_cost_usd > Decimal(
-                        str(company_budget.per_operation_limit_usd)
-                    ):
-                        raise ConflictError(
-                            "Estimated WaveSpeed project cost exceeds the company's per-operation budget.",
-                            details=[
-                                {"field": "estimated_cost_usd", "value": str(estimated_project_cost_usd)},
-                                {
-                                    "field": "per_operation_limit_usd",
-                                    "value": str(company_budget.per_operation_limit_usd),
-                                },
-                            ],
-                        )
             route_order = [selected_provider] + [
                 candidate for candidate in ordered_ids if candidate != selected_provider
             ]
@@ -959,9 +950,6 @@ class ContentService:
             # one reference image. Validate duration bounds and the character
             # image source BEFORE reserving budget or spending any credit.
             if (options.get("generation_mode") or "").strip().lower() == "single_shot":
-                total_duration = sum(
-                    (scene_duration for scene_duration in required_durations), 0.0
-                ) or float((project.scenario or {}).get("target_duration_seconds") or 0)
                 min_duration = selected.min_duration_seconds
                 max_duration = selected.max_duration_seconds
                 if min_duration is not None and total_duration < min_duration:
@@ -1021,10 +1009,11 @@ class ContentService:
                 "task_id": str(task_id) if task_id else None,
                 "provider_route_order": list(options.get("provider_route_order", [selected_provider])),
                 "status": "reserved",
-                **({
-                    "estimated_project_cost_usd": str(estimated_project_cost_usd),
-                    "max_project_cost_usd": str(estimated_cost_cap_usd),
-                } if estimated_project_cost_usd is not None and estimated_cost_cap_usd is not None else {}),
+                **(
+                    {"estimated_project_cost_usd": str(estimated_project_cost_usd)}
+                    if estimated_project_cost_usd is not None
+                    else {}
+                ),
             }
             await self.session.commit()
         else:
