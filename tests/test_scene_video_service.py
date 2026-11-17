@@ -763,7 +763,7 @@ async def test_recent_kie_submit_fence_skips_second_worker(
     project = await _project(db_session, content_service, company.id)
     provider = MockSceneVideoProvider()
     provider.provider_id = "kie"
-    service = _service(db_session, provider)
+    service = _service(db_session, provider, storage=object())
     await service.prepare_scenes(project, _single_scene_scenario(), provider_id="kie")
     job = (await _jobs(db_session, project.id))[0]
     job.attempts = 1
@@ -786,7 +786,7 @@ async def test_stale_kie_submit_fence_becomes_unknown_without_resubmit(
     project = await _project(db_session, content_service, company.id)
     provider = MockSceneVideoProvider()
     provider.provider_id = "kie"
-    service = _service(db_session, provider)
+    service = _service(db_session, provider, storage=object())
     await service.prepare_scenes(project, _single_scene_scenario(), provider_id="kie")
     job = (await _jobs(db_session, project.id))[0]
     job.attempts = 1
