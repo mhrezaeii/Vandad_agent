@@ -105,7 +105,7 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\n"
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
-        f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\\n\\n"
+        f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
         "ساختار JSON الزامی:\n"
         "{\n"
         '  "title": "عنوان فارسی",\n'
