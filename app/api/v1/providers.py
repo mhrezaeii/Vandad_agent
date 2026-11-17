@@ -158,9 +158,11 @@ async def list_scene_video_providers(
     registry = getattr(request.app.state, "scene_video_registry", None)
     if registry is None:
         return []
+    default_provider_id = request.app.state.settings.scene_video_provider
     return [
         SceneVideoProviderRead(
             provider_id=provider.provider_id,
+            is_default=provider.provider_id == default_provider_id,
             display_name=provider.display_name,
             model_id=provider.model_id,
             requires_network=provider.requires_network,

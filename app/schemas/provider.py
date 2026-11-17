@@ -89,6 +89,7 @@ class SceneVideoProviderHealthRead(BaseModel):
 
 class SceneVideoProviderRead(BaseModel):
     provider_id: str
+    is_default: bool = False
     display_name: str
     model_id: str | None = None
     requires_network: bool

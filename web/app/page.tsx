@@ -9,7 +9,7 @@ type CompanyAgent = { agent_key: string; status: string; definition: AgentDefini
 type Task = { id: string; agent_key: string; capability: string; title: string; status: string; created_at: string; attempt_count: number; max_attempts: number; error_message?: string | null };
 type Provider = { provider_id: string; display_name: string; description: string; capabilities: string[] };
 type ProviderHealth = { provider_id: string; calls_30d: number; errors_30d: number; pending_30d: number; success_rate: number | null; average_latency_ms: number | null; last_call_at: string };
-type SceneProvider = { provider_id: string; display_name: string; requires_network: boolean; supports_lipsync: boolean; supports_reference_image: boolean; requires_reference_image?: boolean; supports_cancellation: boolean; daily_quota: number | null };
+type SceneProvider = { provider_id: string; display_name: string; is_default?: boolean; requires_network: boolean; supports_lipsync: boolean; supports_reference_image: boolean; requires_reference_image?: boolean; supports_cancellation: boolean; daily_quota: number | null };
 type Budget = { provider_id: string; monthly_limit_usd: string; per_operation_limit_usd: string; enabled: boolean };
 type EventItem = { id: string; sequence: number; event_type: string; payload: Record<string, unknown>; created_at: string };
 type Brand = { id: string; name: string; display_name?: string; industry?: string; status: string };
@@ -78,7 +78,7 @@ export default function HomePage() {
   const [contentBrandId, setContentBrandId] = useState("");
   const [contentTopic, setContentTopic] = useState("");
   const [videoConnectionId, setVideoConnectionId] = useState("");
-  const [sceneProviderId, setSceneProviderId] = useState("apimaster");
+  const [sceneProviderId, setSceneProviderId] = useState("");
   const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
   const [characterKey, setCharacterKey] = useState("");
   const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([]);
@@ -147,6 +147,15 @@ export default function HomePage() {
     return () => { active = false; };
   }, [contentBrandId]);
 
+  useEffect(() => {
+    if (!sceneProviders.length) return;
+    if (sceneProviderId && sceneProviders.some((provider) => provider.provider_id === sceneProviderId)) return;
+    const preferred = sceneProviders.find((provider) => provider.is_default)
+      ?? sceneProviders.find((provider) => provider.provider_id === "mock")
+      ?? sceneProviders[0];
+    setSceneProviderId(preferred.provider_id);
+  }, [sceneProviders, sceneProviderId]);
+
   const selectedDefinition = useMemo(
     () => catalog.find((agent) => agent.key === taskAgent),
     [catalog, taskAgent],
@@ -165,7 +174,7 @@ export default function HomePage() {
       "platform.change.detect": { platform_id: "", max_pages: 10 },
       "platform.knowledge.extract": { platform_id: "", connection_id: "", max_documents: 20 },
       "content.scenario.generate": { project_id: "", connection_id: "", timeout_seconds: 180 },
-      "video.scene.generate": { project_id: "", provider_id: "apimaster" },
+      "video.scene.generate": { project_id: "", provider_id: "" },
       "video.avatar.generate": { project_id: "", connection_id: "" },
     };
     const template = templates[taskCapability];

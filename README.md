@@ -15,15 +15,16 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 ## Start locally
 
 ```powershell
-Copy-Item .env.example .env
-# Edit .env and replace every required change-me value.
+# Generate unique local database, Redis, n8n and credential-encryption secrets.
+.\scripts\setup.ps1
+# Add the provider API keys to .env (see "Provider credentials" below).
 docker compose up -d --build
 ```
 
 - API health: `http://localhost:8000/api/v1/health`
 - OpenAPI: `http://localhost:8000/docs`
 - PostgreSQL and Redis are required for normal API/worker operation.
-- The API and worker run Alembic migrations through the container startup configuration. Start the optional UI profile with `docker compose --profile ui up -d --build web`; the UI is available at `http://localhost:3000`.
+- The API container applies Alembic migrations before serving. Start the UI with `docker compose --profile ui up -d --build web`; it is available at `http://localhost:3000`. n8n is optional and is not started by default; enable it explicitly with `docker compose --profile automation up -d n8n`.
 
 For host frontend development:
 
@@ -53,6 +54,13 @@ docker compose up -d postgres redis
 ```
 
 The test suite expects an isolated test database and Redis DB 1. See `.github/workflows/backend-tests.yml` for the CI environment.
+
+## Provider credentials and first-run setup
+
+- The LLM API key is stored encrypted in the tenant connection vault, not in a frontend environment variable. Create a platform, then create an `llm_openai` connection with `configuration.url` and `configuration.model`, and an encrypted `api_key` credential via `POST /platforms` and `POST /connections`. Activate/test it with `POST /connections/{id}/activate`. The content flow automatically selects the newest connected LLM connection for the company.
+- Select one scene-video provider in `.env` using `SCENE_VIDEO_PROVIDER` and provide its matching key: `SCENE_VIDEO_WAVESPEED_API_KEY`, `SCENE_VIDEO_KIE_API_KEY`, `SCENE_VIDEO_APIMASTER_API_KEY`, `SCENE_VIDEO_8SCALE_API_KEY`, or the generic HTTP contract. The Content Studio now selects the backend-configured default provider automatically.
+- `SCENE_VIDEO_PROVIDER=mock` is local/test-only. It is not a real AI video service and production explicitly rejects it.
+- The first tenant/company must exist before creating platforms, connections or brands. The UI sends its ID in `X-Company-ID`; set `NEXT_PUBLIC_COMPANY_ID` or enter it under Settings. Do not use wildcard bootstrap authorization in production.
 
 ## Product architecture
 
