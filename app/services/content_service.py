@@ -944,7 +944,7 @@ class ContentService:
                     (options.get("character_image_url") or "").strip()
                     or (options.get("character_key") or "").strip()
                 )
-                if selected.supports_reference_image and not has_reference_source:
+                if selected.requires_reference_image and not has_reference_source:
                     raise UnprocessableEntityError(
                         "Single-shot image-to-video generation requires a character "
                         "reference image. Create the project with a 'character_key' "

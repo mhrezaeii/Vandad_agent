@@ -193,6 +193,10 @@ class KIESceneVideoProvider(SceneVideoProvider):
     def is_image_to_video(self) -> bool:
         return self.config.model == I2V_MODEL_ID
 
+    @property
+    def requires_reference_image(self) -> bool:
+        return bool(self._rules["requires_reference_image"])
+
     async def check_health(self) -> SceneVideoHealthResult:
         started = time.perf_counter()
         try:

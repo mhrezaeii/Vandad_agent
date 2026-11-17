@@ -530,6 +530,11 @@ class SceneVideoService:
                 "generation is blocked instead of silently switching to text-to-video.",
                 code="provider_reference_image_unsupported",
             )
+        if provider.requires_reference_image and not reference_requested:
+            raise SceneVideoPermanentError(
+                f"Provider {provider.provider_id} requires a character reference image.",
+                code="provider_reference_image_required",
+            )
         if provider.provider_id == "kie" and self.storage is None:
             raise ConflictError(
                 "Artifact storage must be configured before paid KIE generation.",

@@ -181,6 +181,7 @@ class SceneVideoProvider(ABC):
     supports_native_audio: bool = False
     requires_network: bool = False
     supports_reference_image: bool = False
+    requires_reference_image: bool = False
     supports_composition: bool = False
     supports_quality_review: bool = False
     supports_health_check: bool = False

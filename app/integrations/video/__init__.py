@@ -92,6 +92,8 @@ class SceneVideoProviderRegistry:
                 continue
             if require_reference_image and not provider.supports_reference_image:
                 continue
+            if provider.requires_reference_image and not require_reference_image:
+                continue
             if provider.min_duration_seconds is not None and any(
                 duration < provider.min_duration_seconds for duration in required_durations
             ):
