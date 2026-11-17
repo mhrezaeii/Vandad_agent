@@ -35,7 +35,10 @@ function statusLabel(status: string) {
     pending: "در انتظار", awaiting_approval: "نیازمند تأیید",
     failed: "ناموفق", cancelled: "لغوشده", active: "فعال",
     inactive: "غیرفعال", settled: "تسویه‌شده", reserved: "رزروشده",
-    unknown: "هزینه نامشخص",\n    script_generating: "در حال تولید سناریو", script_ready: "در انتظار تأیید سناریو",\n    video_generation_pending: "در صف تولید ویدیو", video_generating: "در حال تولید ویدیو",\n    video_generated: "ویدیو تولید شد", assembling: "در حال مونتاژ",
+    unknown: "هزینه نامشخص",
+    script_generating: "در حال تولید سناریو", script_ready: "در انتظار تأیید سناریو",
+    video_generation_pending: "در صف تولید ویدیو", video_generating: "در حال تولید ویدیو",
+    video_generated: "ویدیو تولید شد", assembling: "در حال مونتاژ",
   };
   return labels[status] || status;
 }
@@ -113,7 +116,8 @@ export default function HomePage() {
     if (usageResult.status === "fulfilled") setUsage(usageResult.value || []);
     if (brandsResult.status === "fulfilled") setBrands(brandsResult.value || []);
     if (projectsResult.status === "fulfilled") setProjects(projectsResult.value || []);
-    if (platformsResult.status === "fulfilled") setPlatforms(platformsResult.value.items || []);\n    if (characterImagesResult.status === "fulfilled") setCharacterImages(characterImagesResult.value || []);
+    if (platformsResult.status === "fulfilled") setPlatforms(platformsResult.value.items || []);
+    if (characterImagesResult.status === "fulfilled") setCharacterImages(characterImagesResult.value || []);
     const failures = results.filter((item) => item.status === "rejected");
     if (failures.length === results.length) setError("ارتباط با API برقرار نشد. آدرس Backend و دسترسی شرکت را بررسی کنید.");
     else if (failures.length) setNotice("بخشی از اطلاعات در دسترس نبود؛ سایر بخش‌ها بارگذاری شدند.");
