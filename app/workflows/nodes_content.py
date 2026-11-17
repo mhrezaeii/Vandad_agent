@@ -240,8 +240,6 @@ def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
             "Artifact storage is not configured.", code="storage_unavailable"
         )
     settings = get_settings()
-    from app.integrations.tts import tts_settings_from  # noqa: PLC0415
-
     return SceneVideoService(
         engine.session,
         engine.scene_video_registry,
@@ -251,7 +249,6 @@ def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
         max_size_bytes=settings.artifact_max_size_bytes,
         screenshots_root=settings.platform_screenshots_root,
         characters_root=settings.platform_characters_root,
-        tts_settings=tts_settings_from(settings),
     )
 
 
@@ -274,13 +271,6 @@ async def _generate_scenario(
     project_id = _project_id(params, node)
     project = await _require_project(engine, execution, project_id)
     brand = await _brand_for(engine, execution, project)
-
-    connection_id = node.configuration.get("connection_id") or params.get("connection_id")
-    if not connection_id:
-        raise ProviderPermanentError(
-            "An LLM connection_id is required to generate the scenario.",
-            code="invalid_configuration",
-        )
 
     cta_config = brand.cta_config or {}
     options = project.scene_options or {}
@@ -382,7 +372,7 @@ async def _generate_scenario(
     try:
         scenario, metadata = await service.generate(
             company_id=execution.company_id,
-            connection_id=uuid.UUID(str(connection_id)),
+            connection_id=None,
             request=request,
             timeout_seconds=min(timeout_seconds, 180.0),
             task_id=task_id,

@@ -299,7 +299,7 @@ async def test_single_scene_project_allows_generation_only_provider(
     company, _platform = company_and_platform
 
     class GenerationOnlyProvider(MockSceneVideoProvider):
-        provider_id = "wavespeed"
+        provider_id = "test-video"
         supports_composition = False
         supports_quality_review = False
 
@@ -315,7 +315,7 @@ async def test_single_scene_project_allows_generation_only_provider(
     db_session.add(
         CompanyProviderBudget(
             company_id=company.id,
-            provider_id="wavespeed",
+            provider_id="test-video",
             monthly_limit_usd=Decimal("10.00"),
             per_operation_limit_usd=Decimal("2.00"),
             enabled=True,
@@ -356,12 +356,12 @@ async def test_single_scene_project_allows_generation_only_provider(
     )
 
     updated = await content_service.generate_scene_video(
-        project.id, scope=_scope(company.id), provider_id="wavespeed"
+        project.id, scope=_scope(company.id), provider_id="test-video"
     )
 
-    assert updated.scene_video_provider == "wavespeed"
+    assert updated.scene_video_provider == "test-video"
     assert updated.scene_options["production_mode"] == "single_scene_passthrough"
-    assert updated.cost_metadata["provider_id"] == "wavespeed"
+    assert updated.cost_metadata["provider_id"] == "test-video"
     assert updated.cost_metadata["estimated_project_cost_usd"] == "0.100000"
 
 
@@ -376,7 +376,7 @@ async def test_multi_scene_project_accepts_generation_only_provider(
     company, _platform = company_and_platform
 
     class GenerationOnlyProvider(MockSceneVideoProvider):
-        provider_id = "wavespeed"
+        provider_id = "test-video"
         supports_composition = False
         supports_quality_review = False
 
@@ -386,7 +386,7 @@ async def test_multi_scene_project_accepts_generation_only_provider(
     db_session.add(
         CompanyProviderBudget(
             company_id=company.id,
-            provider_id="wavespeed",
+            provider_id="test-video",
             monthly_limit_usd=Decimal("10.00"),
             per_operation_limit_usd=Decimal("1.00"),
             enabled=True,
@@ -406,9 +406,9 @@ async def test_multi_scene_project_accepts_generation_only_provider(
     await db_session.commit()
 
     project = await content_service.generate_scene_video(
-        project.id, scope=_scope(company.id), provider_id="wavespeed"
+        project.id, scope=_scope(company.id), provider_id="test-video"
     )
-    assert project.scene_video_provider == "wavespeed"
+    assert project.scene_video_provider == "test-video"
     assert project.scene_options["production_mode"] == "local_composition"
 
 
@@ -439,55 +439,6 @@ def test_ass_subtitle_contains_persian_and_rtl_style():
     # Alignment=2 (bottom-centre) present in the style line
     assert ",2,60,60," in ass
 
-
-
-async def test_wavespeed_estimated_project_cap_blocks_before_reservation(
-    db_session, content_service, company_and_platform, monkeypatch
-):
-    company, _platform = company_and_platform
-
-    class WaveSpeedEstimateProvider(MockSceneVideoProvider):
-        provider_id = "wavespeed"
-        model_id = "wavespeed-ai/ltx-2.3/text-to-video"
-
-        def estimate_cost_usd(self, duration_seconds):
-            return f"{0.10 * float(duration_seconds) / 5:.6f}"
-
-    provider = WaveSpeedEstimateProvider()
-    registry = SceneVideoProviderRegistry()
-    registry.register(provider)
-    content_service.scene_video_registry = registry
-    monkeypatch.setattr(
-        "app.services.content_service.get_settings",
-        lambda: SimpleNamespace(
-            is_production=False,
-            scene_video_provider="mock",
-            scene_video_wavespeed_max_project_cost_usd=0.10,
-        ),
-    )
-
-    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
-    project = await content_service.create_project(
-        scope=_scope(company.id),
-        brand_id=brand.id,
-        topic="WaveSpeed project cost ceiling",
-    )
-    project.video_mode = "scene"
-    project.status = ProjectStatus.APPROVED.value
-    project.scenario = {"scenes": [{"duration_seconds": 10.0}]}
-    await db_session.commit()
-
-    with pytest.raises(UnprocessableEntityError, match="exceeds the configured per-project cap"):
-        await content_service.generate_scene_video(
-            project.id, scope=_scope(company.id), provider_id="wavespeed"
-        )
-
-    reservation = await db_session.scalar(
-        select(ProviderUsageRecord).where(
-            ProviderUsageRecord.idempotency_key == f"scene-video:{project.id}"
-        )
-    )
-    assert reservation is None
 
 
 async def test_script_failure_syncs_project_and_retry_creates_new_execution(

@@ -34,8 +34,6 @@ services:
     volumes:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
-      - ./data/flow:/app/data/flow
-      - ./data/dreamina:/app/data/dreamina
     networks:
       - backend
     depends_on:
@@ -94,8 +92,6 @@ services:
     volumes:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
-      - ./data/flow:/app/data/flow
-      - ./data/dreamina:/app/data/dreamina
     networks:
       - backend
     depends_on:
@@ -133,8 +129,6 @@ services:
     volumes:
       - artifact_data:/app/data/artifacts
       - ./assets:/app/assets:ro
-      - ./data/flow:/app/data/flow
-      - ./data/dreamina:/app/data/dreamina
     networks:
       - backend
     depends_on:
@@ -192,6 +186,7 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+
   n8n:
     profiles: ["automation"]
     image: n8nio/n8n@sha256:8602f5dfacbe2c931eeafd010de0e68182310e9f309921e780ab69182e92b3ae
@@ -217,7 +212,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
     networks:
       - backend
     depends_on:

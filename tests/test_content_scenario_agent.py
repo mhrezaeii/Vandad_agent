@@ -116,7 +116,7 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
             captured["calls"] += 1
             captured["request"] = request
             assert company_id == company.id
-            assert connection_id == connection.id
+            assert connection_id is None
             return scenario, {
                 "model": "test-model",
                 "usage": {"prompt_tokens": 100, "completion_tokens": 80, "total_tokens": 180},
@@ -131,7 +131,6 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
         worker_id="content-test-worker",
         payload={
             "project_id": str(project.id),
-            "connection_id": str(connection.id),
         },
         session_factory=session_factory,
         provider_registry=object(),

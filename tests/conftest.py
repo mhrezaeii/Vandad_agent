@@ -33,6 +33,9 @@ os.environ["REDIS_URL"] = TEST_REDIS_URL
 os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("LOG_FORMAT", "console")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+os.environ.setdefault("SCENE_VIDEO_PROVIDER", "mock")
+# Unit tests cover the legacy multi-scene orchestration unless a test opts in to single-shot.
+os.environ["SCENE_VIDEO_GENERATION_MODE"] = "multi_scene"
 # Deterministic 32-byte master key for tests only (never used outside pytest).
 import base64  # noqa: E402
 import json  # noqa: E402

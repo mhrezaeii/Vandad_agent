@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,75 +82,37 @@ class Settings(BaseSettings):
     # Hard cap per artifact; streaming writes abort beyond it.
     artifact_max_size_bytes: int = Field(default=2 * 1024**3, ge=1)
 
-    # --- Scene-based (non-avatar) video pipeline ------------------------------
-    # ``mock`` produces synthetic local clips and never calls a network or a
-    # paid provider. Set to ``generic_http`` only after an authorised provider
-    # contract is configured below.
-    scene_video_provider: str = "mock"
+    # --- GPT (scenario + evidence extraction) ----------------------------------
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-6-luna"
+    openai_reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] = "none"
+    openai_timeout_seconds: float = Field(default=180.0, gt=0, le=600)
+    openai_max_completion_tokens: int = Field(default=5000, ge=256, le=32768)
+
+    # --- Current content production providers: GPT + KIE only ------------------
+    # GPT credentials/model are configured only through backend environment
+    # variables (OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL). Never expose
+    # provider secrets through the browser. KIE is the sole video provider.
+    scene_video_provider: str = "kie"
     scene_video_daily_quota: int | None = Field(default=None, ge=0)
     scene_video_max_scene_attempts: int = Field(default=3, ge=1, le=10)
-    # Audio-capable WaveSpeed models (Seedance 2.5) generate native sound.
-    scene_video_wavespeed_generate_audio: bool = False
-    scene_video_wavespeed_min_clip_duration_seconds: int = Field(default=5, ge=1)
-    scene_video_wavespeed_max_clip_duration_seconds: int = Field(default=20, le=60)
-    # Per-second USD price for models that bill per output second.
-    scene_video_wavespeed_price_per_second_usd: float | None = None
-    # 8Scale Wan 2.2 14B (cheapest verified host: ~$0.015/5s 480p, silent).
-    scene_video_8scale_api_key: str = ""
-    scene_video_8scale_base_url: str = "https://8scale.run"
-    scene_video_8scale_resolution: str = "480p"
-    scene_video_8scale_aspect_ratio: str = "9:16"
-    scene_video_8scale_price_per_second_usd: float = Field(default=0.003, ge=0)
-    scene_video_8scale_download_allowed_hosts: str = "static.8scale.com"
-    # Real platform screenshots overlaid during local assembly.
+
+    # Platform evidence and optional operator-provided assets.
     platform_screenshots_root: str = "assets/platform_screenshots"
-    # Operator-provided clips (Google Flow free quota, Hoosha, ...) per project:
-    # assets/clips/<project_id>/01.mp4, 02.mp4, ...
     platform_clips_root: str = "assets/clips"
     end_card_seconds: float = Field(default=3.0, ge=1.0, le=10.0)
-    # Single-account Google Flow/AI Studio free-quota worker. The session is
-    # a company-owned account; multi-account rotation is intentionally not
-    # supported by design.
-    flow_enabled: bool = False
-    flow_daily_limit: int = Field(default=3, ge=1, le=50)
-    flow_storage_state: str = "data/flow/storage_state.json"
-    flow_profile_dir: str = "data/flow/profile"
-    flow_chromium_path: str = "/usr/bin/chromium"
-    # Non-Iranian exit for AI Studio (geo-blocked): route the worker browser
-    # through the operator's local VPN relay (see docs / portproxy).
-    flow_proxy: str = ""
-    # Dreamina (CapCut/ByteDance) free-quota worker: Seedance models, Google
-    # OAuth session, ~120 credits/day. Same single-account policy as Flow.
-    dreamina_enabled: bool = False
-    dreamina_daily_limit: int = Field(default=6, ge=1, le=50)
-    dreamina_storage_state: str = "data/dreamina/storage_state.json"
-    dreamina_profile_dir: str = "data/dreamina/profile"
-    dreamina_headless: bool = True
-    dreamina_timeout_seconds: int = Field(default=1200, ge=60, le=3600)
-    dreamina_proxy: str = ""
-    flow_headless: bool = True
-    flow_timeout_seconds: int = Field(default=900, ge=60, le=3600)
-    # Persian narration TTS: "" disables, "edge_tts" (free, dev) or
-    # "azure_speech" (official; free tier 500k chars/month).
-    tts_provider: str = ""
-    tts_voice: str = "fa-IR-DilaraNeural"
-    tts_rate_percent: str = "+0%"
-    tts_azure_speech_key: str = ""
-    tts_azure_speech_region: str = ""
-    # Scheduled platform monitoring observes configured platforms (crawl +
-    # knowledge refresh) but never generates content; scenario/video
-    # production stays an explicit, billable, operator-initiated request.
     platform_monitor_enabled: bool = True
     platform_monitor_interval_seconds: int = Field(default=21600, ge=60)
+
+    # Shared KIE task polling and output settings.
     scene_video_poll_interval_seconds: float = Field(default=3.0, gt=0, le=3600)
     scene_video_max_poll_attempts: int = Field(default=300, ge=1, le=600)
     scene_video_output_width: int = Field(default=1080, ge=1, le=8192)
     scene_video_output_height: int = Field(default=1920, ge=1, le=8192)
 
-    # KIE.ai Grok Imagine. "grok-imagine/image-to-video" (default) generates
-    # one continuous Persian video from one reference image in a single paid
-    # submission (6..30s); "grok-imagine-video-1-5-preview" remains available
-    # as the per-scene text-to-video alternative (1..15s).
+    # KIE.ai Grok Imagine image-to-video. The single-shot model uses one
+    # approved scenario prompt and one character reference image per request.
     scene_video_kie_api_key: str | None = None
     scene_video_kie_base_url: str = "https://api.kie.ai"
     scene_video_kie_model: Literal[
@@ -162,69 +124,13 @@ class Settings(BaseSettings):
     scene_video_kie_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     scene_video_kie_price_per_credit_usd: float = Field(default=0.005, gt=0, le=1)
     scene_video_kie_download_allowed_hosts: str = ""
-    # Optional override for the reference-image upload host (defaults to the
-    # jobs base URL). Uploaded files are temporary provider-side storage.
     scene_video_kie_upload_base_url: str | None = None
     scene_video_kie_upload_path: str = "vandad/character-references"
 
-    # Single-shot generation: combine the complete approved scenario into ONE
-    # provider prompt and ONE paid submission (image-to-video path). The
-    # multi-scene storyboard pipeline stays the default for compatibility.
-    scene_video_generation_mode: Literal["multi_scene", "single_shot"] = "multi_scene"
-    # Operator-managed character reference images: <root>/<Platform>/<name>.png
+    # Initial release uses KIE's single image-to-video request, not per-scene
+    # paid jobs. One reference image is required for this model.
+    scene_video_generation_mode: Literal["multi_scene", "single_shot"] = "single_shot"
     platform_characters_root: str = "assets/Paltform_charactar"
-
-    # APIMaster is opt-in; no paid request is made unless selected explicitly.
-    scene_video_apimaster_api_key: str | None = None
-    scene_video_apimaster_base_url: str = "https://apimaster.ai"
-    scene_video_apimaster_model: str = "wan3.0-video-prime"
-    scene_video_apimaster_route: Literal["gmi", "native"] = "gmi"
-    scene_video_apimaster_resolution: Literal["480P", "720P", "1080P"] = "720P"
-    scene_video_apimaster_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
-    scene_video_apimaster_download_allowed_hosts: str = ""
-
-    # WaveSpeed LTX-2.3 is opt-in. Its POST submit is never retried after an
-    # ambiguous transport/server failure because a prediction may be billable.
-    scene_video_wavespeed_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("SCENE_VIDEO_WAVESPEED_API_KEY", "WAVESPEED_API_KEY"),
-    )
-    scene_video_wavespeed_base_url: str = "https://api.wavespeed.ai/api/v3"
-    scene_video_wavespeed_model: str = "wavespeed-ai/ltx-2.3/text-to-video"
-    scene_video_wavespeed_resolution: Literal["480p", "720p", "1080p"] = "480p"
-    scene_video_wavespeed_aspect_ratio: Literal["16:9", "9:16"] = "9:16"
-    scene_video_wavespeed_duration_seconds: int | None = Field(default=None, ge=5, le=20)
-    scene_video_wavespeed_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
-    scene_video_wavespeed_max_project_cost_usd: float = Field(default=0.10, gt=0, le=100)
-    scene_video_wavespeed_download_allowed_hosts: str = ""
-
-    # Optional generic HTTP contract for a provider the operator is authorised
-    # to use. Disabled unless ``SCENE_VIDEO_HTTP_BASE_URL`` is set. The key is
-    # never logged; it is only sent as the configured auth header.
-    scene_video_http_base_url: str | None = None
-    scene_video_http_generate_path: str = "/v1/videos"
-    scene_video_http_status_path: str = "/v1/videos/{job_id}"
-    scene_video_http_retrieve_path: str | None = None
-    scene_video_http_compose_path: str | None = None
-    scene_video_http_quality_path: str | None = None
-    scene_video_http_health_path: str | None = None
-    scene_video_http_api_key: str | None = None
-    scene_video_http_auth_header: str = "Authorization"
-    scene_video_http_auth_scheme: str = "Bearer"
-    # Comma-separated exact HTTPS hostnames allowed for provider media downloads.
-    scene_video_http_download_allowed_hosts: str = ""
-    scene_video_http_supported_modalities: str = "video"
-    scene_video_http_supported_languages: str = ""
-    scene_video_http_supported_aspect_ratios: str = ""
-    scene_video_http_supported_resolutions: str = ""
-    scene_video_http_supports_seed: bool = False
-    scene_video_http_max_prompt_characters: int | None = Field(default=None, gt=0)
-    scene_video_http_min_duration_seconds: float | None = Field(default=None, gt=0)
-    scene_video_http_max_duration_seconds: float | None = Field(default=None, gt=0)
-
-    # --- n8n integration (configuration prepared for a later phase) ---
-    n8n_base_url: str | None = None
-    n8n_api_key: str | None = None
 
     @field_validator("log_level")
     @classmethod

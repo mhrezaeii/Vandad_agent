@@ -172,7 +172,6 @@ async def monitor_brand_platforms(
         result = await monitor_service.monitor_brand(
             brand_id=brand_id,
             company_id=scope.company_id,
-            connection_id=await service.resolve_llm_connection_id(scope.company_id, payload.connection_id),
         )
     except ValueError as exc:
         raise ConflictError(str(exc)) from exc
@@ -350,9 +349,8 @@ async def generate_scene_scenario(
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
-    connection_id = await service.resolve_llm_connection_id(scope.company_id, payload.connection_id)
     project = await service.generate_scene_scenario(
-        project_id, scope=scope, connection_id=connection_id
+        project_id, scope=scope, connection_id=None
     )
     return ContentProjectRead.model_validate(project)
 
@@ -506,11 +504,10 @@ async def assemble_external_clips(
     """Assemble the final video from operator-provided clips (no paid provider).
 
     Clips live at ``assets/clips/<project_id>/01.mp4, 02.mp4, ...`` in playback
-    order; each clip covers one scenario scene. The worker adds Persian TTS
-    narration, burned subtitles, screenshot overlays, and the branded end card.
+    order; each clip covers one scenario scene. The worker preserves source audio,
+    burns subtitles, applies screenshot overlays, and adds the branded end card.
     """
     from app.core.config import get_settings  # noqa: PLC0415
-    from app.integrations.tts import tts_settings_from  # noqa: PLC0415
     from app.models import ContentProject, ProjectStatus, WorkflowExecution, WorkflowStatus  # noqa: PLC0415
     from app.services.clip_assembly_service import ClipAssemblyError, ClipAssemblyService  # noqa: PLC0415
 
@@ -566,7 +563,6 @@ async def assemble_external_clips(
                     task_session,
                     app_state.scene_video_registry,
                     app_state.artifact_storage,
-                    tts_settings=tts_settings_from(settings),
                     screenshots_root=settings.platform_screenshots_root,
                     clips_root=settings.platform_clips_root,
                     end_card_seconds=settings.end_card_seconds,

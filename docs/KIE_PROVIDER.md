@@ -1,8 +1,8 @@
-# KIE.ai Grok Imagine — image-to-video (single-shot) and Video 1.5 Preview
+# KIE.ai Grok Imagine — sole video provider and native-audio delivery
 
 ## Configuration
 
-KIE is an opt-in scene-video provider. Keep the API key in the local `.env`
+KIE is the only active video provider in this release, selected by product decision. WaveSpeed and other video providers were intentionally removed from the runtime scope; there is no automatic provider fallback. Keep the API key in the local `.env`
 file only; never commit it or send it to the browser.
 
 ```dotenv
@@ -42,14 +42,41 @@ Two models are supported by the adapter:
 | `grok-imagine/image-to-video` (default) | image-to-video | 6..30 s, whole seconds, serialized as a string (`"20"`) | mandatory (exactly one) | 5000 chars |
 | `grok-imagine-video-1-5-preview` (legacy per-scene text-to-video) | text-to-video | 1..15 s (integer or fractional number) | optional | 4096 chars |
 
-Both models return an MP4 with native audio; audio cannot be disabled. KIE
-prices video at 2.4 / 4.5 / 8 credits per second for 480p / 720p / 1080p, so a
-20-second 480p single-shot generation costs about 48 credits. Verify current
+Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. The image-to-video model prices at 2.4 / 4.5 / 8 credits per second for
+480p / 720p / 1080p, so a 20-second 480p single-shot generation costs about
+48 credits. These rates do not describe the separate Grok Imagine Video 1.5
+Preview text-to-video model. Verify current
 pricing on kie.ai before relying on the estimate; the adapter's preflight
 checks the live credit balance against the same per-second rates, and the
 authoritative usage is the task's reported `creditsConsumed` (converted to a
 USD ledger amount with `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD` — an accounting
 assumption, not a billing statement).
+
+### Budget planning at the configured credit price
+
+With the example `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD=0.005`, the image-to-video
+credit schedule implies these planning estimates:
+
+| Resolution | Credits/second | Estimated USD/second | 30 seconds | 60 seconds |
+|---|---:|---:|---:|---:|
+| 480p | 2.4 | $0.0120 | $0.36 | $0.72 |
+| 720p | 4.5 | $0.0225 | $0.675 | $1.35 |
+| 1080p | 8.0 | $0.0400 | $1.20 | $2.40 |
+
+The sub-$1 target for a 30–60 second final video is therefore compatible with
+480p generation on raw estimated credits only; 720p/1080p do not meet that
+target for a 60-second output. These estimates exclude retries and any
+supplier-side charges not represented by `creditsConsumed`. The application
+checks the estimated project cost against the company's per-operation budget
+before reservation, and settles the ledger from reported consumed credits.
+
+**Duration caveat:** the initial production default is single-shot, which
+submits exactly one image-to-video task and supports at most 30 seconds. The
+60-second figure above is a planning estimate only; it requires multi-scene
+generation and local assembly. Multi-scene mode is not part of the initial
+accepted production path until its separate end-to-end quality and audio
+acceptance is completed. Do not interpret the $0.72 estimate as evidence that
+60-second production has already passed acceptance.
 
 ## Single-shot mode (one prompt, one submission)
 
@@ -77,9 +104,7 @@ body field `generation_mode`):
 4. The single provider MP4 (native audio preserved, no local TTS overlay) is
    the final deliverable via the existing single-clip passthrough path.
 
-The previous multi-scene storyboard pipeline remains the default
-(`generation_mode="multi_scene"`); a prepared project refuses a silent mode
-switch instead of creating additional paid jobs.
+The initial release defaults to `generation_mode="single_shot"`. Multi-scene mode is available only when explicitly selected with `generation_mode="multi_scene"`; it creates one paid KIE job per storyboard scene and assembles the returned clips locally while preserving their native audio tracks. It is not the default path. Because the default image-to-video model accepts at most 30 seconds per job, a 60-second deliverable requires multi-scene mode with every scene kept within the model-specific 6–30 second bounds. The multi-scene code path has mock-based tests, but credentialed end-to-end audio/quality acceptance remains a release gate.
 
 ## Character reference image
 
@@ -144,7 +169,7 @@ valid dimensions/codec and a duration matching the paid request (within a
 small tolerance) are required, otherwise finalization fails closed. The probe
 facts are stored in `assembly_metadata.output_validation`. Multi-scene projects
 are concatenated locally with FFmpeg. Native audio is preserved and the local
-TTS mux is skipped for KIE so the generated Persian soundtrack is not silently
+The KIE-native audio track is preserved so the generated Persian soundtrack is not silently
 overwritten. FFmpeg and ffprobe are installed in the project runtime Docker
 image.
 
@@ -165,3 +190,28 @@ reproduction and RTL on-screen text, but KIE/Grok does not contractually
 guarantee Persian speech quality. The Persian script remains testable in the
 database (`project.scenario`, the job's `prompt`/`narration`); the audible
 result of the first paid run must be accepted manually.
+
+
+## Product decision: KIE-only video and provider-native audio
+
+The initial release intentionally uses KIE.ai as the sole video provider and
+uses the audio returned by KIE as part of the generated MP4. This is a product
+decision, not an accidental consequence of missing adapters. WaveSpeed has
+been removed from the active runtime, registry, configuration and deployment
+path. Do not restore it as a fallback or silently route a failed KIE request
+to another vendor.
+
+The KIE adapter supports these distinct model contracts:
+
+- `grok-imagine-video-1-5-preview`: text-to-video, 1–15 seconds, native
+  audio; the supplier-published 480p price reviewed for this option is
+  approximately USD 0.012/second.
+- `grok-imagine/image-to-video`: image-to-video, one required reference
+  image, 6–30 seconds, native audio; its credit-based pricing is documented
+  separately above.
+
+The code default remains `grok-imagine/image-to-video` unless
+`SCENE_VIDEO_KIE_MODEL` is explicitly set. Do not describe the 1.5 Preview
+price as the price of the image-to-video model. A real credentialed run is
+still required to validate the selected model's output quality, Persian
+speech, duration, actual credits consumed and final MP4 audio stream.

@@ -142,7 +142,7 @@ async def test_task_spend_ceiling_aggregates_provider_reservations(db_session):
     db_session.add(task)
     await db_session.flush()
     service = ProviderBudgetService(db_session)
-    for provider in ("llm_openai", "apimaster"):
+    for provider in ("llm_openai", "kie"):
         await service.set_budget(
             company.id, provider,
             monthly_limit_usd=Decimal("10.00"),
@@ -158,7 +158,7 @@ async def test_task_spend_ceiling_aggregates_provider_reservations(db_session):
 
     with pytest.raises(ConflictError, match="agent task spend ceiling"):
         await service.reserve(
-            company.id, "apimaster", "video",
+            company.id, "kie", "video",
             idempotency_key=f"task-second-{uuid.uuid4()}",
             require_budget=True, task_id=task.id,
         )
@@ -246,7 +246,7 @@ async def test_task_spend_ceiling_is_atomic_across_concurrent_providers(session_
         session.add(task)
         await session.flush()
         service = ProviderBudgetService(session)
-        for provider_id in ("llm_openai", "apimaster"):
+        for provider_id in ("llm_openai", "kie"):
             await service.set_budget(
                 company.id,
                 provider_id,
@@ -274,7 +274,7 @@ async def test_task_spend_ceiling_is_atomic_across_concurrent_providers(session_
 
     results = await asyncio.gather(
         reserve("llm_openai"),
-        reserve("apimaster"),
+        reserve("kie"),
     )
     assert sum(record is not None for record in results) == 1
 
@@ -287,7 +287,7 @@ async def test_paid_operation_fails_closed_without_company_budget(db_session):
     with pytest.raises(ConflictError, match="budget is required"):
         await ProviderBudgetService(db_session).reserve(
             company.id,
-            "apimaster",
+            "kie",
             "video.scene.generate",
             idempotency_key=f"paid-video-{uuid.uuid4()}",
             require_budget=True,
@@ -321,12 +321,10 @@ def test_cost_parser_only_accepts_usd_denominated_values():
 
 async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     from app.integrations.video import (
-        APIMasterConfig,
-        APIMasterSceneVideoProvider,
+        KIEConfig,
+        KIESceneVideoProvider,
         MockSceneVideoProvider,
         SceneVideoProviderRegistry,
-        WaveSpeedConfig,
-        WaveSpeedSceneVideoProvider,
     )
 
     class DiscreteDurationMockProvider(MockSceneVideoProvider):
@@ -337,17 +335,8 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     registry.register(MockSceneVideoProvider())
     registry.register(DiscreteDurationMockProvider())
     registry.register(
-        WaveSpeedSceneVideoProvider(
-            WaveSpeedConfig(api_key="catalog-wavespeed-test-key")
-        )
-    )
-    registry.register(
-        APIMasterSceneVideoProvider(
-            APIMasterConfig(
-                api_key="catalog-test-key",
-                base_url="https://api.apimaster.test",
-                model="wan3.0-video-prime",
-            )
+        KIESceneVideoProvider(
+            KIEConfig(api_key="catalog-kie-test-key")
         )
     )
     app.state.scene_video_registry = registry
@@ -368,33 +357,13 @@ async def test_scene_video_model_capability_catalog_is_exposed(client, app):
     assert mock["supports_seed"] is False
     assert mock["max_reference_images"] == 0
 
-    apimaster = next(item for item in models if item["provider_id"] == "apimaster")
-    assert apimaster["model_id"] == "wan3.0-video-prime"
-    assert apimaster["supports_health_check"] is True
-    assert apimaster["input_modalities"] == ["text", "image"]
-    assert apimaster["supported_aspect_ratios"] == [
-        "adaptive", "16:9", "9:16", "1:1", "4:3", "3:4"
-    ]
-    assert apimaster["supported_resolutions"] == ["480P", "720P", "1080P"]
-    assert apimaster["supports_seed"] is True
-    assert apimaster["max_prompt_characters"] == 5000
-    assert apimaster["max_reference_images"] == 1
-    assert apimaster["min_duration_seconds"] == 2
-    assert apimaster["max_duration_seconds"] == 30
-
-    wavespeed = next(item for item in models if item["provider_id"] == "wavespeed")
-    assert wavespeed["model_id"] == "wavespeed-ai/ltx-2.3/text-to-video"
-    assert wavespeed["supports_health_check"] is True
-    assert wavespeed["input_modalities"] == ["text"]
-    assert wavespeed["supported_modalities"] == ["video"]
-    assert wavespeed["supported_aspect_ratios"] == ["9:16"]
-    assert wavespeed["supported_resolutions"] == ["480p", "720p", "1080p"]
-    assert wavespeed["supports_seed"] is True
-    assert wavespeed["max_reference_images"] == 0
-    assert wavespeed["min_duration_seconds"] == 5
-    assert wavespeed["max_duration_seconds"] == 20
-    assert wavespeed["supported_durations"] is None
-
+    kie = next(item for item in models if item["provider_id"] == "kie")
+    assert kie["model_id"] == "grok-imagine/image-to-video"
+    assert kie["supports_health_check"] is True
+    assert kie["input_modalities"] == ["text", "image"]
+    assert kie["max_reference_images"] == 1
+    assert kie["min_duration_seconds"] == 6.0
+    assert kie["max_duration_seconds"] == 30.0
 
 async def test_budget_api_is_company_scoped(client, db_session):
     owner = Company(name="Budget API Owner", slug=f"budget-api-owner-{uuid.uuid4().hex[:8]}")
@@ -447,13 +416,13 @@ async def test_unknown_usage_can_be_audited_and_reconciled(db_session):
     service = ProviderBudgetService(db_session)
     await service.set_budget(
         company.id,
-        "apimaster",
+        "kie",
         monthly_limit_usd=Decimal("20.00"),
         per_operation_limit_usd=Decimal("5.00"),
     )
     reservation = await service.reserve(
         company.id,
-        "apimaster",
+        "kie",
         "content.scene.generate_video",
         idempotency_key=f"reconcile-{uuid.uuid4()}",
         require_budget=True,
@@ -535,22 +504,22 @@ async def test_provider_telemetry_is_company_scoped_and_aggregates_latency(db_se
 
 
 
-async def test_settled_video_usage_keeps_prediction_ids_and_cost_breakdown(db_session):
+async def test_settled_kie_usage_keeps_task_ids_and_cost_breakdown(db_session):
     company = Company(name="Video Prediction Ledger", slug=f"video-ledger-{uuid.uuid4().hex[:8]}")
     db_session.add(company)
     await db_session.flush()
     service = ProviderBudgetService(db_session)
     await service.set_budget(
         company.id,
-        "wavespeed",
+        "kie",
         monthly_limit_usd=Decimal("1.00"),
         per_operation_limit_usd=Decimal("0.10"),
     )
     reservation = await service.reserve(
         company.id,
-        "wavespeed",
+        "kie",
         "content.scene.generate_video",
-        idempotency_key=f"wavespeed-{uuid.uuid4()}",
+        idempotency_key=f"kie-{uuid.uuid4()}",
         require_budget=True,
     )
     assert reservation is not None
@@ -559,23 +528,23 @@ async def test_settled_video_usage_keeps_prediction_ids_and_cost_breakdown(db_se
         usage={
             "cost_usd": "0.10",
             "currency": "USD",
-            "model": "wavespeed",
+            "model": "grok-imagine/image-to-video",
             "estimated_scene_cost_usd": "0.10",
             "reported_scene_cost_usd": "0.10",
             "scene_predictions": [{
                 "scene_index": 0,
-                "prediction_id": "pred-123",
-                "provider_job_id": "wavespeed:pred-123",
-                "model_id": "wavespeed-ai/ltx-2.3/text-to-video",
+                "task_id": "task-123",
+                "provider_job_id": "kie:task-123",
+                "model_id": "grok-imagine/image-to-video",
                 "status": "completed",
                 "estimated_cost_usd": "0.10",
                 "reported_cost_usd": "0.10",
             }],
         },
     )
-    assert reservation.usage_payload["scene_predictions"][0]["prediction_id"] == "pred-123"
+    assert reservation.usage_payload["scene_predictions"][0]["task_id"] == "task-123"
     assert reservation.usage_payload["scene_predictions"][0]["model_id"] == (
-        "wavespeed-ai/ltx-2.3/text-to-video"
+        "grok-imagine/image-to-video"
     )
 
 
@@ -616,16 +585,16 @@ async def test_reserved_reservation_is_reused_with_allow_reuse_flag(db_session):
     await db_session.flush()
     service = ProviderBudgetService(db_session)
     await service.set_budget(
-        company.id, "wavespeed",
+        company.id, "kie",
         monthly_limit_usd=Decimal("10.00"), per_operation_limit_usd=Decimal("2.00"),
     )
     key = f"scene-video:{uuid.uuid4()}"
-    first = await service.reserve(company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key)
+    first = await service.reserve(company.id, "kie", "content.scene.generate_video", idempotency_key=key)
 
     reused = await service.reserve(
-        company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key, allow_reuse=True,
+        company.id, "kie", "content.scene.generate_video", idempotency_key=key, allow_reuse=True,
     )
     assert reused.id == first.id
     # Without the flag the live reservation still blocks.
     with pytest.raises(ConflictError, match="duplicate paid execution"):
-        await service.reserve(company.id, "wavespeed", "content.scene.generate_video", idempotency_key=key)
+        await service.reserve(company.id, "kie", "content.scene.generate_video", idempotency_key=key)

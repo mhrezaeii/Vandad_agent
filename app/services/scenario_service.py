@@ -195,7 +195,7 @@ class ScenarioService:
         self,
         *,
         company_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None,
         request: ScenarioRequest,
         timeout_seconds: float = 120.0,
         operation: str = "execute",
@@ -221,7 +221,7 @@ class ScenarioService:
         self,
         *,
         company_id: uuid.UUID,
-        connection_id: uuid.UUID,
+        connection_id: uuid.UUID | None,
         system: str,
         user: str,
         timeout_seconds: float,
@@ -234,6 +234,32 @@ class ScenarioService:
             if isinstance(raw, dict):
                 return raw
             return {"content": raw}
+
+        if connection_id is None:
+            from app.services.openai_env_execution_service import OpenAIEnvExecutionService
+
+            budget_key = idempotency_key or hashlib.sha256(
+                f"{company_id}:{operation}:{system}:{user}".encode()
+            ).hexdigest()
+            try:
+                return await OpenAIEnvExecutionService(self.session).execute(
+                    company_id=company_id,
+                    system=system,
+                    user=user,
+                    timeout_seconds=timeout_seconds,
+                    temperature=0.4,
+                    max_tokens=2000,
+                    json_mode=True,
+                    operation=operation,
+                    idempotency_key=f"llm:{budget_key}",
+                    task_id=task_id,
+                )
+            except ProviderError as error:
+                raise ScenarioGenerationError(
+                    error.message,
+                    code=error.code or "openai_request_failed",
+                    retryable=error.is_transient,
+                ) from error
 
         budget_key = idempotency_key or hashlib.sha256(
             f"{company_id}:{connection_id}:{operation}:{system}:{user}".encode()

@@ -51,6 +51,11 @@ async def test_monitor_skips_when_no_llm_connection(
 ):
     company, _platform_row = company_and_platform
     platform = await _make_platform(db_session, company.id)
+    from app.core.config import Settings
+
+    monkeypatch.setattr(
+        "app.core.config.get_settings", lambda: Settings(openai_api_key=None, _env_file=None)
+    )
 
     async def fake_crawl(self, base_url, *, max_pages=25):
         return DiscoveryResult(
@@ -65,7 +70,7 @@ async def test_monitor_skips_when_no_llm_connection(
 
     result = await monitor.monitor_platform(platform)
     assert result["status"] == "skipped"
-    assert "no active llm_openai connection" in result["detail"]
+    assert result["detail"] == "OPENAI_API_KEY is not configured"
 
 
 async def test_monitor_skips_unchanged_documents(
@@ -73,6 +78,11 @@ async def test_monitor_skips_unchanged_documents(
 ):
     company, _platform_row = company_and_platform
     platform = await _make_platform(db_session, company.id)
+    from app.core.config import Settings
+
+    monkeypatch.setattr(
+        "app.core.config.get_settings", lambda: Settings(openai_api_key=None, _env_file=None)
+    )
 
     async def fake_crawl(self, base_url, *, max_pages=25):
         return DiscoveryResult(

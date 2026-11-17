@@ -1,6 +1,6 @@
 # Architecture and implementation status
 
-Last reviewed: 2026-11-12 (product/documentation alignment)
+Last reviewed: 2026-11-17 (KIE-only video and native-audio decision)
 
 ## Intended runtime shape
 
@@ -39,8 +39,7 @@ FastAPI API / authentication / company scope
         |       +--> OpenAI-compatible LLM
         |       +--> Browser / Playwright
         |
-        |       +--> APIMaster scene video
-        |       +--> Generic HTTP / Mock
+        |       +--> KIE.ai Grok Imagine video
         |
         +--> Content & Media Services
                 +--> Scenario / storyboard handoff to AI video providers
@@ -67,7 +66,7 @@ Current state: PostgreSQL outbox dispatch, a dedicated agent worker, a code-owne
 
 Provider adapters are infrastructure, not product agents. They should expose stable capability contracts and return normalized results/errors/usage. Product services and agents should not hard-code vendor-specific HTTP details.
 
-The OpenAI-compatible LLM adapter and APIMaster video adapter serve different APIs. APIMaster's current adapter submits scene-generation jobs; it does not provide final-video composition or quality review. The Generic HTTP adapter can satisfy those capabilities only when an operator configures and verifies explicit provider-side compose and quality endpoints. No provider is production-ready merely because it can generate a scene clip. Do not route LLM requests to APIMaster unless a separately verified APIMaster LLM endpoint and adapter are added.
+The GPT scenario adapter uses the backend OpenAI environment configuration. KIE.ai Grok Imagine is the sole active video provider by explicit product decision: WaveSpeed and other video providers were intentionally removed from the initial runtime scope. KIE returns the final MP4 with provider-native audio; the pipeline preserves and validates that audio rather than replacing it with local TTS or lip-sync. The adapter supports the configured KIE image-to-video model and the Grok Imagine Video 1.5 Preview text-to-video model; the selected model is controlled by SCENE_VIDEO_KIE_MODEL.
 
 Provider routing should later support:
 - explicit provider/model choice and a deterministic fallback policy;
@@ -82,7 +81,7 @@ Do not claim "cheapest" based on advertised prices alone. Compare real output qu
 
 There is one unified AI-only video production path: platform monitoring and Company Brain provide verified product knowledge; GPT-based content reasoning creates the promotional scenario; the scenario is converted into a storyboard and video-generation instructions; an AI video provider generates the video; quality control evaluates the result; and the final video artifact is delivered. Motion graphics, product demonstrations, interface showcases and cinematic product videos are visual styles within this same path.
 
-Vandad does not create, register, manage or maintain persistent characters, brand characters or talking avatars. The Video Production Agent consumes an approved scenario/storyboard project and selects a compatible AI video provider. Providers may return a complete video or use their own explicitly supported AI generation/composition capabilities to produce the final video. If no configured provider can satisfy the required video output, execution fails closed. Vandad does not substitute local character rendering, FFmpeg-based creative assembly, local TTS or local lip-sync. Provider-returned final video artifacts are validated and stored.
+Vandad does not create, register, manage or maintain persistent characters, brand characters or talking avatars. The Video Production Agent consumes an approved scenario/storyboard project and selects a compatible AI video provider. Providers may return a complete video or use their own explicitly supported AI generation/composition capabilities to produce the final video. If no configured provider can satisfy the required video output, execution fails closed. Vandad does not substitute local character rendering, local TTS or local lip-sync. KIE-returned video artifacts are validated and stored.
 
 ## Current implementation map
 
@@ -98,9 +97,8 @@ Vandad does not create, register, manage or maintain persistent characters, bran
 | Agent dispatcher and dedicated worker | Implemented foundation | Monitoring, Content and approval-gated Video handlers; aggregate reliability/tenant E2E validation remains |
 | Provider budgets and usage ledger | Implemented foundation | Monthly/per-operation company budgets and task-row-serialized aggregate spend ceilings across LLM and video child operations; video generation, provider-side composition and AI quality-review costs settle together only when all are reported; unknown costs remain reserved |
 | Provider health/latency/error telemetry | Implemented foundation | Tenant-scoped rolling 30-day metrics, live connection probes, and explicit scene-video health endpoints; automatic video fallback skips providers without a configured successful live probe |
-| Deterministic provider/model routing and fallback | Implemented foundation for scene video | Explicit priority order filtered by provider-side composition, quality review, declared duration/aspect constraints and live health; catalog exposes modalities and only operator/provider-declared language, ratio and duration constraints; LLM fallback remains |
-| APIMaster scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials |
-| Generic HTTP video adapter | Implemented foundation | Must be configured with strict URL/download allowlists |
+| Video provider selection | Implemented for initial scope | KIE is the only active video provider; no cross-provider fallback is enabled |
+| KIE scene-video adapter | Implemented foundation | Real provider contract/output must be tested with credentials and quota |
 | AI-native video generation and composition | Implemented foundation | Provider-side composition and final-video AI quality review are capability-gated; mock review is fixture-only; real credentialed output validation remains |
 | Web UI and identity | Initial implementation | Persian RTL Next.js console, live task SSE, trusted OIDC-proxy identity, tenant claims and baseline roles; visual/accessibility review and deployment integration remain |
 
@@ -145,9 +143,9 @@ Vandad does not create, register, manage or maintain persistent characters, bran
 - [x] Record LLM provider-reported usage, latency, attempts and actual cost when explicitly supplied.
 - [x] Require a configured company budget before dispatching paid video-agent operations.
 - [x] Add tenant-scoped rolling provider request/error/latency telemetry and admin-only manual spend reconciliation.
-- [x] Add deterministic ordered scene-video fallback with composition capability filtering, plus a tenant-scoped live connection health-probe API; broader LLM fallback remains.
+- [x] Add KIE-specific model capability checks, preflight validation and durable submit fencing; no alternative video provider is enabled in this phase.
 - [ ] Populate verified model constraints for language, modality, duration and aspect ratio; do not infer undocumented provider limits.
-- Benchmark APIMaster, direct vendor APIs and other compatible gateways on accepted output quality and total cost.
+- Deferred: do not reintroduce WaveSpeed or another video provider as part of this release. Any future provider addition requires a separate product decision and explicit architecture/configuration review.
 
 Paid autonomous execution remains gated until staging and credentialed end-to-end tests verify the task ceiling/context propagation, provider routing and live probes against real vendor behavior.
 
@@ -170,8 +168,8 @@ Initial screens:
 - Agent Center: catalog, activation state, capabilities and readiness.
 - Task Center: create task, progress, cancel/retry and run timeline.
 - Company Brain: platforms, sources, extracted knowledge and brand context.
-- Content Studio: brand, scenario, storyboard, approval, video-provider selection and final video assets.
-- Provider Center: provider/model configuration, health, latency, usage and budgets.
+- Content Studio: brand, scenario, storyboard, human approval, KIE video generation and final video assets.
+- Provider Center: GPT/KIE connection health, usage and budgets.
 - Settings: company profile, members, credentials and audit trail.
 
 Do not couple React components to internal database models. Treat the OpenAPI contract as the UI boundary.

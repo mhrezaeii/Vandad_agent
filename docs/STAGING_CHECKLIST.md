@@ -18,6 +18,10 @@ Set these in the API environment before starting with ENVIRONMENT=staging:
 - CREDENTIAL_MASTER_KEYS and CREDENTIAL_ACTIVE_KEY_VERSION: staging-only
   encryption keys; never reuse development or production keys.
 - ARTIFACT_STORAGE_ROOT: persistent writable storage.
+- N8N_ENCRYPTION_KEY: if the optional n8n automation profile is enabled, generate
+  a unique high-entropy key once and persist it across restarts/redeployments;
+  changing it can make stored n8n credentials unreadable. Never use the
+  `.env.example` placeholder in a deployed environment.
 - Provider credentials and company budgets only for providers approved for the
   staging test.
 
@@ -59,7 +63,7 @@ It does not install or configure the identity provider itself.
    docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile ui config
    docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile ui up -d --build
 
-The overlay uses the Compose !reset tag and requires Docker Compose v2.24+.
+The overlay uses the Compose !reset tag and requires Docker Compose v2.24+. The optional n8n automation service is not exposed through this staging overlay; its default Compose port binding is loopback-only. If n8n is needed remotely, place it behind an explicitly configured authenticated reverse proxy rather than publishing port 5678 publicly.
 The API and web containers have no host-published ports in this mode; the
 external proxy is their only intended ingress.
 
