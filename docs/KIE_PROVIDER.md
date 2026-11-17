@@ -104,7 +104,7 @@ body field `generation_mode`):
 4. The single provider MP4 (native audio preserved, no local TTS overlay) is
    the final deliverable via the existing single-clip passthrough path.
 
-The initial release defaults to `generation_mode="single_shot"`. Multi-scene generation remains disabled as a future controlled evaluation.
+The initial release defaults to `generation_mode="single_shot"`. Multi-scene mode is available only when explicitly selected with `generation_mode="multi_scene"`; it creates one paid KIE job per storyboard scene and assembles the returned clips locally while preserving their native audio tracks. It is not the default path. Because the default image-to-video model accepts at most 30 seconds per job, a 60-second deliverable requires multi-scene mode with every scene kept within the model-specific 6–30 second bounds. The multi-scene code path has mock-based tests, but credentialed end-to-end audio/quality acceptance remains a release gate.
 
 ## Character reference image
 
