@@ -1090,9 +1090,18 @@ class ContentService:
         })
 
         scenario = copy.deepcopy(source.scenario)
-        if note and isinstance(scenario, dict):
+        if isinstance(scenario, dict):
             scenes = scenario.get("scenes")
             if isinstance(scenes, list):
+                revision_instruction = (
+                    "Operator revision feedback: " + note
+                    if note
+                    else (
+                        "Create a clearly different visual take from the previous version. "
+                        "Change composition, camera movement, framing and visual staging; "
+                        "do not repeat the previous shot."
+                    )
+                )
                 for scene in scenes:
                     if not isinstance(scene, dict):
                         continue
@@ -1104,8 +1113,8 @@ class ContentService:
                     if prompt_key:
                         scene[prompt_key] = (
                             scene[prompt_key].rstrip()
-                            + "\n\nOperator revision feedback: "
-                            + note
+                            + "\n\n"
+                            + revision_instruction
                         )
 
         revision = ContentProject(
