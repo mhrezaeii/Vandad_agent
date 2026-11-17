@@ -52,6 +52,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+        NEXT_PUBLIC_COMPANY_ID: ${NEXT_PUBLIC_COMPANY_ID:-}
     ports:
       - "${WEB_PORT:-3000}:3000"
     networks:
@@ -101,6 +102,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      api:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -190,6 +193,7 @@ services:
     restart: unless-stopped
 
   n8n:
+    profiles: ["automation"]
     image: n8nio/n8n@sha256:8602f5dfacbe2c931eeafd010de0e68182310e9f309921e780ab69182e92b3ae
     environment:
       N8N_HOST: ${N8N_HOST:-localhost}

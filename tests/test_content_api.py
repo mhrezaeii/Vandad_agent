@@ -9,11 +9,14 @@ import pytest
 from sqlalchemy import select
 
 from app.models import (
+    ContentProject,
     CredentialStorageType,
     Platform,
     PlatformConnection,
+    ProjectStatus,
 )
 from app.security.secret_value import SecretValue
+from app.services.content_service import ContentService
 from app.services.credential_service import CredentialService
 from tests.test_worker_hardening import _keybox
 
@@ -213,6 +216,109 @@ async def test_character_and_legacy_avatar_routes_are_not_exposed(client, header
         headers=headers,
     )
     assert legacy_video.status_code == 404
+
+
+async def test_brand_monitor_requires_linked_platforms(client, headers):
+    brand_id = await _brand_id(client, headers)
+    response = await client.post(
+        f"/api/v1/content/brands/{brand_id}/monitor",
+        json={"connection_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "platform" in response.json()["error"]["message"].lower()
+
+
+async def test_reject_video_requires_a_completed_scene_project(client, headers):
+    brand_id = await _brand_id(client, headers)
+    created = await client.post(
+        "/api/v1/content/scene-projects",
+        json={
+            "brand_id": brand_id,
+            "topic": "معرفی قابلیت پایش هوشمند",
+            "target_duration_seconds": 30,
+            "provider_id": "mock",
+            "generation_mode": "multi_scene",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+
+    rejected = await client.post(
+        f"/api/v1/content/scene-projects/{project_id}/reject-video",
+        json={"feedback": "تصاویر تکراری هستند؛ تنوع بصری بیشتری لازم است."},
+        headers=headers,
+    )
+    assert rejected.status_code == 409
+    assert "completed" in rejected.json()["error"]["message"].lower()
+
+
+async def test_rejected_video_creates_immutable_new_revision(
+    client, db_session, headers, monkeypatch
+):
+    brand_id = await _brand_id(client, headers)
+    created = await client.post(
+        "/api/v1/content/scene-projects",
+        json={
+            "brand_id": brand_id,
+            "topic": "معرفی قابلیت پایش هوشمند",
+            "target_duration_seconds": 30,
+            "provider_id": "mock",
+            "generation_mode": "multi_scene",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    source_id = uuid.UUID(created.json()["id"])
+    source = await db_session.get(ContentProject, source_id)
+    source.status = ProjectStatus.COMPLETED.value
+    source.scenario = {
+        "title": "سناریوی تأییدشده",
+        "scenes": [{
+            "visual_prompt": "A clean cinematic product demonstration",
+            "narration": "این قابلیت را ببینید",
+        }],
+    }
+    source.final_artifact_id = uuid.uuid4()
+    await db_session.commit()
+
+    async def fake_start_generation(
+        self, project_id, *, scope, provider_id=None, task_id=None, provider_fallbacks=None
+    ):
+        revision = await self.get_project(project_id, company_id=scope.company_id)
+        revision.status = ProjectStatus.VIDEO_GENERATION_PENDING.value
+        await self.session.flush()
+        return revision
+
+    monkeypatch.setattr(ContentService, "generate_scene_video", fake_start_generation)
+    feedback = "ترکیب‌بندی صحنه متفاوت باشد و حرکت دوربین نرم‌تر شود."
+    response = await client.post(
+        f"/api/v1/content/scene-projects/{source_id}/reject-video",
+        json={"feedback": feedback},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    revision_data = response.json()
+    revision_id = uuid.UUID(revision_data["id"])
+    assert revision_id != source_id
+    assert revision_data["status"] == ProjectStatus.VIDEO_GENERATION_PENDING.value
+    assert revision_data["scene_options"]["revision_number"] == 2
+    assert revision_data["scene_options"]["revision_of_project_id"] == str(source_id)
+    assert feedback in revision_data["scenario"]["scenes"][0]["visual_prompt"]
+
+    await db_session.refresh(source)
+    assert source.status == ProjectStatus.COMPLETED.value
+    assert source.final_artifact_id is not None
+    assert "Operator revision feedback" not in source.scenario["scenes"][0]["visual_prompt"]
+
+    duplicate = await client.post(
+        f"/api/v1/content/scene-projects/{source_id}/reject-video",
+        json={"feedback": "دوباره کلیک شد"},
+        headers=headers,
+    )
+    assert duplicate.status_code == 409
+    assert "newer video revision" in duplicate.json()["error"]["message"].lower()
 
 
 async def test_video_endpoints_hide_unfinished_projects(client, headers):

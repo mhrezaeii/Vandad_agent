@@ -96,7 +96,7 @@ class ContentConnectionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    connection_id: uuid.UUID
+    connection_id: uuid.UUID | None = None
 
 
 class ContentProjectCreate(BaseModel):
@@ -165,6 +165,14 @@ class SceneVideoStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider_id: str | None = Field(default=None, max_length=50)
+
+
+class SceneVideoRejectRequest(BaseModel):
+    """Human review feedback used to request a fresh video version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    feedback: str = Field(default="", max_length=2000)
 
 
 class ContentProjectRead(BaseModel):

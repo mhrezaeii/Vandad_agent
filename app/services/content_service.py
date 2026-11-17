@@ -33,6 +33,7 @@ from app.models import (
     ContentBrandStatus,
     ContentProject,
     Platform,
+    PlatformConnection,
     ProjectStatus,
     Workflow,
     WorkflowDefinitionStatus,
@@ -552,6 +553,31 @@ class ContentService:
         return project
 
     # --------------------------------------------------------- script + video
+    async def resolve_llm_connection_id(
+        self,
+        company_id: uuid.UUID,
+        connection_id: uuid.UUID | None = None,
+    ) -> uuid.UUID:
+        """Resolve a connected OpenAI-compatible LLM binding for this tenant."""
+        statement = select(PlatformConnection.id).where(
+            PlatformConnection.company_id == company_id,
+            PlatformConnection.provider == "llm_openai",
+            PlatformConnection.status == "connected",
+        )
+        if connection_id is not None:
+            statement = statement.where(PlatformConnection.id == connection_id)
+        else:
+            statement = statement.order_by(
+                PlatformConnection.updated_at.desc(),
+                PlatformConnection.created_at.desc(),
+            )
+        resolved = await self.session.scalar(statement.limit(1))
+        if resolved is None:
+            raise ConflictError(
+                "No connected OpenAI-compatible LLM connection is configured for this company."
+            )
+        return resolved
+
     async def generate_script(
         self, project_id: uuid.UUID, *, scope: CompanyScope, connection_id: uuid.UUID,
         task_id: uuid.UUID | None = None,
@@ -844,6 +870,18 @@ class ContentService:
             if brand is None or brand.company_id != scope.company_id:
                 raise NotFoundError("Brand not found for this project.")
             has_reference_source = bool(options.get("character_key") or options.get("character_image_url"))
+            single_shot_mode = (
+                (options.get("generation_mode") or "").strip().lower() == "single_shot"
+            )
+            if single_shot_mode:
+                candidate_provider = self.scene_video_registry.get(selected_provider)
+                if candidate_provider.requires_reference_image and not has_reference_source:
+                    raise UnprocessableEntityError(
+                        "Single-shot image-to-video generation requires a character "
+                        "reference image. Select a character or provide a public HTTPS "
+                        "character_image_url.",
+                        details=[{"field": "character_key"}],
+                    )
             required_durations = tuple(
                 float(scene["duration_seconds"])
                 for scene in scenario_scenes
@@ -851,7 +889,7 @@ class ContentService:
                 and isinstance(scene.get("duration_seconds"), (int, float))
                 and not isinstance(scene.get("duration_seconds"), bool)
             )
-            if (options.get("generation_mode") or "").strip().lower() == "single_shot":
+            if single_shot_mode:
                 # Single-shot submits ONE whole-video request. The registry's
                 # per-duration capability check is bypassed here so the
                 # explicit single-shot bounds validation below can fail with
@@ -1052,6 +1090,133 @@ class ContentService:
         await self.session.flush()
         await self.session.refresh(project)
         return project
+
+    async def regenerate_scene_video(
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        feedback: str = "",
+        provider_id: str | None = None,
+    ) -> ContentProject:
+        """Create a fresh video revision from an already approved scenario.
+
+        The reviewed source project and its artifacts remain immutable. A new
+        project gets its own provider jobs, budget reservation and workflow
+        execution, while retaining the approved scenario as its base.
+        """
+        # Lock the reviewed project so two fast/retried reject clicks cannot
+        # create and bill parallel revisions from the same video.
+        source = await self.session.scalar(
+            select(ContentProject)
+            .where(
+                ContentProject.id == project_id,
+                ContentProject.company_id == scope.company_id,
+            )
+            .with_for_update()
+        )
+        if source is None:
+            raise NotFoundError("Content project not found.")
+        existing_revisions = list((await self.session.execute(
+            select(ContentProject.id, ContentProject.scene_options).where(
+                ContentProject.company_id == scope.company_id,
+                ContentProject.brand_id == source.brand_id,
+                ContentProject.video_mode == "scene",
+            )
+        )).all())
+        if any(
+            (options or {}).get("revision_of_project_id") == str(source.id)
+            for _revision_id, options in existing_revisions
+        ):
+            raise ConflictError(
+                "A newer video revision already exists. Review the latest revision instead."
+            )
+        if source.video_mode != "scene":
+            raise ConflictError("Only scene-video projects can be regenerated.")
+        if source.status != ProjectStatus.COMPLETED.value or not source.final_artifact_id:
+            raise ConflictError(
+                "A video must be completed and available before it can be rejected for regeneration.",
+                details=[{"status": source.status}],
+            )
+        if not source.scenario:
+            raise ConflictError("The source project has no approved scenario.")
+
+        note = feedback.strip()
+        options = copy.deepcopy(source.scene_options or {})
+        previous_revision = int(options.get("revision_number") or 1)
+        root_project_id = options.get("revision_root_project_id") or str(source.id)
+        options.update({
+            "revision_root_project_id": root_project_id,
+            "revision_of_project_id": str(source.id),
+            "revision_number": previous_revision + 1,
+            "revision_feedback": note,
+        })
+
+        scenario = copy.deepcopy(source.scenario)
+        if isinstance(scenario, dict):
+            scenes = scenario.get("scenes")
+            if isinstance(scenes, list):
+                revision_instruction = (
+                    "Operator revision feedback: " + note
+                    if note
+                    else (
+                        "Create a clearly different visual take from the previous version. "
+                        "Change composition, camera movement, framing and visual staging; "
+                        "do not repeat the previous shot."
+                    )
+                )
+                for scene in scenes:
+                    if not isinstance(scene, dict):
+                        continue
+                    prompt_key = next(
+                        (key for key in ("visual_prompt", "prompt", "visual_description")
+                         if isinstance(scene.get(key), str)),
+                        None,
+                    )
+                    if prompt_key:
+                        scene[prompt_key] = (
+                            scene[prompt_key].rstrip()
+                            + "\n\n"
+                            + revision_instruction
+                        )
+
+        revision = ContentProject(
+            company_id=source.company_id,
+            brand_id=source.brand_id,
+            topic=source.topic,
+            status=ProjectStatus.APPROVED.value,
+            script_text=source.script_text,
+            script_segments=copy.deepcopy(source.script_segments),
+            video_mode="scene",
+            scenario=scenario,
+            scene_options=options,
+            scene_video_provider=provider_id or source.scene_video_provider,
+            video_title=source.video_title,
+            call_to_action=source.call_to_action,
+            llm_usage=copy.deepcopy(source.llm_usage),
+        )
+        self.session.add(revision)
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.scene_video_revision_requested",
+            action="regenerate_video",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=revision.id,
+            metadata={
+                "source_project_id": str(source.id),
+                "revision_number": previous_revision + 1,
+                "feedback_provided": bool(note),
+            },
+        )
+        await self.session.flush()
+        revision = await self.generate_scene_video(
+            revision.id,
+            scope=scope,
+            provider_id=provider_id or source.scene_video_provider,
+        )
+        await self.session.refresh(revision)
+        return revision
 
     async def cancel_scene_video(
         self, project_id: uuid.UUID, *, scope: CompanyScope

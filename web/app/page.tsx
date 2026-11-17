@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiUrl } from "@/lib/api";
 
 type Tab = "overview" | "agents" | "tasks" | "brain" | "content" | "providers" | "settings";
@@ -9,12 +9,16 @@ type CompanyAgent = { agent_key: string; status: string; definition: AgentDefini
 type Task = { id: string; agent_key: string; capability: string; title: string; status: string; created_at: string; attempt_count: number; max_attempts: number; error_message?: string | null };
 type Provider = { provider_id: string; display_name: string; description: string; capabilities: string[] };
 type ProviderHealth = { provider_id: string; calls_30d: number; errors_30d: number; pending_30d: number; success_rate: number | null; average_latency_ms: number | null; last_call_at: string };
-type SceneProvider = { provider_id: string; display_name: string; requires_network: boolean; supports_lipsync: boolean; supports_reference_image: boolean; supports_cancellation: boolean; daily_quota: number | null };
+type SceneProvider = { provider_id: string; display_name: string; is_default?: boolean; requires_network: boolean; supports_lipsync: boolean; supports_reference_image: boolean; requires_reference_image?: boolean; supports_cancellation: boolean; daily_quota: number | null };
 type Budget = { provider_id: string; monthly_limit_usd: string; per_operation_limit_usd: string; enabled: boolean };
 type EventItem = { id: string; sequence: number; event_type: string; payload: Record<string, unknown>; created_at: string };
 type Brand = { id: string; name: string; display_name?: string; industry?: string; status: string };
-type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "avatar" | "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null };
-type Platform = { id: string; name: string; base_url?: string; platform_type?: string };
+type ScenarioScene = { index?: number; scene_index?: number; title?: string; scene_type?: string; visual_prompt?: string; prompt?: string; camera_direction?: string; transition?: string; narration?: string; pronunciation_text?: string; on_screen_text?: string; subtitle_text?: string; duration_seconds?: number };
+type Scenario = { title?: string; hook?: string; opening_hook?: string; summary?: string; visual_style?: string; scenes?: ScenarioScene[]; cta?: string; cta_pronunciation_text?: string; caption?: string; hashtags?: string[] };
+type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "avatar" | "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
+type CharacterImage = { key: string; platform: string; name: string; valid: boolean; error?: string };
+type LlmConnection = { id: string; name: string; provider: string; status: string };
+type Platform = { id: string; name: string; slug: string; base_url?: string; platform_type?: string };
 
 const nav: { id: Tab; label: string; icon: string }[] = [
   { id: "overview", label: "نمای کلی", icon: "◫" },
@@ -33,6 +37,9 @@ function statusLabel(status: string) {
     failed: "ناموفق", cancelled: "لغوشده", active: "فعال",
     inactive: "غیرفعال", settled: "تسویه‌شده", reserved: "رزروشده",
     unknown: "هزینه نامشخص",
+    script_generating: "در حال تولید سناریو", script_ready: "در انتظار تأیید سناریو",
+    video_generation_pending: "در صف تولید ویدیو", video_generating: "در حال تولید ویدیو",
+    video_generated: "ویدیو تولید شد", assembling: "در حال مونتاژ",
   };
   return labels[status] || status;
 }
@@ -71,9 +78,23 @@ export default function HomePage() {
   const [contentMode, setContentMode] = useState<"avatar" | "scene">("scene");
   const [contentBrandId, setContentBrandId] = useState("");
   const [contentTopic, setContentTopic] = useState("");
-  const [llmConnectionId, setLlmConnectionId] = useState("");
   const [videoConnectionId, setVideoConnectionId] = useState("");
-  const [sceneProviderId, setSceneProviderId] = useState("apimaster");
+  const [llmBaseUrl, setLlmBaseUrl] = useState("https://api.openai.com/v1");
+  const [llmModel, setLlmModel] = useState("");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmConnectionStatus, setLlmConnectionStatus] = useState("");
+  const [platformName, setPlatformName] = useState("");
+  const [platformUrl, setPlatformUrl] = useState("");
+  const [platformType, setPlatformType] = useState("website");
+  const [sceneProviderId, setSceneProviderId] = useState("");
+  const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
+  const [characterKey, setCharacterKey] = useState("");
+  const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([]);
+  const [selectedContentProjectId, setSelectedContentProjectId] = useState<string | null>(null);
+  const [selectedContentProject, setSelectedContentProject] = useState<ContentProject | null>(null);
+  const [videoFeedback, setVideoFeedback] = useState("");
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState("");
+  const videoPreviewProjectRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,8 +111,9 @@ export default function HomePage() {
       api<Brand[]>("/content/brands"),
       api<ContentProject[]>("/content/projects"),
       api<{ items: Platform[] }>("/platforms"),
+      api<CharacterImage[]>("/content/character-images"),
     ] as const);
-    const [catalogResult, agentsResult, tasksResult, providersResult, healthResult, sceneProvidersResult, budgetsResult, usageResult, brandsResult, projectsResult, platformsResult] = results;
+    const [catalogResult, agentsResult, tasksResult, providersResult, healthResult, sceneProvidersResult, budgetsResult, usageResult, brandsResult, projectsResult, platformsResult, characterImagesResult] = results;
     if (catalogResult.status === "fulfilled") setCatalog(catalogResult.value.items || []);
     if (agentsResult.status === "fulfilled") setCompanyAgents(agentsResult.value || []);
     if (tasksResult.status === "fulfilled") setTasks(tasksResult.value.items || []);
@@ -103,6 +125,7 @@ export default function HomePage() {
     if (brandsResult.status === "fulfilled") setBrands(brandsResult.value || []);
     if (projectsResult.status === "fulfilled") setProjects(projectsResult.value || []);
     if (platformsResult.status === "fulfilled") setPlatforms(platformsResult.value.items || []);
+    if (characterImagesResult.status === "fulfilled") setCharacterImages(characterImagesResult.value || []);
     const failures = results.filter((item) => item.status === "rejected");
     if (failures.length === results.length) setError("ارتباط با API برقرار نشد. آدرس Backend و دسترسی شرکت را بررسی کنید.");
     else if (failures.length) setNotice("بخشی از اطلاعات در دسترس نبود؛ سایر بخش‌ها بارگذاری شدند.");
@@ -115,6 +138,31 @@ export default function HomePage() {
     if (saved) window.localStorage.setItem("vandad.companyId", saved);
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    if (!contentBrandId) {
+      setSelectedPlatformIds([]);
+      return () => { active = false; };
+    }
+    api<{ id: string }[]>(`/content/brands/${contentBrandId}/platforms`)
+      .then((linked) => {
+        if (active) setSelectedPlatformIds(linked.map((item) => item.id));
+      })
+      .catch(() => {
+        if (active) setSelectedPlatformIds([]);
+      });
+    return () => { active = false; };
+  }, [contentBrandId]);
+
+  useEffect(() => {
+    if (!sceneProviders.length) return;
+    if (sceneProviderId && sceneProviders.some((provider) => provider.provider_id === sceneProviderId)) return;
+    const preferred = sceneProviders.find((provider) => provider.is_default)
+      ?? sceneProviders.find((provider) => provider.provider_id === "mock")
+      ?? sceneProviders[0];
+    setSceneProviderId(preferred.provider_id);
+  }, [sceneProviders, sceneProviderId]);
 
   const selectedDefinition = useMemo(
     () => catalog.find((agent) => agent.key === taskAgent),
@@ -134,7 +182,7 @@ export default function HomePage() {
       "platform.change.detect": { platform_id: "", max_pages: 10 },
       "platform.knowledge.extract": { platform_id: "", connection_id: "", max_documents: 20 },
       "content.scenario.generate": { project_id: "", connection_id: "", timeout_seconds: 180 },
-      "video.scene.generate": { project_id: "", provider_id: "apimaster" },
+      "video.scene.generate": { project_id: "", provider_id: "" },
       "video.avatar.generate": { project_id: "", connection_id: "" },
     };
     const template = templates[taskCapability];
@@ -144,12 +192,15 @@ export default function HomePage() {
   const run = async (action: () => Promise<unknown>, success: string) => {
     setError("");
     setNotice("");
+    setLoading(true);
     try {
       await action();
       setNotice(success);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "عملیات انجام نشد.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -259,51 +310,161 @@ export default function HomePage() {
     return () => controller.abort();
   }, [selectedTask, companyId, load]);
 
+  const createPlatform = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await run(async () => {
+      const name = platformName.trim();
+      const baseUrl = platformUrl.trim();
+      if (!name || !baseUrl.startsWith("https://")) {
+        throw new Error("نام پلتفرم و آدرس عمومی HTTPS معتبر الزامی است.");
+      }
+      await api("/platforms", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          platform_type: platformType,
+          base_url: baseUrl,
+          integration_type: "api",
+          status: "active",
+        }),
+      });
+      setPlatformName("");
+      setPlatformUrl("");
+    }, "پلتفرم مرجع ثبت شد.");
+  };
+
+  const createLlmConnection = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await run(async () => {
+      const baseUrl = llmBaseUrl.trim().replace(/\/+$/, "");
+      const model = llmModel.trim();
+      const apiKey = llmApiKey.trim();
+      if (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://")) {
+        throw new Error("آدرس Base URL باید با http:// یا https:// شروع شود.");
+      }
+      if (!model || !apiKey) throw new Error("مدل و API Key الزامی هستند.");
+      let platform = platforms.find((item) => item.slug === "llm-openai");
+      if (!platform) {
+        platform = await api<Platform>("/platforms", {
+          method: "POST",
+          body: JSON.stringify({
+            name: "OpenAI-compatible LLM",
+            slug: "llm-openai",
+            platform_type: "api_service",
+            base_url: baseUrl,
+            description: "Tenant-owned OpenAI-compatible language model endpoint",
+            integration_type: "api",
+          }),
+        });
+      }
+      const connection = await api<LlmConnection>("/connections", {
+        method: "POST",
+        body: JSON.stringify({
+          platform_id: platform.id,
+          name: `LLM ${new Date().toISOString()}`,
+          provider: "llm_openai",
+          configuration: { url: baseUrl, model },
+          credential: {
+            credential_type: "api_key",
+            storage_type: "encrypted",
+            secret_reference: `llm-api-key-${Date.now()}`,
+            value: apiKey,
+          },
+        }),
+      });
+      const activation = await api<{ success: boolean; status_after: string; message: string }>(`/connections/${connection.id}/activate`, {
+        method: "POST",
+      });
+      if (!activation.success || activation.status_after !== "connected") throw new Error(activation.message || "اتصال LLM تأیید نشد؛ وضعیت اتصال باید connected باشد.");
+      setLlmApiKey("");
+      setLlmConnectionStatus("اتصال LLM با موفقیت اعتبارسنجی و فعال شد.");
+    }, "اتصال LLM ذخیره و فعال شد.");
+  };
+
   const createContentProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     await run(async () => {
       if (!contentBrandId) throw new Error("ابتدا یک برند انتخاب کنید.");
+      if (contentMode === "scene") {
+        if (selectedPlatformIds.length === 0) {
+          throw new Error("برای این برند حداقل یک پلتفرم مرجع انتخاب کنید.");
+        }
+        await api(`/content/brands/${contentBrandId}/platforms`, {
+          method: "PUT",
+          body: JSON.stringify({ platform_ids: selectedPlatformIds }),
+        });
+        setNotice("در حال رصد پلتفرم‌های انتخاب‌شده و بروزرسانی دانش تأییدشده…");
+        await api(`/content/brands/${contentBrandId}/monitor`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        setNotice("رصد و تحلیل تمام شد؛ در حال ارسال دانش تأییدشده برای ساخت سناریو…");
+      }
+
+      let project: ContentProject;
       if (contentMode === "avatar") {
-        await api("/content/projects", {
+        project = await api<ContentProject>("/content/projects", {
           method: "POST",
           body: JSON.stringify({ brand_id: contentBrandId, topic: contentTopic }),
         });
       } else {
-        await api("/content/scene-projects", {
+        project = await api<ContentProject>("/content/scene-projects", {
           method: "POST",
           body: JSON.stringify({
             brand_id: contentBrandId,
             topic: contentTopic,
             target_duration_seconds: 30,
             provider_id: sceneProviderId || undefined,
+            character_key: characterKey || undefined,
+            generation_mode: characterKey ? "single_shot" : "multi_scene",
           }),
         });
+        setSelectedContentProjectId(project.id);
+        setSelectedContentProject(project);
+        project = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-scenario`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
       }
+      setSelectedContentProjectId(project.id);
+      setSelectedContentProject(project);
+      setVideoPreviewUrl("");
+      videoPreviewProjectRef.current = null;
       setContentTopic("");
-    }, "پروژه محتوا ایجاد شد.");
+    }, "رصد پلتفرم‌ها انجام شد و تولید سناریو به‌صورت خودکار آغاز شد.");
   };
 
   const generateProjectScript = async (project: ContentProject) => {
     await run(async () => {
-      if (!llmConnectionId.trim()) throw new Error("شناسه اتصال LLM را وارد کنید.");
       const prefix = project.video_mode === "scene" ? "/content/scene-projects" : "/content/projects";
       const action = project.video_mode === "scene" ? "generate-scenario" : "generate-script";
       await api(`${prefix}/${project.id}/${action}`, {
         method: "POST",
-        body: JSON.stringify({ connection_id: llmConnectionId.trim() }),
+        body: JSON.stringify({}),
       });
     }, "درخواست تولید سناریو ثبت شد.");
   };
 
   const approveContentProject = async (project: ContentProject) => {
     await run(async () => {
-      const prefix = project.video_mode === "scene" ? "/content/scene-projects" : "/content/projects";
-      const action = project.video_mode === "scene" ? "approve-scenario" : "approve-script";
-      await api(`${prefix}/${project.id}/${action}`, {
-        method: "POST",
-        body: JSON.stringify({ approved: true }),
-      });
-    }, "سناریو تأیید شد.");
+      if (project.video_mode === "scene") {
+        await api(`/content/scene-projects/${project.id}/approve-scenario`, {
+          method: "POST",
+          body: JSON.stringify({ approved: true }),
+        });
+        const started = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-video`, {
+          method: "POST",
+          body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
+        });
+        setSelectedContentProjectId(started.id);
+        setSelectedContentProject(started);
+      } else {
+        await api(`/content/projects/${project.id}/approve-script`, {
+          method: "POST",
+          body: JSON.stringify({ approved: true }),
+        });
+      }
+    }, "سناریو تأیید شد؛ تولید ویدیو بدون خروج از همین صفحه آغاز شد.");
   };
 
   const generateProjectVideo = async (project: ContentProject) => {
@@ -322,6 +483,73 @@ export default function HomePage() {
       }
     }, "Workflow تولید ویدیو به صف ارسال شد.");
   };
+
+  const rejectAndRegenerateVideo = async (project: ContentProject) => {
+    await run(async () => {
+      const revision = await api<ContentProject>(`/content/scene-projects/${project.id}/reject-video`, {
+        method: "POST",
+        body: JSON.stringify({ feedback: videoFeedback.trim() }),
+      });
+      setSelectedContentProjectId(revision.id);
+      setSelectedContentProject(revision);
+      setVideoFeedback("");
+      setVideoPreviewUrl("");
+      videoPreviewProjectRef.current = null;
+    }, "نسخه قبلی رد شد و تولید نسخه جدید با همان سناریوی تأییدشده آغاز شد.");
+  };
+
+  const selectContentProject = async (projectId: string) => {
+    try {
+      const project = await api<ContentProject>(`/content/projects/${projectId}`);
+      setSelectedContentProjectId(projectId);
+      setSelectedContentProject(project);
+      setVideoPreviewUrl("");
+      videoPreviewProjectRef.current = null;
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "دریافت پروژه ناموفق بود.");
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedContentProjectId) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const project = await api<ContentProject>(`/content/projects/${selectedContentProjectId}`);
+        if (!active) return;
+        setSelectedContentProject(project);
+        if (
+          project.status === "completed" &&
+          project.final_artifact_id &&
+          videoPreviewProjectRef.current !== project.id
+        ) {
+          const headers = new Headers();
+          if (companyId) headers.set("X-Company-ID", companyId);
+          const response = await fetch(`${apiUrl}/content/videos/${project.id}/content`, {
+            headers, credentials: "include", cache: "no-store",
+          });
+          if (!response.ok) throw new Error(`دریافت ویدیو ناموفق بود (${response.status})`);
+          const blob = await response.blob();
+          if (!active) return;
+          const nextUrl = URL.createObjectURL(blob);
+          setVideoPreviewUrl((previous) => {
+            if (previous) URL.revokeObjectURL(previous);
+            return nextUrl;
+          });
+          videoPreviewProjectRef.current = project.id;
+        }
+      } catch (cause) {
+        if (active) setError(cause instanceof Error ? cause.message : "بروزرسانی وضعیت تولید ناموفق بود.");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [selectedContentProjectId, companyId]);
 
   const reconcileUsage = async (recordId: string) => {
     await run(async () => {
@@ -500,44 +728,190 @@ export default function HomePage() {
         )}
 
         {tab === "content" && (
-          <div className="section">
-            <div className="two-col">
-              <div className="card">
-                <h2 style={{ fontSize: 16, marginTop: 0 }}>ایجاد پروژه محتوا</h2>
-                <form className="form-grid" onSubmit={createContentProject}>
-                  <div className="field full"><label>برند</label><select value={contentBrandId} onChange={(event) => setContentBrandId(event.target.value)} required><option value="">انتخاب برند</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.display_name || brand.name}</option>)}</select></div>
-                  <div className="field full"><label>مسیر تولید</label><select value={contentMode} onChange={(event) => setContentMode(event.target.value as "avatar" | "scene")}><option value="scene">Scene Video</option><option value="avatar">Talking Avatar</option></select></div>
-                  <div className="field full"><label>موضوع ویدیو</label><textarea dir="rtl" value={contentTopic} onChange={(event) => setContentTopic(event.target.value)} required minLength={3} placeholder="موضوع، پیام اصلی و مخاطب ویدیو را بنویسید…" /></div>
-                  {contentMode === "scene" && <div className="field full"><label>Scene Provider</label><select value={sceneProviderId} onChange={(event) => setSceneProviderId(event.target.value)}>{sceneProviders.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.display_name}</option>)}</select></div>}
-                  <div className="field full"><button className="button" type="submit">ایجاد پروژه</button></div>
-                </form>
+          <div className="section content-workspace">
+            <div className="content-intro">
+              <div>
+                <div className="eyebrow">HUMAN-IN-THE-LOOP PRODUCTION</div>
+                <h2>استودیو تولید و بازبینی محتوا</h2>
+                <p>از شروع تولید تا تأیید سناریو، مشاهده ویدیو و درخواست نسخه جایگزین؛ همه در همین صفحه.</p>
               </div>
-              <div className="card">
-                <h2 style={{ fontSize: 16, marginTop: 0 }}>اتصال‌های تولید</h2>
-                <div className="field"><label>LLM Connection ID</label><input dir="ltr" value={llmConnectionId} onChange={(event) => setLlmConnectionId(event.target.value)} placeholder="UUID اتصال OpenAI-compatible" /></div>
-                <div className="field" style={{ marginTop: 12 }}><label>HeyGen Connection ID</label><input dir="ltr" value={videoConnectionId} onChange={(event) => setVideoConnectionId(event.target.value)} placeholder="UUID اتصال HeyGen" /></div>
-                <div className="notice" style={{ marginTop: 14 }}>تولید سناریو به سقف هزینه LLM نیاز دارد. تولید ویدیوی Scene یا Avatar پس از تأیید انسانی انجام می‌شود و برای Provider پولی به Budget شرکت نیاز دارد.</div>
-              </div>
+              <span className="pill">{projects.length} پروژه ثبت‌شده</span>
             </div>
-            <div className="section-head section"><h2>پروژه‌های محتوا</h2><span className="pill">{projects.length} پروژه</span></div>
-            <div className="list">
-              {projects.map((project) => (
-                <div className="row-item" key={project.id}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <strong>{project.topic}</strong>
-                    <p dir="ltr">{project.video_mode} · {project.id}</p>
-                    {project.error_message && <p>{project.error_message}</p>}
-                    <div className="actions" style={{ marginTop: 8 }}>
-                      {["draft", "script_failed"].includes(project.status) && <button className="button ghost" onClick={() => void generateProjectScript(project)}>{project.video_mode === "scene" ? "تولید سناریو" : "تولید Script"}</button>}
-                      {project.status === "script_ready" && <button className="button success" onClick={() => void approveContentProject(project)}>تأیید سناریو</button>}
-                      {project.status === "approved" && <button className="button" onClick={() => void generateProjectVideo(project)}>شروع تولید ویدیو</button>}
-                    </div>
-                  </div>
-                  <Status value={project.status} />
+
+            <div className="card">
+              <div className="section-head"><h2>شروع تولید جدید</h2><span className="muted small">یک بار ثبت؛ سپس انتظار برای تأیید انسانی</span></div>
+              <form className="form-grid" onSubmit={createContentProject}>
+                <div className="field">
+                  <label>برند</label>
+                  <select value={contentBrandId} onChange={(event) => setContentBrandId(event.target.value)} required>
+                    <option value="">انتخاب برند</option>
+                    {brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.display_name || brand.name}</option>)}
+                  </select>
                 </div>
-              ))}
-              {!projects.length && <div className="empty">پروژه‌ای ثبت نشده است. از فرم بالا اولین پروژه را بسازید.</div>}
+                <div className="field">
+                  <label>Scene Provider</label>
+                  <select value={sceneProviderId} onChange={(event) => setSceneProviderId(event.target.value)}>
+                    {sceneProviders.filter((provider) => !characterKey || provider.supports_reference_image).map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.display_name}</option>)}
+                  </select>
+                </div>
+                <div className="field full">
+                  <label>پلتفرم‌های مرجع این برند</label>
+                  <div className="platform-choice-list">
+                    {platforms.map((platform) => (
+                      <label className="platform-choice" key={platform.id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedPlatformIds.includes(platform.id)}
+                          onChange={(event) => setSelectedPlatformIds((current) =>
+                            event.target.checked
+                              ? [...current, platform.id]
+                              : current.filter((id) => id !== platform.id)
+                          )}
+                        />
+                        <span>{platform.name}</span>
+                        <small>{platform.platform_type || "platform"}</small>
+                      </label>
+                    ))}
+                    {!platforms.length && <span className="muted small">ابتدا پلتفرم‌ها را در بخش اتصال‌ها ثبت کنید.</span>}
+                  </div>
+                  <span className="muted small">در شروع تولید، منابع عمومی این پلتفرم‌ها دوباره بررسی می‌شوند؛ اگر محتوایی تغییر نکرده باشد از آخرین دانش تأییدشده استفاده می‌شود.</span>
+                </div>
+                <div className="field full">
+                  <label>موضوع، هدف و پیام ویدیو</label>
+                  <textarea dir="rtl" value={contentTopic} onChange={(event) => setContentTopic(event.target.value)} required minLength={3} placeholder="موضوع، مخاطب هدف، پیام اصلی و نتیجه‌ای که از ویدیو می‌خواهید…" />
+                </div>
+                <div className="field">
+                  <label>شخصیت / تصویر مرجع (اختیاری)</label>
+                  <select value={characterKey} onChange={(event) => {
+                    const nextKey = event.target.value;
+                    setCharacterKey(nextKey);
+                    if (nextKey) {
+                      const referenceProvider = sceneProviders.find((provider) => provider.supports_reference_image);
+                      if (referenceProvider) setSceneProviderId(referenceProvider.provider_id);
+                    }
+                  }}>
+                    <option value="">بدون تصویر مرجع</option>
+                    {characterImages.filter((item) => item.valid).map((item) => (
+                      <option key={item.key} value={item.key}>{item.platform} · {item.name}</option>
+                    ))}
+                  </select>
+                  <span className="muted small">تصویر انتخاب‌شده به‌عنوان مرجع اصلی ارسال می‌شود؛ در مسیر تولید ویدیو ویرایش تصویری انجام نمی‌شود.</span>
+                </div>
+                <div className="field">
+                  <label>اتصال LLM برای تولید سناریو</label>
+                  <p className="muted small">اتصال فعال LLM شرکت به‌صورت خودکار انتخاب می‌شود.</p>
+                </div>
+                <div className="field full actions">
+                  <button className="button" type="submit" disabled={loading}>{loading ? "در حال اجرا…" : "شروع تولید و ساخت سناریو"}</button>
+                </div>
+              </form>
             </div>
+
+            <div className="content-review-grid section">
+              <div className="card">
+                <div className="section-head"><h2>پروژه‌ها و نسخه‌ها</h2><span className="pill">{projects.length}</span></div>
+                <div className="list">
+                  {projects.map((project) => (
+                    <button type="button" className={`content-project-row ${selectedContentProjectId === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectContentProject(project.id)}>
+                      <span className="content-project-main">
+                        <strong>{project.video_title || project.topic}</strong>
+                        <small dir="ltr">{project.video_mode} · {project.scene_options?.revision_number ? `نسخه ${String(project.scene_options.revision_number)}` : "نسخه اصلی"} · {project.id.slice(0, 8)}</small>
+                      </span>
+                      <Status value={project.status} />
+                    </button>
+                  ))}
+                  {!projects.length && <div className="empty">هنوز پروژه‌ای ایجاد نشده است.</div>}
+                </div>
+              </div>
+
+              <div className="card content-review-panel">
+                {!selectedContentProject && (
+                  <div className="empty">برای مشاهده سناریو یا ویدیو، یک پروژه را انتخاب کنید یا تولید جدید را شروع کنید.</div>
+                )}
+                {selectedContentProject && (
+                  <>
+                    <div className="section-head">
+                      <div><h2>{selectedContentProject.video_title || selectedContentProject.topic}</h2><p className="muted small" dir="ltr">{selectedContentProject.id}</p></div>
+                      <Status value={selectedContentProject.status} />
+                    </div>
+                    {selectedContentProject.error_message && <div className="notice error">{selectedContentProject.error_message}</div>}
+
+                    {selectedContentProject.scenario && (
+                      <div className="scenario-review">
+                        <h3>سناریو برای تأیید شما</h3>
+                        {selectedContentProject.scenario.title && <h4>{selectedContentProject.scenario.title}</h4>}
+                        {(selectedContentProject.scenario.opening_hook || selectedContentProject.scenario.hook) && <p><strong>قلاب شروع:</strong> {selectedContentProject.scenario.opening_hook || selectedContentProject.scenario.hook}</p>}
+                        {selectedContentProject.scenario.summary && <p>{selectedContentProject.scenario.summary}</p>}
+                        <div className="scene-review-list">
+                          {(selectedContentProject.scenario.scenes || []).map((scene, index) => (
+                            <article className="scene-review-item" key={index}>
+                              <div className="scene-review-heading"><strong>صحنه {index + 1}{scene.title ? ` · ${scene.title}` : ""}</strong><span>{scene.duration_seconds ? `${scene.duration_seconds} ثانیه` : ""}</span></div>
+                              {scene.visual_prompt || scene.prompt ? <p><strong>تصویر:</strong> {scene.visual_prompt || scene.prompt}</p> : null}
+                              {scene.narration && <p><strong>گویندگی:</strong> {scene.narration}</p>}
+                              {scene.pronunciation_text && <p><strong>متن تلفظ با اعراب:</strong> {scene.pronunciation_text}</p>}
+                              {scene.camera_direction && <p><strong>حرکت دوربین:</strong> {scene.camera_direction}</p>}
+                              {scene.transition && <p><strong>گذار:</strong> {scene.transition}</p>}
+                              {scene.subtitle_text && <p><strong>زیرنویس:</strong> {scene.subtitle_text}</p>}
+                              {scene.on_screen_text && <p><strong>متن روی تصویر:</strong> {scene.on_screen_text}</p>}
+                            </article>
+                          ))}
+                        </div>
+                        {selectedContentProject.scenario.cta && <p><strong>دعوت به اقدام:</strong> {selectedContentProject.scenario.cta}</p>}
+                        {selectedContentProject.scenario.cta_pronunciation_text && <p><strong>تلفظ CTA:</strong> {selectedContentProject.scenario.cta_pronunciation_text}</p>}
+                        {selectedContentProject.scenario.caption && <p><strong>کپشن:</strong> {selectedContentProject.scenario.caption}</p>}
+                        {selectedContentProject.scenario.hashtags?.length ? <p className="muted">{selectedContentProject.scenario.hashtags.join(" ")}</p> : null}
+                      </div>
+                    )}
+
+                    {["script_generating", "video_generation_pending", "video_generating", "assembling"].includes(selectedContentProject.status) && (
+                      <div className="notice production-progress">
+                        {selectedContentProject.status === "script_generating" ? "در حال تحلیل و تولید سناریو با مدل زبانی…" : "در حال تولید، دریافت و آماده‌سازی ویدیو؛ وضعیت به‌صورت خودکار بروزرسانی می‌شود…"}
+                      </div>
+                    )}
+
+                    {selectedContentProject.status === "script_failed" && (
+                      <div className="human-gate">
+                        <p>تولید سناریو ناموفق بود؛ می‌توانید از همین‌جا دوباره تلاش کنید.</p>
+                        <button className="button ghost" onClick={() => void generateProjectScript(selectedContentProject)}>تلاش مجدد برای تولید سناریو</button>
+                      </div>
+                    )}
+                    {selectedContentProject.status === "script_ready" && (
+                      <div className="human-gate">
+                        <p>سناریو آماده است. قبل از تأیید شما هیچ درخواست تولید ویدیویی ارسال نمی‌شود.</p>
+                        <div className="actions">
+                          <button className="button success" disabled={loading} onClick={() => void approveContentProject(selectedContentProject)}>تأیید سناریو و شروع تولید ویدیو</button>
+                          
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedContentProject.video_mode === "scene" && selectedContentProject.status === "approved" && (
+                      <div className="human-gate">
+                        <p>سناریو تأیید شده است اما تولید ویدیو هنوز شروع نشده؛ می‌توانید ارسال را دوباره انجام دهید.</p>
+                        <button className="button" disabled={loading} onClick={() => void generateProjectVideo(selectedContentProject)}>شروع تولید ویدیو</button>
+                      </div>
+                    )}
+                    {selectedContentProject.status === "completed" && (
+                      <div className="video-review">
+                        <h3>بازبینی ویدیوی تولیدشده</h3>
+                        {videoPreviewUrl ? <video className="content-video-player" src={videoPreviewUrl} controls playsInline /> : <div className="notice">در حال آماده‌سازی پخش ویدیو…</div>}
+                        {videoPreviewUrl && <a className="button ghost" href={videoPreviewUrl} download={`vandad-${selectedContentProject.id}.mp4`}>دریافت فایل ویدیو</a>}
+                        <div className="human-gate reject-gate">
+                          <label>اگر ویدیو مناسب نیست، دلیل یا اصلاح موردنظر را بنویسید (اختیاری)</label>
+                          <textarea dir="rtl" value={videoFeedback} onChange={(event) => setVideoFeedback(event.target.value)} placeholder="مثلاً صحنه دوم تکراری است، حرکت دوربین طبیعی نیست، شخصیت باید واضح‌تر باشد…" />
+                          <button className="button danger" disabled={loading} onClick={() => void rejectAndRegenerateVideo(selectedContentProject)}>رد ویدیو و تولید نسخه جدید</button>
+                          <p className="muted small">نسخه فعلی حذف نمی‌شود؛ نسخه جدید با شناسه و تاریخچه مستقل ساخته می‌شود و سناریوی تأییدشده حفظ خواهد شد.</p>
+                        </div>
+                      </div>
+                    )}
+                    {selectedContentProject.status === "failed" && (
+                      <div className="human-gate"><p>این تلاش ناموفق بود. خطا را بررسی کنید یا پروژه را دوباره انتخاب کنید.</p></div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
             <div className="section-head section"><h2>برندها</h2><span className="muted small">{brands.length} برند</span></div>
             <div className="grid">
               {brands.map((brand) => <div className="card" key={brand.id}><div className="section-head"><h3>{brand.display_name || brand.name}</h3><Status value={brand.status} /></div><p className="muted small">{brand.industry || "صنعت تعریف نشده"}</p></div>)}
@@ -587,11 +961,35 @@ export default function HomePage() {
         )}
 
         {tab === "settings" && (
-          <div className="card section" style={{ maxWidth: 680 }}>
-            <h2 style={{ fontSize: 16, marginTop: 0 }}>تنظیمات اتصال</h2>
-            <div className="field"><label>Company ID (خالی = عضویت تک‌شرکتی در Production یا شرکت پیش‌فرض در توسعه)</label><input dir="ltr" value={companyId} onChange={(event) => setCompanyId(event.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
-            <div className="actions" style={{ marginTop: 14 }}><button className="button" onClick={saveCompany}>ذخیره و بارگذاری مجدد</button><button className="button ghost" onClick={() => { setCompanyId(""); window.localStorage.removeItem("vandad.companyId"); void load(); }}>استفاده از شرکت پیش‌فرض</button></div>
-            <div className="notice section">آدرس API از متغیر NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. در حالت توسعه مقدار پیش‌فرض http://localhost:8000/api/v1 است. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود؛ Backend نقش و عضویت شرکت را مجدداً بررسی می‌کند.</div>
+          <div className="section" style={{ maxWidth: 760 }}>
+            <div className="card">
+              <h2 style={{ fontSize: 16, marginTop: 0 }}>تنظیمات شرکت و API</h2>
+              <div className="field"><label>Company ID</label><input dir="ltr" value={companyId} onChange={(event) => setCompanyId(event.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
+              <div className="actions" style={{ marginTop: 14 }}><button className="button" onClick={saveCompany}>ذخیره و بارگذاری مجدد</button><button className="button ghost" onClick={() => { setCompanyId(""); window.localStorage.removeItem("vandad.companyId"); void load(); }}>استفاده از شرکت پیش‌فرض</button></div>
+              <div className="notice section">آدرس API از NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود.</div>
+            </div>
+            <div className="card section">
+            <div className="card section">
+              <h2 style={{ fontSize: 16, marginTop: 0 }}>افزودن منبع دانش / پلتفرم</h2>
+              <p className="muted small">منابع عمومی که می‌خواهی پیش از ساخت سناریو رصد و تحلیل شوند را اینجا ثبت کن.</p>
+              <form className="form-grid" onSubmit={createPlatform}>
+                <div className="field"><label>نام پلتفرم</label><input value={platformName} onChange={(event) => setPlatformName(event.target.value)} placeholder="وب‌سایت یا شبکه اجتماعی" required /></div>
+                <div className="field"><label>نوع</label><select value={platformType} onChange={(event) => setPlatformType(event.target.value)}><option value="website">وب‌سایت</option><option value="social_media">شبکه اجتماعی</option><option value="admin_panel">پنل مدیریت</option><option value="api_service">سرویس API</option><option value="other">سایر</option></select></div>
+                <div className="field full"><label>آدرس عمومی منبع</label><input dir="ltr" type="url" value={platformUrl} onChange={(event) => setPlatformUrl(event.target.value)} placeholder="https://example.com" required /></div>
+                <div className="field full"><button className="button" type="submit" disabled={loading || !companyId.trim()}>ثبت پلتفرم</button></div>
+              </form>
+              <div className="list section">{platforms.map((item) => <div className="row-item" key={item.id}><div><strong>{item.name}</strong><p dir="ltr">{item.base_url || item.platform_type}</p></div><Status value="active" /></div>)}{!platforms.length && <div className="empty">هنوز منبعی ثبت نشده است.</div>}</div>
+            </div>
+              <h2 style={{ fontSize: 16, marginTop: 0 }}>اتصال مدل زبانی (LLM)</h2>
+              <p className="muted small">کلید به‌صورت رمزنگاری‌شده در مخزن Credential ذخیره و با endpoint واقعی /models اعتبارسنجی می‌شود؛ کلید در پاسخ API یا مرورگر ذخیره نمی‌ماند.</p>
+              <form className="form-grid" onSubmit={createLlmConnection}>
+                <div className="field full"><label>OpenAI-compatible Base URL</label><input dir="ltr" value={llmBaseUrl} onChange={(event) => setLlmBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" required /></div>
+                <div className="field full"><label>Model ID</label><input dir="ltr" value={llmModel} onChange={(event) => setLlmModel(event.target.value)} placeholder="مدل ارائه‌دهنده" required /></div>
+                <div className="field full"><label>API Key</label><input dir="ltr" type="password" autoComplete="new-password" value={llmApiKey} onChange={(event) => setLlmApiKey(event.target.value)} required /></div>
+                <div className="field full"><button className="button" type="submit" disabled={loading || !companyId.trim()}>{loading ? "در حال اعتبارسنجی…" : "ذخیره و تست اتصال LLM"}</button></div>
+              </form>
+              {llmConnectionStatus && <div className="notice">{llmConnectionStatus}</div>}
+            </div>
           </div>
         )}
 

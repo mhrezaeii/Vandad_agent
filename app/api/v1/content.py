@@ -25,10 +25,12 @@ from app.schemas.content import (
     ProjectScriptApproval,
     SceneProjectCreate,
     SceneVideoJobRead,
+    SceneVideoRejectRequest,
     SceneVideoStartRequest,
 )
 from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
+from app.services.platform_monitor_service import PlatformMonitorService
 
 
 async def get_content_service(request: Request) -> AsyncIterator[ContentService]:
@@ -145,6 +147,52 @@ async def list_brand_platforms(
 
 
 # -------------------------------------------------------------------- projects
+@router.post("/brands/{brand_id}/monitor")
+async def monitor_brand_platforms(
+    brand_id: uuid.UUID,
+    payload: ContentConnectionRequest,
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> dict:
+    """Refresh public sources and evidence-backed knowledge for a brand's linked platforms."""
+    await service.get_brand(brand_id, company_id=scope.company_id)
+    linked_platforms = await service.list_brand_platforms(
+        brand_id, company_id=scope.company_id
+    )
+    if not linked_platforms:
+        raise ConflictError("Select at least one platform for this brand before monitoring.")
+    monitor_service = PlatformMonitorService(
+        service.session,
+        request.app.state.provider_registry,
+        request.app.state.provider_executor,
+        request.app.state.master_key_box,
+    )
+    try:
+        result = await monitor_service.monitor_brand(
+            brand_id=brand_id,
+            company_id=scope.company_id,
+            connection_id=await service.resolve_llm_connection_id(scope.company_id, payload.connection_id),
+        )
+    except ValueError as exc:
+        raise ConflictError(str(exc)) from exc
+    if result["status"] == "no_linked_platforms":
+        raise ConflictError("Select at least one platform for this brand before monitoring.")
+    if result["status"] == "no_active_platforms":
+        raise ConflictError("The selected brand has no active linked platforms.")
+    if result["status"] in {"refresh_failed", "partial_failure"}:
+        raise ConflictError(
+            "One or more selected platforms could not be refreshed; no new scenario was generated.",
+            details=result["platforms"],
+        )
+    if result["status"] == "no_knowledge":
+        raise ConflictError(
+            "No platform knowledge snapshot is available; check the platform sources and retry.",
+            details=result["platforms"],
+        )
+    return result
+
+
 @router.post("/projects", response_model=ContentProjectRead, status_code=201)
 async def create_project(
     payload: ContentProjectCreate,
@@ -187,8 +235,9 @@ async def generate_script(
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
+    connection_id = await service.resolve_llm_connection_id(scope.company_id, payload.connection_id)
     project = await service.generate_script(
-        project_id, scope=scope, connection_id=payload.connection_id
+        project_id, scope=scope, connection_id=connection_id
     )
     return ContentProjectRead.model_validate(project)
 
@@ -301,8 +350,9 @@ async def generate_scene_scenario(
     scope: Annotated[CompanyScope, Depends(company_scope)],
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
+    connection_id = await service.resolve_llm_connection_id(scope.company_id, payload.connection_id)
     project = await service.generate_scene_scenario(
-        project_id, scope=scope, connection_id=payload.connection_id
+        project_id, scope=scope, connection_id=connection_id
     )
     return ContentProjectRead.model_validate(project)
 
@@ -333,6 +383,25 @@ async def generate_scene_video(
 ) -> ContentProjectRead:
     project = await service.generate_scene_video(
         project_id, scope=scope, provider_id=payload.provider_id
+    )
+    return ContentProjectRead.model_validate(project)
+
+
+@router.post(
+    "/scene-projects/{project_id}/reject-video",
+    response_model=ContentProjectRead,
+)
+async def reject_scene_video(
+    project_id: uuid.UUID,
+    payload: SceneVideoRejectRequest,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    """Reject a completed video and immediately queue a new revision."""
+    project = await service.regenerate_scene_video(
+        project_id,
+        scope=scope,
+        feedback=payload.feedback,
     )
     return ContentProjectRead.model_validate(project)
 

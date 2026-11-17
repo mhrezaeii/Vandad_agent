@@ -152,6 +152,9 @@ def test_kie_settings_documented_in_env_example_load_into_settings():
     assert settings.scene_video_kie_mode == "normal"
     assert settings.scene_video_generation_mode == "multi_scene"
     assert settings.platform_characters_root == "assets/Paltform_charactar"
+    assert settings.scene_video_daily_quota is None
+    assert settings.scene_video_wavespeed_price_per_second_usd is None
+    assert settings.scene_video_http_base_url is None
     assert settings.scene_video_kie_upload_path == "vandad/character-references"
     # Poll settings documented for KIE exist and are consumed by the factory.
     assert settings.scene_video_poll_interval_seconds > 0

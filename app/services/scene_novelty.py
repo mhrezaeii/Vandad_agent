@@ -11,7 +11,12 @@ import unicodedata
 from difflib import SequenceMatcher
 
 _TOKEN_RE = re.compile(r"[a-z0-9\u0600-\u06ff]+", re.IGNORECASE)
-_VISUAL_LINE_RE = re.compile(r"(?:^|\s)VISUAL(?: PROMPT)?:\s*(.+?)\s*$", re.IGNORECASE)
+_VISUAL_BLOCK_RE = re.compile(
+    r"(?:^|\n)\s*(?:BEAT\s+\d+\s*:\s*)?"
+    r"VISUAL(?:\s+PROMPT)?\s*:\s*(.*?)"
+    r"(?=\n\s*(?:BEAT\s+\d+\s*:\s*)?VISUAL(?:\s+PROMPT)?\s*:|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def normalize_visual_signature(value: str) -> str:
@@ -43,13 +48,14 @@ def is_duplicate_visual(candidate: str, previous: str) -> bool:
 
 
 def extract_visual_signatures(prompt: str) -> list[str]:
+    # Some providers/logging paths persist prompts with escaped newlines.
+    # Normalize both representations before extracting storyboard beats.
+    normalized_prompt = (prompt or "").replace("\\n", "\n")
     signatures: list[str] = []
-    for line in (prompt or "").splitlines():
-        match = _VISUAL_LINE_RE.search(line)
-        if match:
-            signature = normalize_visual_signature(match.group(1))
-            if signature:
-                signatures.append(signature)
+    for match in _VISUAL_BLOCK_RE.finditer(normalized_prompt):
+        signature = normalize_visual_signature(match.group(1))
+        if signature:
+            signatures.append(signature)
     return signatures
 
 
