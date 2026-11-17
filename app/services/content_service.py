@@ -870,6 +870,18 @@ class ContentService:
             if brand is None or brand.company_id != scope.company_id:
                 raise NotFoundError("Brand not found for this project.")
             has_reference_source = bool(options.get("character_key") or options.get("character_image_url"))
+            single_shot_mode = (
+                (options.get("generation_mode") or "").strip().lower() == "single_shot"
+            )
+            if single_shot_mode:
+                candidate_provider = self.scene_video_registry.get(selected_provider)
+                if candidate_provider.requires_reference_image and not has_reference_source:
+                    raise UnprocessableEntityError(
+                        "Single-shot image-to-video generation requires a character "
+                        "reference image. Select a character or provide a public HTTPS "
+                        "character_image_url.",
+                        details=[{"field": "character_key"}],
+                    )
             required_durations = tuple(
                 float(scene["duration_seconds"])
                 for scene in scenario_scenes
@@ -877,7 +889,7 @@ class ContentService:
                 and isinstance(scene.get("duration_seconds"), (int, float))
                 and not isinstance(scene.get("duration_seconds"), bool)
             )
-            if (options.get("generation_mode") or "").strip().lower() == "single_shot":
+            if single_shot_mode:
                 # Single-shot submits ONE whole-video request. The registry's
                 # per-duration capability check is bypassed here so the
                 # explicit single-shot bounds validation below can fail with
