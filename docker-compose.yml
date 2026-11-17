@@ -212,7 +212,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
     networks:
       - backend
     depends_on:

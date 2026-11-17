@@ -52,6 +52,32 @@ authoritative usage is the task's reported `creditsConsumed` (converted to a
 USD ledger amount with `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD` — an accounting
 assumption, not a billing statement).
 
+### Budget planning at the configured credit price
+
+With the example `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD=0.005`, the image-to-video
+credit schedule implies these planning estimates:
+
+| Resolution | Credits/second | Estimated USD/second | 30 seconds | 60 seconds |
+|---|---:|---:|---:|---:|
+| 480p | 2.4 | $0.0120 | $0.36 | $0.72 |
+| 720p | 4.5 | $0.0225 | $0.675 | $1.35 |
+| 1080p | 8.0 | $0.0400 | $1.20 | $2.40 |
+
+The sub-$1 target for a 30–60 second final video is therefore compatible with
+480p generation on raw estimated credits only; 720p/1080p do not meet that
+target for a 60-second output. These estimates exclude retries and any
+supplier-side charges not represented by `creditsConsumed`. The application
+checks the estimated project cost against the company's per-operation budget
+before reservation, and settles the ledger from reported consumed credits.
+
+**Duration caveat:** the initial production default is single-shot, which
+submits exactly one image-to-video task and supports at most 30 seconds. The
+60-second figure above is a planning estimate only; it requires multi-scene
+generation and local assembly. Multi-scene mode is not part of the initial
+accepted production path until its separate end-to-end quality and audio
+acceptance is completed. Do not interpret the $0.72 estimate as evidence that
+60-second production has already passed acceptance.
+
 ## Single-shot mode (one prompt, one submission)
 
 With `generation_mode="single_shot"` (platform default via
@@ -78,7 +104,7 @@ body field `generation_mode`):
 4. The single provider MP4 (native audio preserved, no local TTS overlay) is
    the final deliverable via the existing single-clip passthrough path.
 
-The initial release defaults to `generation_mode="single_shot"`. Multi-scene generation remains disabled as a future controlled evaluation.
+The initial release defaults to `generation_mode="single_shot"`. Multi-scene mode is available only when explicitly selected with `generation_mode="multi_scene"`; it creates one paid KIE job per storyboard scene and assembles the returned clips locally while preserving their native audio tracks. It is not the default path. Because the default image-to-video model accepts at most 30 seconds per job, a 60-second deliverable requires multi-scene mode with every scene kept within the model-specific 6–30 second bounds. The multi-scene code path has mock-based tests, but credentialed end-to-end audio/quality acceptance remains a release gate.
 
 ## Character reference image
 
