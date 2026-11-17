@@ -40,7 +40,7 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "total_cost_usd", "cost_usd", "model", "latency_ms",
         "attempts", "provider_request_id", "currency", "routing_attempts",
         "fallback_used", "estimated_scene_cost_usd", "reported_scene_cost_usd",
-        "scene_predictions",
+        "scene_predictions", "credits_consumed",
     }
     safe: dict[str, Any] = {}
     for key, value in payload.items():
@@ -59,7 +59,7 @@ def _safe_usage(payload: dict[str, Any]) -> dict[str, Any]:
                     safe_item: dict[str, Any] = {}
                     for field in (
                         "scene_index", "prediction_id", "provider_job_id", "model_id", "status",
-                        "estimated_cost_usd", "reported_cost_usd", "submission_outcome",
+                        "estimated_cost_usd", "reported_cost_usd", "credits_consumed", "submission_outcome",
                     ):
                         field_value = item.get(field)
                         if isinstance(field_value, bool) or field_value is None:

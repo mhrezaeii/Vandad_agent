@@ -93,6 +93,7 @@ class SceneVideoProviderRead(BaseModel):
     model_id: str | None = None
     requires_network: bool
     supports_lipsync: bool
+    supports_native_audio: bool = False
     supports_reference_image: bool
     supports_cancellation: bool
     supports_composition: bool
@@ -107,6 +108,7 @@ class SceneVideoModelRead(BaseModel):
     provider_id: str
     model_id: str | None
     supports_lipsync: bool
+    supports_native_audio: bool = False
     supports_reference_image: bool
     supports_cancellation: bool
     supports_composition: bool

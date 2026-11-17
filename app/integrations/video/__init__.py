@@ -25,6 +25,7 @@ from app.integrations.video.base import (
     SceneVideoValidation,
 )
 from app.integrations.video.generic_http import GenericHttpConfig, GenericHttpSceneVideoProvider
+from app.integrations.video.kie import KIEConfig, KIESceneVideoProvider
 from app.integrations.video.mock import MockSceneVideoProvider
 from app.integrations.video.wavespeed import WaveSpeedConfig, WaveSpeedSceneVideoProvider
 
@@ -69,6 +70,7 @@ class SceneVideoProviderRegistry:
         require_composition: bool = False,
         require_lipsync: bool = False,
         require_quality_review: bool = False,
+        require_reference_image: bool = False,
         required_durations: tuple[float, ...] = (),
         required_aspect_ratio: str | None = None,
         required_language: str | None = None,
@@ -87,6 +89,10 @@ class SceneVideoProviderRegistry:
             if require_lipsync and not provider.supports_lipsync:
                 continue
             if require_quality_review and not provider.supports_quality_review:
+                continue
+            if require_reference_image and not provider.supports_reference_image:
+                continue
+            if provider.requires_reference_image and not require_reference_image:
                 continue
             if provider.min_duration_seconds is not None and any(
                 duration < provider.min_duration_seconds for duration in required_durations
@@ -124,6 +130,7 @@ class SceneVideoProviderRegistry:
         require_composition: bool = False,
         require_lipsync: bool = False,
         require_quality_review: bool = False,
+        require_reference_image: bool = False,
         required_durations: tuple[float, ...] = (),
         required_aspect_ratio: str | None = None,
         required_language: str | None = None,
@@ -136,6 +143,7 @@ class SceneVideoProviderRegistry:
                     require_composition=require_composition,
                     require_lipsync=require_lipsync,
                     require_quality_review=require_quality_review,
+                    require_reference_image=require_reference_image,
                     required_durations=required_durations,
                     required_aspect_ratio=required_aspect_ratio,
                     required_language=required_language,
@@ -167,6 +175,7 @@ def build_scene_video_registry(
     http_config: GenericHttpConfig | None = None,
     apimaster_config: APIMasterConfig | None = None,
     wavespeed_config: WaveSpeedConfig | None = None,
+    kie_config: KIEConfig | None = None,
     wavespeed_composition_provider: SceneVideoProvider | None = None,
     mock_provider: MockSceneVideoProvider | None = None,
 ) -> SceneVideoProviderRegistry:
@@ -183,6 +192,8 @@ def build_scene_video_registry(
         registry.register(GenericHttpSceneVideoProvider(http_config))
     if apimaster_config is not None:
         registry.register(APIMasterSceneVideoProvider(apimaster_config))
+    if kie_config is not None:
+        registry.register(KIESceneVideoProvider(kie_config))
     if wavespeed_config is not None:
         registry.register(WaveSpeedSceneVideoProvider(
             wavespeed_config, composition_provider=wavespeed_composition_provider
@@ -197,6 +208,8 @@ __all__ = [
     "GenericHttpConfig",
     "GenericHttpSceneVideoProvider",
     "MockSceneVideoProvider",
+    "KIEConfig",
+    "KIESceneVideoProvider",
     "SceneGenerationStatus",
     "SceneJobState",
     "SceneVideoError",

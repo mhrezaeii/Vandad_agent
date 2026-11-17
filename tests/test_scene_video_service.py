@@ -3,18 +3,21 @@ download, retry, quota exhaustion and cancellation. No real provider calls."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
 
+from app.core.exceptions import ConflictError
 from app.integrations.video import (
     MockSceneVideoProvider,
     SceneGenerationStatus,
     SceneJobState,
     SceneVideoPermanentError,
     SceneVideoQuotaExhaustedError,
+    SceneVideoRequest,
     SceneVideoTransientError,
     build_scene_video_registry,
 )
@@ -914,3 +917,312 @@ def test_flow_quota_tracker_and_cookie_conversion(tmp_path):
     ))
     status = service.status()
     assert status["session_present"] is False and status["remaining_today"] == 1  # same tracker state
+
+
+# ------------------------------------------------------------ single-shot mode
+class _ReferenceImageMock(MockSceneVideoProvider):
+    """Mock provider exposing the reference-image + duration capability flags.
+
+    Mirrors the KIE image-to-video fail-closed rule: no reference image means
+    no paid submission.
+    """
+
+    provider_id = "mockref"
+    supports_reference_image = True
+    supports_native_audio = True
+    min_duration_seconds = 6
+    max_duration_seconds = 30
+    max_prompt_characters = 5000
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.requests: list[SceneVideoRequest] = []
+
+    async def generate_video(self, request: SceneVideoRequest) -> str:
+        if not request.reference_image_url:
+            raise SceneVideoPermanentError(
+                "The mock image-to-video provider requires a character reference image.",
+                code="provider_reference_image_missing",
+            )
+        self.requests.append(request)
+        return await super().generate_video(request)
+
+
+class _UploadingReferenceMock(_ReferenceImageMock):
+    """Mock provider that also hosts local character images like KIE."""
+
+    provider_id = "mockupload"
+
+    def __init__(self, *, hosted_url: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.hosted_url = hosted_url
+        self.uploads: list[tuple[bytes, str]] = []
+
+    async def upload_reference_image(self, data: bytes, *, file_name: str) -> str:
+        self.uploads.append((data, file_name))
+        return self.hosted_url
+
+
+async def _single_shot_project(db_session, content_service, company_id, **options) -> ContentProject:
+    brand = await content_service.ensure_vandefence_brand(company_id=company_id)
+    scope = CompanyScope(
+        company_id=company_id, principal=Principal(subject="t", company_ids=frozenset({"*"}))
+    )
+    project = await content_service.create_scene_project(
+        scope=scope,
+        brand_id=brand.id,
+        topic="تک‌برداشت وندیار",
+        target_duration_seconds=20,
+        generation_mode="single_shot",
+        **options,
+    )
+    await db_session.commit()
+    return project
+
+
+async def test_single_shot_prepares_exactly_one_job_for_a_multi_beat_scenario(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    project = await _single_shot_project(
+        db_session, content_service, company.id,
+        character_key="Vandiyar/Emerald Blazer",
+        character_description="young office worker, round glasses, red tie",
+    )
+    service = _service(db_session, _ReferenceImageMock())
+
+    scenario = _scenario(count=4, duration=5.0)
+    jobs = await service.prepare_scenes(project, scenario, provider_id="mockref")
+    await db_session.commit()
+
+    assert len(jobs) == 1
+    assert len(await _jobs(db_session, project.id)) == 1
+    job = jobs[0]
+    assert job.scene_key == "single-shot"
+    assert job.duration_seconds == 20.0
+    assert job.narration == scenario.narration
+    # The single prompt carries every beat, the Persian speech rules and the
+    # character consistency instructions.
+    prompt = job.prompt
+    assert prompt.count("Beat ") == 4
+    assert "Iranian Persian" in prompt
+    assert "CHARACTER CONSISTENCY" in prompt
+    assert job.submission_metadata["generation_mode"] == "single_shot"
+
+
+async def test_single_shot_rejects_scenario_outside_provider_duration_bounds(
+    db_session, content_service, company_and_platform
+):
+    from app.integrations.video.base import SceneVideoPermanentError
+
+    company, _ = company_and_platform
+    project = await _single_shot_project(
+        db_session, content_service, company.id, character_key="Vandiyar/Emerald Blazer"
+    )
+    service = _service(db_session, _ReferenceImageMock())
+
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await service.prepare_scenes(project, _scenario(count=10, duration=5.0), provider_id="mockref")
+    assert error.value.code == "provider_invalid_duration"
+    assert "never splits" in error.value.message
+    assert await _jobs(db_session, project.id) == []
+
+    project_short = await _single_shot_project(
+        db_session, content_service, company.id, character_key="Vandiyar/Emerald Blazer"
+    )
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await service.prepare_scenes(
+            project_short, _scenario(count=1, duration=5.0), provider_id="mockref"
+        )
+    assert error.value.code == "provider_invalid_duration"
+
+
+async def test_single_shot_submit_passes_reference_image_and_submits_once(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    project = await _single_shot_project(
+        db_session, content_service, company.id,
+        character_image_url="https://assets.example.test/character.png",
+    )
+    provider = _ReferenceImageMock(poll_steps=1)
+    service = _service(db_session, provider)
+
+    await service.prepare_scenes(project, _scenario(count=4, duration=5.0), provider_id="mockref")
+    await db_session.commit()
+    summary = await service.submit_pending(project)
+    await db_session.commit()
+
+    assert summary["submitted"] == 1
+    assert len(provider.requests) == 1
+    assert provider.requests[0].reference_image_url == "https://assets.example.test/character.png"
+    assert provider.requests[0].metadata["generation_mode"] == "single_shot"
+    # A second submission attempt is a no-op: no duplicate paid job.
+    second = await service.submit_pending(project)
+    assert second["submitted"] == 0
+    assert len(provider.requests) == 1
+
+
+async def test_single_shot_local_character_image_is_uploaded_and_transmitted(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    company, _ = company_and_platform
+    character_root = tmp_path / "Paltform_charactar" / "Vandiyar"
+    character_root.mkdir(parents=True)
+    (character_root / "Emerald Blazer.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 1100)
+
+    project = await _single_shot_project(
+        db_session, content_service, company.id, character_key="Vandiyar/Emerald Blazer"
+    )
+    provider = _UploadingReferenceMock(
+        hosted_url="https://tempfile.example.test/vandad/character-references/Emerald Blazer.png",
+        poll_steps=1,
+    )
+    service = _service(db_session, provider, characters_root=tmp_path / "Paltform_charactar")
+
+    await service.prepare_scenes(project, _scenario(count=3, duration=5.0), provider_id="mockupload")
+    await db_session.commit()
+    summary = await service.submit_pending(project)
+    await db_session.commit()
+
+    assert summary["submitted"] == 1
+    assert len(provider.uploads) == 1
+    data, file_name = provider.uploads[0]
+    assert data.startswith(b"\x89PNG") and file_name == "Emerald Blazer.png"
+    assert provider.requests[0].reference_image_url == provider.hosted_url
+
+
+async def test_single_shot_missing_character_image_fails_before_paid_submission(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    project = await _single_shot_project(db_session, content_service, company.id)
+    provider = _ReferenceImageMock(poll_steps=1)
+    service = _service(db_session, provider)
+
+    await service.prepare_scenes(project, _scenario(count=3, duration=5.0), provider_id="mockref")
+    await db_session.commit()
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await service.submit_pending(project)
+    assert error.value.code == "provider_reference_image_missing"
+    assert provider.requests == []
+    jobs = await _jobs(db_session, project.id)
+    assert jobs[0].status == "failed"
+    assert jobs[0].error_code == "provider_reference_image_missing"
+
+
+async def test_multi_scene_mode_still_prepares_one_job_per_beat(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    scope = CompanyScope(
+        company_id=company.id, principal=Principal(subject="t", company_ids=frozenset({"*"}))
+    )
+    project = await content_service.create_scene_project(
+        scope=scope, brand_id=brand.id, topic="چند صحنه", target_duration_seconds=15,
+        generation_mode="multi_scene",
+    )
+    await db_session.commit()
+    service = _service(db_session, MockSceneVideoProvider())
+
+    jobs = await service.prepare_scenes(project, _scenario(count=3), provider_id="mock")
+    assert len(jobs) == 3
+    assert jobs[0].scene_key == "scene-00"
+    assert "AUDIO:" in jobs[0].prompt
+
+
+async def test_multi_scene_local_character_image_is_uploaded_only_once(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    company, _ = company_and_platform
+    character_root = tmp_path / "Paltform_charactar" / "Vandiyar"
+    character_root.mkdir(parents=True)
+    (character_root / "Emerald Blazer.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 1100
+    )
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    scope = CompanyScope(
+        company_id=company.id, principal=Principal(subject="t", company_ids=frozenset({"*"}))
+    )
+    project = await content_service.create_scene_project(
+        scope=scope,
+        brand_id=brand.id,
+        topic="چند صحنه با شخصیت",
+        target_duration_seconds=15,
+        generation_mode="multi_scene",
+        character_key="Vandiyar/Emerald Blazer",
+    )
+    await db_session.commit()
+    hosted = "https://tempfile.example.test/vandad/character-references/Emerald Blazer.png"
+    provider = _UploadingReferenceMock(hosted_url=hosted, poll_steps=1)
+    service = _service(
+        db_session, provider, characters_root=tmp_path / "Paltform_charactar"
+    )
+
+    jobs = await service.prepare_scenes(
+        project, _scenario(count=3, duration=5.0), provider_id="mockupload"
+    )
+    await db_session.commit()
+    summary = await service.submit_pending(project)
+    await db_session.commit()
+
+    assert summary["submitted"] == 3
+    # A storyboard reuses one character: exactly one free upload is performed.
+    assert len(provider.uploads) == 1
+    assert [request.reference_image_url for request in provider.requests] == [hosted] * 3
+    original_bytes = (character_root / "Emerald Blazer.png").read_bytes()
+    expected_sha256 = hashlib.sha256(original_bytes).hexdigest()
+    assert provider.uploads[0][0] == original_bytes
+    assert project.scene_options["character_image_sha256"] == expected_sha256
+    assert all(job.submission_metadata["character_image_sha256"] == expected_sha256 for job in jobs)
+    assert all("REFERENCE IMAGE (immutable source)" in job.prompt for job in jobs)
+
+
+async def test_prepare_scenes_rejects_duplicate_visuals_inside_one_storyboard(
+    db_session, content_service, company_and_platform
+):
+    from app.core.exceptions import ConflictError
+    company, _ = company_and_platform
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    scope = CompanyScope(company_id=company.id, principal=Principal(subject="t", company_ids=frozenset({"*"})))
+    project = await content_service.create_scene_project(
+        scope=scope, brand_id=brand.id, topic="تست جلوگیری از صحنه تکراری",
+        target_duration_seconds=12, generation_mode="multi_scene",
+    )
+    await db_session.commit()
+    scenario = _scenario(count=2, duration=6.0)
+    scenes = [
+        scenario.scenes[0],
+        scenario.scenes[1].model_copy(
+            update={"visual_prompt": scenario.scenes[0].visual_prompt}
+        ),
+    ]
+    scenario = scenario.model_copy(update={"scenes": scenes})
+    service = _service(db_session, MockSceneVideoProvider())
+    with pytest.raises(ConflictError, match="repeats a visual"):
+        await service.prepare_scenes(project, scenario, provider_id="mock")
+
+
+async def test_single_shot_never_silently_switches_to_multi_scene_jobs(
+    db_session, content_service, company_and_platform
+):
+    company, _ = company_and_platform
+    project = await _single_shot_project(
+        db_session, content_service, company.id, character_key="Vandiyar/Emerald Blazer"
+    )
+    service = _service(db_session, _ReferenceImageMock())
+    await service.prepare_scenes(project, _scenario(count=3, duration=5.0), provider_id="mockref")
+    await db_session.commit()
+
+    # A prepared single-shot project must not silently gain per-scene jobs.
+    project.scene_options = {**(project.scene_options or {}), "generation_mode": "multi_scene"}
+    with pytest.raises(ConflictError):
+        await service.prepare_scenes(project, _scenario(count=3), provider_id="mockref")
+
+    project.scene_options = {**(project.scene_options or {}), "generation_mode": "single_shot"}
+    jobs = await service.prepare_scenes(
+        project, _scenario(count=3, duration=5.0), provider_id="mockref"
+    )
+    assert len(jobs) == 1
+    assert len(await _jobs(db_session, project.id)) == 1

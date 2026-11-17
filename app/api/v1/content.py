@@ -240,8 +240,55 @@ async def create_scene_project(
         scene_count=payload.scene_count,
         provider_id=payload.provider_id,
         screenshots_platform=payload.screenshots_platform,
+        generation_mode=payload.generation_mode,
+        character_key=payload.character_key,
+        character_image_url=payload.character_image_url,
+        character_description=payload.character_description,
     )
     return ContentProjectRead.model_validate(project)
+
+
+@router.get("/character-images")
+async def list_character_images(
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+) -> list[dict[str, object]]:
+    """List operator-managed character reference images (no paths exposed).
+
+    Keys follow ``<Platform>/<character name>`` under ``PLATFORM_CHARACTERS_ROOT``;
+    each entry is validated against the image-to-video provider constraints so
+    callers can pick a usable character before starting the pipeline.
+    """
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.services.character_service import (  # noqa: PLC0415
+        CharacterImageError,
+        list_character_images,
+        validate_character_image,
+    )
+
+    results: list[dict[str, object]] = []
+    for image in list_character_images(get_settings().platform_characters_root):
+        try:
+            validate_character_image(image)
+        except CharacterImageError as exc:
+            results.append({
+                "key": image.key,
+                "platform": image.platform,
+                "name": image.name,
+                "size_bytes": image.size_bytes,
+                "content_type": image.content_type,
+                "valid": False,
+                "error": exc.message,
+            })
+            continue
+        results.append({
+            "key": image.key,
+            "platform": image.platform,
+            "name": image.name,
+            "size_bytes": image.size_bytes,
+            "content_type": image.content_type,
+            "valid": True,
+        })
+    return results
 
 
 @router.post(

@@ -25,9 +25,12 @@ from urllib.parse import urlsplit
 import httpx
 
 try:
-    from dotenv import load_dotenv
+    # Executing this helper directly should see local .env values; importing it
+    # must not change the environment of the importing process.
+    if __name__ == "__main__":
+        from dotenv import load_dotenv
 
-    load_dotenv()
+        load_dotenv()
 except ImportError:  # pragma: no cover - dotenv is a development dependency
     pass
 

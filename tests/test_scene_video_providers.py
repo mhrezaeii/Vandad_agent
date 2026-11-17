@@ -346,6 +346,24 @@ def test_ordered_registry_selection_skips_models_missing_required_capabilities()
         registry.resolve_ordered(["apimaster"], require_composition=True)
 
 
+def test_registry_requires_reference_image_capability_when_image_is_supplied():
+    registry = SceneVideoProviderRegistry()
+    text_only = MockSceneVideoProvider()
+    text_only.provider_id = "text-only"
+    image_to_video = MockSceneVideoProvider()
+    image_to_video.provider_id = "image-to-video"
+    image_to_video.supports_reference_image = True
+    image_to_video.requires_reference_image = True
+    registry.register(text_only)
+    registry.register(image_to_video)
+    selected = registry.resolve_ordered(["text-only", "image-to-video"], require_reference_image=True)
+    assert selected.provider_id == "image-to-video"
+    with pytest.raises(SceneVideoProviderRegistryError, match="satisfies the requested capabilities"):
+        registry.resolve_ordered(["text-only"], require_reference_image=True)
+    without_image = registry.resolve_ordered(["image-to-video", "text-only"])
+    assert without_image.provider_id == "text-only"
+
+
 def test_registry_includes_mock_and_only_configured_http():
     mock_only = build_scene_video_registry()
     assert mock_only.has("mock") is True

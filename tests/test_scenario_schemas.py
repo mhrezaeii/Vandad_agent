@@ -107,6 +107,47 @@ def test_normalize_rejects_scene_without_visual_prompt():
         normalize_scenario(raw, request)
 
 
+def test_pronunciation_text_preserves_words_and_rejects_rewrites():
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارسی صَحنه 1"
+    scenario = normalize_scenario(raw, request)
+    assert scenario.scenes[0].pronunciation_text == "رِوایت فارسی صَحنه 1"
+    raw["scenes"][0]["pronunciation_text"] = "درود فارسی"
+    with pytest.raises(ValueError, match="exact narration words"):
+        normalize_scenario(raw, request)
+
+
+def test_production_fa_scenario_requires_vowelized_pronunciation_text():
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30, require_pronunciation_text=True)
+    raw = _raw_scenario(count=2, duration=15.0)
+    with pytest.raises(ValueError, match="pronunciation_text with diacritics"):
+        normalize_scenario(raw, request)
+    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارسی صَحنه 1"
+    raw["scenes"][1]["pronunciation_text"] = "رِوایت فارسی صَحنه 2"
+    raw["cta_pronunciation_text"] = "هَمین حالا شُروع کُنید"
+    scenario = normalize_scenario(raw, request)
+    assert scenario.scenes[0].pronunciation_text == "رِوایت فارسی صَحنه 1"
+
+
+def test_storyboard_prompt_requests_vowelized_text_and_uses_brand_lexicon():
+    request = ScenarioRequest(
+        topic="موضوع تست",
+        target_duration_seconds=30,
+        pronunciation_lexicon={"وندیار": "وَندیار"},
+    )
+    system, user = build_scenario_prompt(request)
+    assert "pronunciation_text" in user
+    assert "اعراب" in system
+    assert "وَندیار" in user
+
+
+def test_storyboard_prompt_allows_only_the_supplied_reference_character():
+    request = ScenarioRequest(topic="معرفی محصول", target_duration_seconds=30, has_reference_image=True)
+    system, _user = build_scenario_prompt(request)
+    assert "تصویر مرجع کاراکتر" in system
+
+
 def test_parse_scenario_content_accepts_fenced_json():
     request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
     payload = json.dumps(_raw_scenario(), ensure_ascii=False)
@@ -210,3 +251,30 @@ def test_review_scenario_passes_valid_and_flags_problems():
     )
     issues = review_scenario(non_persian, target_duration_seconds=30)
     assert any("Persian" in issue for issue in issues)
+
+
+def test_review_scenario_requires_every_spoken_and_written_surface_in_persian():
+    """Title, narration, CTA, on-screen text and subtitles must all be Persian."""
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    english = normalize_scenario(
+        {
+            **raw,
+            "narration": "English only full narration",
+            "cta": "Start now",
+            "scenes": [
+                {**raw["scenes"][0], "on_screen_text": "BUY NOW"},
+                {**raw["scenes"][1], "subtitle_text": "English subtitle"},
+            ],
+        },
+        request,
+    )
+
+    issues = review_scenario(english, target_duration_seconds=30, language="fa-IR")
+    persian_issues = [issue for issue in issues if "must be Persian" in issue]
+    assert any(issue.startswith("narration") for issue in persian_issues)
+    assert any(issue.startswith("cta") for issue in persian_issues)
+    assert any("scene 1 on_screen_text" in issue for issue in persian_issues)
+    assert any("scene 2 subtitle_text" in issue for issue in persian_issues)

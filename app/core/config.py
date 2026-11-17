@@ -141,10 +141,37 @@ class Settings(BaseSettings):
     # production stays an explicit, billable, operator-initiated request.
     platform_monitor_enabled: bool = True
     platform_monitor_interval_seconds: int = Field(default=21600, ge=60)
-    scene_video_poll_interval_seconds: float = Field(default=30.0, gt=0, le=3600)
-    scene_video_max_poll_attempts: int = Field(default=60, ge=1, le=600)
+    scene_video_poll_interval_seconds: float = Field(default=3.0, gt=0, le=3600)
+    scene_video_max_poll_attempts: int = Field(default=300, ge=1, le=600)
     scene_video_output_width: int = Field(default=1080, ge=1, le=8192)
     scene_video_output_height: int = Field(default=1920, ge=1, le=8192)
+
+    # KIE.ai Grok Imagine. "grok-imagine/image-to-video" (default) generates
+    # one continuous Persian video from one reference image in a single paid
+    # submission (6..30s); "grok-imagine-video-1-5-preview" remains available
+    # as the per-scene text-to-video alternative (1..15s).
+    scene_video_kie_api_key: str | None = None
+    scene_video_kie_base_url: str = "https://api.kie.ai"
+    scene_video_kie_model: Literal[
+        "grok-imagine/image-to-video", "grok-imagine-video-1-5-preview"
+    ] = "grok-imagine/image-to-video"
+    scene_video_kie_resolution: Literal["480p", "720p", "1080p"] = "480p"
+    scene_video_kie_aspect_ratio: str = "9:16"
+    scene_video_kie_mode: Literal["normal", "fun"] = "normal"
+    scene_video_kie_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    scene_video_kie_price_per_credit_usd: float = Field(default=0.005, gt=0, le=1)
+    scene_video_kie_download_allowed_hosts: str = ""
+    # Optional override for the reference-image upload host (defaults to the
+    # jobs base URL). Uploaded files are temporary provider-side storage.
+    scene_video_kie_upload_base_url: str | None = None
+    scene_video_kie_upload_path: str = "vandad/character-references"
+
+    # Single-shot generation: combine the complete approved scenario into ONE
+    # provider prompt and ONE paid submission (image-to-video path). The
+    # multi-scene storyboard pipeline stays the default for compatibility.
+    scene_video_generation_mode: Literal["multi_scene", "single_shot"] = "multi_scene"
+    # Operator-managed character reference images: <root>/<Platform>/<name>.png
+    platform_characters_root: str = "assets/Paltform_charactar"
 
     # APIMaster is opt-in; no paid request is made unless selected explicitly.
     scene_video_apimaster_api_key: str | None = None

@@ -61,7 +61,7 @@ TRIGGER_NODE_TYPES = frozenset({NodeType.TRIGGER_MANUAL})
 
 # Execution-setting bounds shared by every node type.
 MAX_NODE_TIMEOUT_SECONDS = 1800  # long media operations (download/render)
-MAX_NODE_RETRIES = 60
+MAX_NODE_RETRIES = 300  # supports the configured media polling window
 MAX_DELAY_SECONDS = 3600
 
 

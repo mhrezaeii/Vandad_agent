@@ -129,6 +129,36 @@ class SceneProjectCreate(BaseModel):
             "screenshots are overlaid during assembly."
         ),
     )
+    generation_mode: Literal["multi_scene", "single_shot"] | None = Field(
+        default=None,
+        description=(
+            "single_shot combines the complete approved scenario into ONE provider "
+            "prompt and exactly ONE paid submission; multi_scene (platform default) "
+            "keeps one paid job per storyboard beat."
+        ),
+    )
+    character_key: str | None = Field(
+        default=None,
+        max_length=300,
+        description=(
+            "Key of a validated local character reference image under the character "
+            "root, formatted '<Platform>/<character name>'; used for image-to-video "
+            "single-shot generation."
+        ),
+    )
+    character_image_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description=(
+            "Public HTTPS URL of a character reference image the provider can "
+            "fetch; alternative to character_key for externally hosted assets."
+        ),
+    )
+    character_description: str | None = Field(
+        default=None,
+        max_length=1000,
+        description="Short description of the selected character for consistency instructions.",
+    )
 
 
 class SceneVideoStartRequest(BaseModel):

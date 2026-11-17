@@ -250,6 +250,7 @@ def _scene_service(engine):  # noqa: ANN001 - WorkflowEngine
         max_attempts=settings.scene_video_max_scene_attempts,
         max_size_bytes=settings.artifact_max_size_bytes,
         screenshots_root=settings.platform_screenshots_root,
+        characters_root=settings.platform_characters_root,
         tts_settings=tts_settings_from(settings),
     )
 
