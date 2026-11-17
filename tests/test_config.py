@@ -78,7 +78,7 @@ def test_kie_key_is_required_for_the_selected_provider():
         build_video_registry_from_settings(settings)
 
 
-def test_kie_settings_documented_in_env_example_load_into_settings():
+def test_kie_settings_documented_in_env_example_load_into_settings(monkeypatch):
     """Every documented SCENE_VIDEO_KIE_* / mode / character variable is real.
 
     Guards .env.example drift: parsing the example file with the Settings
