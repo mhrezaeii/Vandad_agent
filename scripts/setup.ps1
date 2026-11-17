@@ -16,13 +16,15 @@ if (-not (Test-Path ".env.example")) {
 
 function New-RandomBase64([int]$Length = 32) {
     $bytes = [byte[]]::new($Length)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
     return [Convert]::ToBase64String($bytes)
 }
 function New-RandomHex([int]$Length = 32) {
     $bytes = [byte[]]::new($Length)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToHexString($bytes).ToLowerInvariant()
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return [BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
 }
 function Set-EnvLine([string]$Name, [string]$Value) {
     $script:content = [regex]::Replace(
