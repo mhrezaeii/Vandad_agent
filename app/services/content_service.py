@@ -1381,9 +1381,7 @@ class ContentService:
         """
         bound_graph = graph
         if connection_id is not None:
-            llm_placeholder = "__LLM_CONNECTION__" if "script" in name else "__HEYGEN_CONNECTION__"
-            bound_graph = _bind_connection(graph, llm_placeholder, connection_id)
-            bound_graph = _bind_connection(bound_graph, "__HEYGEN_CONNECTION__", connection_id)
+            bound_graph = _bind_connection(graph, "__LLM_CONNECTION__", connection_id)
 
         workflow = (
             await self.session.execute(

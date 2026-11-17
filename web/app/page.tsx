@@ -15,7 +15,7 @@ type EventItem = { id: string; sequence: number; event_type: string; payload: Re
 type Brand = { id: string; name: string; display_name?: string; industry?: string; status: string };
 type ScenarioScene = { index?: number; scene_index?: number; title?: string; scene_type?: string; visual_prompt?: string; prompt?: string; camera_direction?: string; transition?: string; narration?: string; pronunciation_text?: string; on_screen_text?: string; subtitle_text?: string; duration_seconds?: number };
 type Scenario = { title?: string; hook?: string; opening_hook?: string; summary?: string; visual_style?: string; scenes?: ScenarioScene[]; cta?: string; cta_pronunciation_text?: string; caption?: string; hashtags?: string[] };
-type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "avatar" | "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
+type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
 type CharacterImage = { key: string; platform: string; name: string; valid: boolean; error?: string };
 type LlmConnection = { id: string; name: string; provider: string; status: string };
 type Platform = { id: string; name: string; slug: string; base_url?: string; platform_type?: string };
@@ -75,10 +75,8 @@ export default function HomePage() {
   const [budgetProvider, setBudgetProvider] = useState("llm_openai");
   const [monthlyLimit, setMonthlyLimit] = useState("20");
   const [operationLimit, setOperationLimit] = useState("2");
-  const [contentMode, setContentMode] = useState<"avatar" | "scene">("scene");
   const [contentBrandId, setContentBrandId] = useState("");
   const [contentTopic, setContentTopic] = useState("");
-  const [videoConnectionId, setVideoConnectionId] = useState("");
   const [llmBaseUrl, setLlmBaseUrl] = useState("https://api.openai.com/v1");
   const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
@@ -183,7 +181,6 @@ export default function HomePage() {
       "platform.knowledge.extract": { platform_id: "", connection_id: "", max_documents: 20 },
       "content.scenario.generate": { project_id: "", connection_id: "", timeout_seconds: 180 },
       "video.scene.generate": { project_id: "", provider_id: "" },
-      "video.avatar.generate": { project_id: "", connection_id: "" },
     };
     const template = templates[taskCapability];
     if (template) setTaskPayload(JSON.stringify(template, null, 2));
@@ -385,30 +382,23 @@ export default function HomePage() {
     event.preventDefault();
     await run(async () => {
       if (!contentBrandId) throw new Error("ابتدا یک برند انتخاب کنید.");
-      if (contentMode === "scene") {
-        if (selectedPlatformIds.length === 0) {
+      if (selectedPlatformIds.length === 0) {
           throw new Error("برای این برند حداقل یک پلتفرم مرجع انتخاب کنید.");
         }
-        await api(`/content/brands/${contentBrandId}/platforms`, {
+      await api(`/content/brands/${contentBrandId}/platforms`, {
           method: "PUT",
-          body: JSON.stringify({ platform_ids: selectedPlatformIds }),
-        });
-        setNotice("در حال رصد پلتفرم‌های انتخاب‌شده و بروزرسانی دانش تأییدشده…");
-        await api(`/content/brands/${contentBrandId}/monitor`, {
-          method: "POST",
-          body: JSON.stringify({}),
-        });
-        setNotice("رصد و تحلیل تمام شد؛ در حال ارسال دانش تأییدشده برای ساخت سناریو…");
-      }
+        body: JSON.stringify({ platform_ids: selectedPlatformIds }),
+      });
+      setNotice("در حال رصد پلتفرم‌های انتخاب‌شده و بروزرسانی دانش تأییدشده…");
+      await api(`/content/brands/${contentBrandId}/monitor`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setNotice("رصد و تحلیل تمام شد؛ در حال ارسال دانش تأییدشده برای ساخت سناریو…");
 
+      if (!characterKey) throw new Error("برای تولید با KIE انتخاب تصویر مرجع شخصیت الزامی است.");
       let project: ContentProject;
-      if (contentMode === "avatar") {
-        project = await api<ContentProject>("/content/projects", {
-          method: "POST",
-          body: JSON.stringify({ brand_id: contentBrandId, topic: contentTopic }),
-        });
-      } else {
-        project = await api<ContentProject>("/content/scene-projects", {
+      project = await api<ContentProject>("/content/scene-projects", {
           method: "POST",
           body: JSON.stringify({
             brand_id: contentBrandId,
@@ -416,16 +406,15 @@ export default function HomePage() {
             target_duration_seconds: 30,
             provider_id: sceneProviderId || undefined,
             character_key: characterKey || undefined,
-            generation_mode: characterKey ? "single_shot" : "multi_scene",
+            generation_mode: "single_shot",
           }),
         });
-        setSelectedContentProjectId(project.id);
-        setSelectedContentProject(project);
-        project = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-scenario`, {
-          method: "POST",
-          body: JSON.stringify({}),
-        });
-      }
+      setSelectedContentProjectId(project.id);
+      setSelectedContentProject(project);
+      project = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-scenario`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
       setSelectedContentProjectId(project.id);
       setSelectedContentProject(project);
       setVideoPreviewUrl("");
@@ -436,9 +425,7 @@ export default function HomePage() {
 
   const generateProjectScript = async (project: ContentProject) => {
     await run(async () => {
-      const prefix = project.video_mode === "scene" ? "/content/scene-projects" : "/content/projects";
-      const action = project.video_mode === "scene" ? "generate-scenario" : "generate-script";
-      await api(`${prefix}/${project.id}/${action}`, {
+      await api(`/content/scene-projects/${project.id}/generate-scenario`, {
         method: "POST",
         body: JSON.stringify({}),
       });
@@ -447,40 +434,25 @@ export default function HomePage() {
 
   const approveContentProject = async (project: ContentProject) => {
     await run(async () => {
-      if (project.video_mode === "scene") {
-        await api(`/content/scene-projects/${project.id}/approve-scenario`, {
-          method: "POST",
-          body: JSON.stringify({ approved: true }),
-        });
-        const started = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-video`, {
-          method: "POST",
-          body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
-        });
-        setSelectedContentProjectId(started.id);
-        setSelectedContentProject(started);
-      } else {
-        await api(`/content/projects/${project.id}/approve-script`, {
-          method: "POST",
-          body: JSON.stringify({ approved: true }),
-        });
-      }
+      await api(`/content/scene-projects/${project.id}/approve-scenario`, {
+        method: "POST",
+        body: JSON.stringify({ approved: true }),
+      });
+      const started = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-video`, {
+        method: "POST",
+        body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
+      });
+      setSelectedContentProjectId(started.id);
+      setSelectedContentProject(started);
     }, "سناریو تأیید شد؛ تولید ویدیو بدون خروج از همین صفحه آغاز شد.");
   };
 
   const generateProjectVideo = async (project: ContentProject) => {
     await run(async () => {
-      if (project.video_mode === "avatar") {
-        if (!videoConnectionId.trim()) throw new Error("شناسه اتصال HeyGen را وارد کنید.");
-        await api(`/content/projects/${project.id}/generate-video`, {
-          method: "POST",
-          body: JSON.stringify({ connection_id: videoConnectionId.trim() }),
-        });
-      } else {
-        await api(`/content/scene-projects/${project.id}/generate-video`, {
-          method: "POST",
-          body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
-        });
-      }
+      await api(`/content/scene-projects/${project.id}/generate-video`, {
+        method: "POST",
+        body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
+      });
     }, "Workflow تولید ویدیو به صف ارسال شد.");
   };
 
@@ -781,8 +753,8 @@ export default function HomePage() {
                   <textarea dir="rtl" value={contentTopic} onChange={(event) => setContentTopic(event.target.value)} required minLength={3} placeholder="موضوع، مخاطب هدف، پیام اصلی و نتیجه‌ای که از ویدیو می‌خواهید…" />
                 </div>
                 <div className="field">
-                  <label>شخصیت / تصویر مرجع (اختیاری)</label>
-                  <select value={characterKey} onChange={(event) => {
+                  <label>شخصیت / تصویر مرجع (الزامی برای KIE)</label>
+                  <select value={characterKey} required onChange={(event) => {
                     const nextKey = event.target.value;
                     setCharacterKey(nextKey);
                     if (nextKey) {
@@ -790,7 +762,7 @@ export default function HomePage() {
                       if (referenceProvider) setSceneProviderId(referenceProvider.provider_id);
                     }
                   }}>
-                    <option value="">بدون تصویر مرجع</option>
+                    <option value="">انتخاب تصویر مرجع</option>
                     {characterImages.filter((item) => item.valid).map((item) => (
                       <option key={item.key} value={item.key}>{item.platform} · {item.name}</option>
                     ))}
