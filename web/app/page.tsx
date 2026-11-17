@@ -17,7 +17,6 @@ type ScenarioScene = { index?: number; scene_index?: number; title?: string; sce
 type Scenario = { title?: string; hook?: string; opening_hook?: string; summary?: string; visual_style?: string; scenes?: ScenarioScene[]; cta?: string; cta_pronunciation_text?: string; caption?: string; hashtags?: string[] };
 type ContentProject = { id: string; brand_id: string; topic: string; status: string; video_mode: "scene"; error_message?: string | null; video_workflow_execution_id?: string | null; final_artifact_id?: string | null; scenario?: Scenario | null; script_text?: string | null; video_title?: string | null; call_to_action?: string | null; scene_options?: Record<string, unknown> | null };
 type CharacterImage = { key: string; platform: string; name: string; valid: boolean; error?: string };
-type LlmConnection = { id: string; name: string; provider: string; status: string };
 type Platform = { id: string; name: string; slug: string; base_url?: string; platform_type?: string };
 
 const nav: { id: Tab; label: string; icon: string }[] = [
@@ -72,19 +71,14 @@ export default function HomePage() {
   const [taskCapability, setTaskCapability] = useState("platform.monitor");
   const [taskTitle, setTaskTitle] = useState("رصد و تحلیل پلتفرم");
   const [taskPayload, setTaskPayload] = useState('{"platform_id": "", "connection_id": ""}');
-  const [budgetProvider, setBudgetProvider] = useState("llm_openai");
+  const [budgetProvider, setBudgetProvider] = useState("kie");
   const [monthlyLimit, setMonthlyLimit] = useState("20");
   const [operationLimit, setOperationLimit] = useState("2");
   const [contentBrandId, setContentBrandId] = useState("");
   const [contentTopic, setContentTopic] = useState("");
-  const [llmBaseUrl, setLlmBaseUrl] = useState("https://api.openai.com/v1");
-  const [llmModel, setLlmModel] = useState("");
-  const [llmApiKey, setLlmApiKey] = useState("");
-  const [llmConnectionStatus, setLlmConnectionStatus] = useState("");
   const [platformName, setPlatformName] = useState("");
   const [platformUrl, setPlatformUrl] = useState("");
   const [platformType, setPlatformType] = useState("website");
-  const [sceneProviderId, setSceneProviderId] = useState("");
   const [characterImages, setCharacterImages] = useState<CharacterImage[]>([]);
   const [characterKey, setCharacterKey] = useState("");
   const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([]);
@@ -152,14 +146,6 @@ export default function HomePage() {
       });
     return () => { active = false; };
   }, [contentBrandId]);
-
-  useEffect(() => {
-    if (!sceneProviders.length) return;
-    if (sceneProviderId && sceneProviders.some((provider) => provider.provider_id === sceneProviderId)) return;
-    const preferred = sceneProviders.find((provider) => provider.is_default)
-      ?? sceneProviders[0];
-    setSceneProviderId(preferred.provider_id);
-  }, [sceneProviders, sceneProviderId]);
 
   const selectedDefinition = useMemo(
     () => catalog.find((agent) => agent.key === taskAgent),
@@ -329,54 +315,6 @@ export default function HomePage() {
     }, "پلتفرم مرجع ثبت شد.");
   };
 
-  const createLlmConnection = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    await run(async () => {
-      const baseUrl = llmBaseUrl.trim().replace(/\/+$/, "");
-      const model = llmModel.trim();
-      const apiKey = llmApiKey.trim();
-      if (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://")) {
-        throw new Error("آدرس Base URL باید با http:// یا https:// شروع شود.");
-      }
-      if (!model || !apiKey) throw new Error("مدل و API Key الزامی هستند.");
-      let platform = platforms.find((item) => item.slug === "llm-openai");
-      if (!platform) {
-        platform = await api<Platform>("/platforms", {
-          method: "POST",
-          body: JSON.stringify({
-            name: "OpenAI-compatible LLM",
-            slug: "llm-openai",
-            platform_type: "api_service",
-            base_url: baseUrl,
-            description: "Tenant-owned OpenAI-compatible language model endpoint",
-            integration_type: "api",
-          }),
-        });
-      }
-      const connection = await api<LlmConnection>("/connections", {
-        method: "POST",
-        body: JSON.stringify({
-          platform_id: platform.id,
-          name: `LLM ${new Date().toISOString()}`,
-          provider: "llm_openai",
-          configuration: { url: baseUrl, model },
-          credential: {
-            credential_type: "api_key",
-            storage_type: "encrypted",
-            secret_reference: `llm-api-key-${Date.now()}`,
-            value: apiKey,
-          },
-        }),
-      });
-      const activation = await api<{ success: boolean; status_after: string; message: string }>(`/connections/${connection.id}/activate`, {
-        method: "POST",
-      });
-      if (!activation.success || activation.status_after !== "connected") throw new Error(activation.message || "اتصال LLM تأیید نشد؛ وضعیت اتصال باید connected باشد.");
-      setLlmApiKey("");
-      setLlmConnectionStatus("اتصال LLM با موفقیت اعتبارسنجی و فعال شد.");
-    }, "اتصال LLM ذخیره و فعال شد.");
-  };
-
   const createContentProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     await run(async () => {
@@ -402,7 +340,7 @@ export default function HomePage() {
             brand_id: contentBrandId,
             topic: contentTopic,
             target_duration_seconds: 30,
-            provider_id: sceneProviderId || undefined,
+            provider_id: "kie",
             character_key: characterKey || undefined,
           generation_mode: "single_shot",
         }),
@@ -438,7 +376,7 @@ export default function HomePage() {
       });
       const started = await api<ContentProject>(`/content/scene-projects/${project.id}/generate-video`, {
         method: "POST",
-        body: JSON.stringify({ provider_id: sceneProviderId || undefined }),
+        body: JSON.stringify({ provider_id: "kie" }),
       });
       setSelectedContentProjectId(started.id);
       setSelectedContentProject(started);
@@ -719,10 +657,8 @@ export default function HomePage() {
                   </select>
                 </div>
                 <div className="field">
-                  <label>Scene Provider</label>
-                  <select value={sceneProviderId} onChange={(event) => setSceneProviderId(event.target.value)}>
-                    {sceneProviders.filter((provider) => !characterKey || provider.supports_reference_image).map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.display_name}</option>)}
-                  </select>
+                  <label>موتور تولید ویدئو</label>
+                  <p className="muted small">KIE.ai · تنها Provider فعال در این مرحله</p>
                 </div>
                 <div className="field full">
                   <label>پلتفرم‌های مرجع این برند</label>
@@ -753,12 +689,7 @@ export default function HomePage() {
                 <div className="field">
                   <label>شخصیت / تصویر مرجع (الزامی برای KIE)</label>
                   <select value={characterKey} required onChange={(event) => {
-                    const nextKey = event.target.value;
-                    setCharacterKey(nextKey);
-                    if (nextKey) {
-                      const referenceProvider = sceneProviders.find((provider) => provider.supports_reference_image);
-                      if (referenceProvider) setSceneProviderId(referenceProvider.provider_id);
-                    }
+                    setCharacterKey(event.target.value);
                   }}>
                     <option value="">انتخاب تصویر مرجع</option>
                     {characterImages.filter((item) => item.valid).map((item) => (
@@ -768,8 +699,8 @@ export default function HomePage() {
                   <span className="muted small">تصویر انتخاب‌شده به‌عنوان مرجع اصلی ارسال می‌شود؛ در مسیر تولید ویدیو ویرایش تصویری انجام نمی‌شود.</span>
                 </div>
                 <div className="field">
-                  <label>اتصال LLM برای تولید سناریو</label>
-                  <p className="muted small">اتصال فعال LLM شرکت به‌صورت خودکار انتخاب می‌شود.</p>
+                  <label>مدل تولید سناریو</label>
+                  <p className="muted small">OpenAI GPT از کلید امن سمت بک‌اند (OPENAI_API_KEY) استفاده می‌کند؛ کلید در مرورگر قرار نمی‌گیرد.</p>
                 </div>
                 <div className="field full actions">
                   <button className="button" type="submit" disabled={loading}>{loading ? "در حال اجرا…" : "شروع تولید و ساخت سناریو"}</button>
@@ -892,9 +823,8 @@ export default function HomePage() {
 
         {tab === "providers" && (
           <div className="two-col section">
-            <div className="card"><div className="section-head"><h2>Provider Registry</h2><span className="pill">{providers.length} مورد</span></div>
+            <div className="card"><div className="section-head"><h2>سرویس‌های فعال این مرحله</h2><span className="pill">{sceneProviders.length} مورد</span></div>
               <div className="list">
-                {providers.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · {provider.capabilities.join(", ")}</p></div><Status value="active" /></div>)}
                 {sceneProviders.map((provider) => <div className="row-item" key={provider.provider_id}><div><strong>{provider.display_name}</strong><p dir="ltr">{provider.provider_id} · lip-sync: {provider.supports_lipsync ? "yes" : "no"} · reference image: {provider.supports_reference_image ? "yes" : "no"}</p></div><Status value="active" /></div>)}
               </div>
               <div className="section-head section"><h2>سلامت Provider · ۳۰ روز</h2><span className="muted small">{providerHealth.length} ارائه‌دهنده</span></div>
@@ -919,7 +849,7 @@ export default function HomePage() {
             <div className="card">
               <h2 style={{ fontSize: 16, marginTop: 0 }}>سیاست سقف هزینه</h2>
               <form className="form-grid" onSubmit={createBudget}>
-                <div className="field full"><label>Provider ID</label><select value={budgetProvider} onChange={(event) => setBudgetProvider(event.target.value)}>{providers.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.provider_id}</option>)}{sceneProviders.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.provider_id}</option>)}</select></div>
+                <div className="field full"><label>Provider ID</label><select value={budgetProvider} onChange={(event) => setBudgetProvider(event.target.value)}>{sceneProviders.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.provider_id}</option>)}</select></div>
                 <div className="field"><label>سقف ماهانه (USD)</label><input type="number" min="0.000001" step="0.01" value={monthlyLimit} onChange={(event) => setMonthlyLimit(event.target.value)} required /></div>
                 <div className="field"><label>سقف هر عملیات (USD)</label><input type="number" min="0.000001" step="0.01" value={operationLimit} onChange={(event) => setOperationLimit(event.target.value)} required /></div>
                 <div className="field full"><button className="button" type="submit">ذخیره سقف هزینه</button></div>
@@ -939,7 +869,6 @@ export default function HomePage() {
               <div className="notice section">آدرس API از NEXT_PUBLIC_API_BASE_URL خوانده می‌شود. احراز هویت Production از طریق OIDC Identity Proxy انجام می‌شود.</div>
             </div>
             <div className="card section">
-            <div className="card section">
               <h2 style={{ fontSize: 16, marginTop: 0 }}>افزودن منبع دانش / پلتفرم</h2>
               <p className="muted small">منابع عمومی که می‌خواهی پیش از ساخت سناریو رصد و تحلیل شوند را اینجا ثبت کن.</p>
               <form className="form-grid" onSubmit={createPlatform}>
@@ -950,15 +879,11 @@ export default function HomePage() {
               </form>
               <div className="list section">{platforms.map((item) => <div className="row-item" key={item.id}><div><strong>{item.name}</strong><p dir="ltr">{item.base_url || item.platform_type}</p></div><Status value="active" /></div>)}{!platforms.length && <div className="empty">هنوز منبعی ثبت نشده است.</div>}</div>
             </div>
-              <h2 style={{ fontSize: 16, marginTop: 0 }}>اتصال مدل زبانی (LLM)</h2>
-              <p className="muted small">کلید به‌صورت رمزنگاری‌شده در مخزن Credential ذخیره و با endpoint واقعی /models اعتبارسنجی می‌شود؛ کلید در پاسخ API یا مرورگر ذخیره نمی‌ماند.</p>
-              <form className="form-grid" onSubmit={createLlmConnection}>
-                <div className="field full"><label>OpenAI-compatible Base URL</label><input dir="ltr" value={llmBaseUrl} onChange={(event) => setLlmBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" required /></div>
-                <div className="field full"><label>Model ID</label><input dir="ltr" value={llmModel} onChange={(event) => setLlmModel(event.target.value)} placeholder="مدل ارائه‌دهنده" required /></div>
-                <div className="field full"><label>API Key</label><input dir="ltr" type="password" autoComplete="new-password" value={llmApiKey} onChange={(event) => setLlmApiKey(event.target.value)} required /></div>
-                <div className="field full"><button className="button" type="submit" disabled={loading || !companyId.trim()}>{loading ? "در حال اعتبارسنجی…" : "ذخیره و تست اتصال LLM"}</button></div>
-              </form>
-              {llmConnectionStatus && <div className="notice">{llmConnectionStatus}</div>}
+              <div className="notice section">
+                تنظیم GPT فقط در فایل backend <code>.env</code> انجام می‌شود:
+                <span dir="ltr">OPENAI_API_KEY</span> و <span dir="ltr">OPENAI_MODEL</span>.
+                کلید OpenAI و KIE نباید در فایل‌های <code>web/.env*</code> یا متغیرهای <code>NEXT_PUBLIC_*</code> قرار بگیرند.
+              </div>
             </div>
           </div>
         )}
