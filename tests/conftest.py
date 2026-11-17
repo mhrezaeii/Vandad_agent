@@ -33,6 +33,7 @@ os.environ["REDIS_URL"] = TEST_REDIS_URL
 os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("LOG_FORMAT", "console")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+os.environ.setdefault("SCENE_VIDEO_PROVIDER", "mock")
 # Deterministic 32-byte master key for tests only (never used outside pytest).
 import base64  # noqa: E402
 import json  # noqa: E402

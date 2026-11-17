@@ -49,87 +49,26 @@ def test_settings_ignores_compose_only_variables(monkeypatch):
 
 
 
-def test_generic_scene_video_capability_settings_reach_provider_registry():
+def test_video_registry_is_kie_only_and_requires_a_key():
     settings = Settings(
-        environment="local",
-        scene_video_provider="generic_http",
-        scene_video_http_base_url="https://video.example.test",
-        scene_video_http_supported_resolutions="720x1280,1080x1920",
-        scene_video_http_supports_seed=True,
-        scene_video_http_max_prompt_characters=3000,
+        scene_video_provider="kie",
+        scene_video_kie_api_key="test-key",
         _env_file=None,
     )
-    provider = build_video_registry_from_settings(settings).get("generic_http")
-
-    assert provider.supported_resolutions == ("720x1280", "1080x1920")
-    assert provider.supports_seed is True
-    assert provider.max_prompt_characters == 3000
-    assert provider.input_modalities == ("text",)
-    assert provider.max_reference_images == 0
+    registry = build_video_registry_from_settings(settings)
+    assert [provider.provider_id for provider in registry.list_providers()] == ["kie"]
 
 
-
-def test_blank_optional_http_settings_are_treated_as_unset():
-    settings = Settings(
-        environment="local",
-        scene_video_provider="generic_http",
-        scene_video_http_base_url="https://video.example.test",
-        scene_video_http_retrieve_path="",
-        scene_video_http_compose_path="  ",
-        scene_video_http_quality_path="",
-        _env_file=None,
-    )
-    provider = build_video_registry_from_settings(settings).get("generic_http")
-
-    assert provider.supports_composition is False
-    assert provider.supports_quality_review is False
+def test_video_registry_rejects_unselected_future_providers():
+    settings = Settings(scene_video_provider="wavespeed", _env_file=None)
+    with pytest.raises(ValueError, match="supports only 'kie'"):
+        build_video_registry_from_settings(settings)
 
 
-
-def test_wavespeed_environment_settings_reach_registry():
-    # scene_video_wavespeed_api_key carries a validation_alias: Settings must
-    # be populated through the alias (or the legacy WAVESPEED_API_KEY name).
-    settings = Settings(
-        environment="local",
-        scene_video_provider="wavespeed",
-        SCENE_VIDEO_WAVESPEED_API_KEY="test-key",
-        scene_video_wavespeed_resolution="480p",
-        scene_video_wavespeed_aspect_ratio="9:16",
-        scene_video_wavespeed_duration_seconds=10,
-        scene_video_wavespeed_download_allowed_hosts="cdn.example.test",
-        _env_file=None,
-    )
-    provider = build_video_registry_from_settings(settings).get("wavespeed")
-    assert provider.model_id == "wavespeed-ai/ltx-2.3/text-to-video"
-    assert provider.config.resolution == "480p"
-    assert provider.config.aspect_ratio == "9:16"
-    assert provider.config.duration_seconds == 10
-    assert provider.config.download_allowed_hosts == ("cdn.example.test",)
-    assert provider.supports_composition is False
-    assert provider.supports_quality_review is False
-
-
-def test_wavespeed_uses_explicit_generic_http_finalizer_when_both_paths_configured():
-    settings = Settings(
-        environment="local",
-        scene_video_provider="wavespeed",
-        SCENE_VIDEO_WAVESPEED_API_KEY="test-key",
-        scene_video_http_base_url="https://video.example.test",
-        scene_video_http_compose_path="/v1/compose",
-        scene_video_http_quality_path="/v1/quality",
-        scene_video_http_health_path="/health",
-        scene_video_http_api_key="secondary-test-key",
-        _env_file=None,
-    )
-    provider = build_video_registry_from_settings(settings).get("wavespeed")
-    assert provider.supports_composition is True
-    assert provider.supports_quality_review is True
-
-
-
-def test_wavespeed_api_key_accepts_legacy_environment_name():
-    settings = Settings(WAVESPEED_API_KEY="legacy-test-key", _env_file=None)
-    assert settings.scene_video_wavespeed_api_key == "legacy-test-key"
+def test_kie_key_is_required_for_the_selected_provider():
+    settings = Settings(scene_video_provider="kie", scene_video_kie_api_key="", _env_file=None)
+    with pytest.raises(ValueError, match="SCENE_VIDEO_KIE_API_KEY is required"):
+        build_video_registry_from_settings(settings)
 
 
 def test_kie_settings_documented_in_env_example_load_into_settings():
@@ -150,11 +89,9 @@ def test_kie_settings_documented_in_env_example_load_into_settings():
     assert settings.scene_video_kie_model == "grok-imagine/image-to-video"
     assert settings.scene_video_kie_resolution == "480p"
     assert settings.scene_video_kie_mode == "normal"
-    assert settings.scene_video_generation_mode == "multi_scene"
+    assert settings.scene_video_generation_mode == "single_shot"
     assert settings.platform_characters_root == "assets/Paltform_charactar"
     assert settings.scene_video_daily_quota is None
-    assert settings.scene_video_wavespeed_price_per_second_usd is None
-    assert settings.scene_video_http_base_url is None
     assert settings.scene_video_kie_upload_path == "vandad/character-references"
     # Poll settings documented for KIE exist and are consumed by the factory.
     assert settings.scene_video_poll_interval_seconds > 0

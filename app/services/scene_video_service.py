@@ -27,7 +27,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
-from app.integrations.tts import TextToSpeechError, TtsSettings, synthesize
 from app.integrations.video import (
     SceneJobState,
     SceneVideoCompositionRequest,
@@ -68,10 +67,7 @@ from app.services.scene_novelty import (
     visual_fingerprint,
 )
 from app.services.video_assembly import (
-    build_audio_concat_args,
     build_narration_mux_args,
-    build_scene_audio_fit_args,
-    build_silence_args,
     clip_has_audio,
     concat_scene_clips,
     ffmpeg_binary,
@@ -157,7 +153,6 @@ class SceneVideoService:
         max_size_bytes: int = 2 * 1024**3,
         screenshots_root: str | Path | None = None,
         characters_root: str | Path | None = None,
-        tts_settings: TtsSettings | None = None,
     ) -> None:
         self.session = session
         self.registry = registry
@@ -166,7 +161,6 @@ class SceneVideoService:
         self.max_attempts = max(1, int(max_attempts))
         self._screenshots_root = Path(screenshots_root) if screenshots_root else None
         self._characters_root = Path(characters_root) if characters_root else None
-        self._tts_settings = tts_settings
         self.max_size_bytes = max_size_bytes
         self.audit = AuditService(session)
 
@@ -557,7 +551,7 @@ class SceneVideoService:
         # KIE and WaveSpeed do not document upstream idempotency for create-task
         # requests. Fence both before their billable POSTs so worker recovery can
         # never submit a duplicate after an ambiguous acknowledgement.
-        durable_submit_provider = provider.provider_id in {"wavespeed", "kie"}
+        durable_submit_provider = provider.provider_id == "kie"
         if durable_submit_provider:
             for job in jobs:
                 metadata = job.submission_metadata or {}
@@ -803,7 +797,7 @@ class SceneVideoService:
                 **(job.submission_metadata or {}),
                 "submission_outcome": "submitted",
                 **({"prediction_id": str(provider_job_id).split(":", 1)[1]}
-                   if str(provider_job_id).startswith(("wavespeed:", "kie:")) else {}),
+                   if str(provider_job_id).startswith("kie:") else {}),
             }
             job.submission_metadata.pop("submission_started_at", None)
             submitted += 1
@@ -947,7 +941,7 @@ class SceneVideoService:
                 except (InvalidOperation, ValueError):
                     pass
             prediction_id = (job.submission_metadata or {}).get("prediction_id")
-            if prediction_id is None and str(job.provider_job_id or "").startswith(("wavespeed:", "kie:")):
+            if prediction_id is None and str(job.provider_job_id or "").startswith("kie:"):
                 prediction_id = str(job.provider_job_id).split(":", 1)[1]
             predictions.append({
                 "scene_index": job.scene_index,
@@ -1076,19 +1070,6 @@ class SceneVideoService:
                 continue
             if not job.provider_job_id:
                 continue
-            if provider.provider_id == "wavespeed":
-                # Billing records can lag prediction completion. Reconcile once
-                # more before artifact retrieval so the budget ledger captures
-                # actual charges when they become visible.
-                latest_status = await provider.get_generation_status(job.provider_job_id)
-                latest_cost = parse_reported_cost(latest_status.raw or {})
-                if latest_cost is not None:
-                    job.cost_metadata = {
-                        **(job.cost_metadata or {}),
-                        "reported_cost_usd": str(latest_cost),
-                        "actual_cost_usd": str(latest_cost),
-                        "provider": provider.provider_id,
-                    }
             prefix = bytearray()
 
             async def _chunks(job=job, prefix=prefix):  # noqa: ANN001 - closure
@@ -1210,46 +1191,7 @@ class SceneVideoService:
                 # the final deliverable. Verify the stored media (audio stream,
                 # duration, dimensions, codec) before marking the project complete.
                 output_validation = self._verify_kie_delivery(job, artifact)
-            narration = await self._narration_track(jobs, Path(tempfile.mkdtemp(prefix="vandad-tts-")))
-            if narration is not None:
-                # TTS narration: mux onto the provider clip and store a voiced
-                # artifact instead of reusing the scene file directly.
-                clip_path = (
-                    self.storage.local_path(artifact.storage_key) if self.storage else None
-                )
-                if clip_path is None:
-                    raise SceneVideoPermanentError(
-                        "Scene clips are not available on local storage; narration muxing is unavailable.",
-                        code="local_assembly_storage_unavailable",
-                    )
-                workdir = narration.parent
-                voiced = workdir / f"vandad-final-voiced-{project.id}.mp4"
-                await self._run_assembly_ffmpeg(
-                    build_narration_mux_args(
-                        ffmpeg=ffmpeg_binary(), video_path=clip_path,
-                        narration_audio_path=narration, output_path=voiced,
-                    )
-                )
-
-                async def voiced_chunks(path=voiced):
-                    with path.open("rb") as handle:
-                        while True:
-                            block = handle.read(1024 * 1024)
-                            if not block:
-                                break
-                            yield block
-
-                artifact = await artifact_service.store_artifact(
-                    execution_id,
-                    company_id=project.company_id,
-                    kind=ArtifactKind.VIDEO.value,
-                    content_type="video/mp4",
-                    chunks=voiced_chunks(),
-                    filename=voiced.name,
-                )
-                metadata_extra = {"mode": "single_scene_passthrough_tts", "narration": "tts"}
-            else:
-                metadata_extra = {"mode": "single_scene_passthrough", "narration": None}
+            metadata_extra = {"mode": "single_scene_passthrough", "narration": "provider_native_audio"}
             # Passthrough mode bills no composition or quality-review call, so
             # the project reservation settles from the scene's reported cost.
             await self._settle_project_video_budget(
@@ -1563,16 +1505,6 @@ class SceneVideoService:
                 tuple(clip_paths), output_path=output_path, width=width, height=height,
                 overlays=tuple(overlays), subtitle_path=subtitle_path,
             )
-            narration = await self._narration_track(jobs, output_dir)
-            if narration is not None:
-                voiced = output_dir / f"vandad-final-voiced-{project.id}.mp4"
-                await self._run_assembly_ffmpeg(
-                    build_narration_mux_args(
-                        ffmpeg=ffmpeg_binary(), video_path=output_path,
-                        narration_audio_path=narration, output_path=voiced,
-                    )
-                )
-                voiced.replace(output_path)
             preview = bytearray()
 
             async def chunks():
@@ -1652,59 +1584,6 @@ class SceneVideoService:
         )
         await self.session.flush()
         return artifact, metadata
-
-    async def _narration_track(
-        self, jobs: list[SceneVideoJob], workdir: Path
-    ) -> Path | None:
-        """Synthesize per-scene Persian narration and mix one exact-length track.
-
-        Each narration is fitted into its scene window (bounded 1.3x speed-up,
-        then silence padding), so the combined audio aligns with the assembled
-        video. Scenes without narration get exact-length silence.
-        """
-        if jobs and getattr(self.registry.get(jobs[0].provider), "supports_native_audio", False):
-            return None
-        tts = self._tts_settings
-        if tts is None or not tts.provider:
-            return None
-        ffmpeg = ffmpeg_binary()
-        fitted: list[Path] = []
-        for job in sorted(jobs, key=lambda item: item.scene_index):
-            seconds = float(job.duration_seconds)
-            narration = (job.narration or "").strip()
-            if narration:
-                raw = workdir / f"raw-{job.scene_index}.mp3"
-                try:
-                    raw.write_bytes(await synthesize(narration, tts))
-                except TextToSpeechError as exc:
-                    raise SceneVideoPermanentError(str(exc), code=exc.code) from exc
-                fitted_path = workdir / f"fit-{job.scene_index}.wav"
-                await self._run_assembly_ffmpeg(
-                    build_scene_audio_fit_args(
-                        ffmpeg=ffmpeg, source_audio=raw, output_path=fitted_path,
-                        scene_seconds=seconds,
-                    )
-                )
-            else:
-                fitted_path = workdir / f"silence-{job.scene_index}.wav"
-                await self._run_assembly_ffmpeg(
-                    build_silence_args(ffmpeg=ffmpeg, seconds=seconds, output_path=fitted_path)
-                )
-            fitted.append(fitted_path)
-        if not fitted:
-            return None
-        concat_list = workdir / "narration-list.txt"
-        concat_list.write_text(
-            "".join("file '" + path.as_posix() + "'" + chr(10) for path in fitted),
-            encoding="utf-8",
-        )
-        narration_full = workdir / "narration-full.wav"
-        await self._run_assembly_ffmpeg(
-            build_audio_concat_args(
-                ffmpeg=ffmpeg, concat_list=concat_list, output_path=narration_full
-            )
-        )
-        return narration_full
 
     def _verify_kie_delivery(self, job: SceneVideoJob, artifact: Any) -> dict[str, Any]:
         """Fail closed unless the paid KIE MP4 contains the expected native media."""
