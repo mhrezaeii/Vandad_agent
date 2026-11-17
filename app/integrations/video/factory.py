@@ -102,7 +102,9 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
                 for host in getattr(settings, "scene_video_kie_download_allowed_hosts", "").split(",")
                 if host.strip()
             ),
-            upload_base_url=getattr(settings, "scene_video_kie_upload_base_url", None),
+            upload_base_url=_optional_text(
+                getattr(settings, "scene_video_kie_upload_base_url", None)
+            ),
             upload_path=getattr(settings, "scene_video_kie_upload_path", "vandad/character-references"),
         )
 

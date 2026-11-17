@@ -185,3 +185,23 @@ def test_kie_single_shot_settings_build_the_documented_provider():
     assert legacy_provider.is_image_to_video is False
     assert legacy_provider.min_duration_seconds == 1
     assert legacy_provider.max_duration_seconds == 15
+
+
+def test_kie_blank_upload_base_url_means_use_the_jobs_host():
+    """A documented `VAR=` line must behave like an unset optional host."""
+    from app.core.config import Settings
+    from app.integrations.video.factory import build_video_registry_from_settings
+
+    settings = Settings(
+        scene_video_provider="kie",
+        scene_video_kie_api_key="test-key",
+        scene_video_kie_upload_base_url="",
+        _env_file=None,
+    )
+    provider = build_video_registry_from_settings(settings).get("kie")
+    assert provider.config.upload_base_url is None
+
+    # The adapter tolerates a blank override even when constructed directly.
+    from app.integrations.video.kie import KIEConfig
+
+    assert KIEConfig(api_key="test-key", upload_base_url="   ").upload_base_url is None

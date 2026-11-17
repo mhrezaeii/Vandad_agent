@@ -11,9 +11,12 @@ burned in. This is deterministic media stitching — no creative generation.
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from app.integrations.video.base import SceneVideoPermanentError, SceneVideoTransientError
 
@@ -49,6 +52,80 @@ def clip_has_audio(path: Path) -> bool:
         capture_output=True, timeout=60, check=False,
     )
     return bool(result.stdout.strip())
+
+
+def probe_video_streams(path: Path) -> dict[str, Any] | None:
+    """Return container/stream facts for a finished video.
+
+    Returns ``None`` when ffprobe is not installed so callers can decide
+    whether probing is mandatory. Unreadable or malformed media raises
+    :class:`SceneVideoPermanentError` instead of producing partial facts.
+    """
+    probe = ffprobe_binary()
+    if probe is None:
+        return None
+    result = subprocess.run(
+        [probe, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+        capture_output=True, timeout=120, check=False,
+    )
+    if result.returncode != 0:
+        raise SceneVideoPermanentError(
+            "The finished video could not be probed; the file may be corrupt.",
+            code="invalid_video",
+        )
+    try:
+        payload = json.loads(result.stdout or b"{}")
+    except ValueError as exc:
+        raise SceneVideoPermanentError(
+            "The finished video returned unreadable probe metadata.",
+            code="invalid_video",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise SceneVideoPermanentError(
+            "The finished video returned unreadable probe metadata.",
+            code="invalid_video",
+        )
+    streams = [
+        stream for stream in (payload.get("streams") or [])
+        if isinstance(stream, dict)
+    ]
+    video_stream = next(
+        (stream for stream in streams if stream.get("codec_type") == "video"), None
+    )
+    audio_streams = [
+        stream for stream in streams if stream.get("codec_type") == "audio"
+    ]
+    format_info = payload.get("format") if isinstance(payload.get("format"), dict) else {}
+    duration = _probe_float(format_info.get("duration"))
+    if duration is None:
+        durations = [
+            value
+            for value in (
+                _probe_float(stream.get("duration"))
+                for stream in [video_stream, *audio_streams]
+                if isinstance(stream, dict)
+            )
+            if value is not None
+        ]
+        duration = max(durations) if durations else None
+    return {
+        "has_video": video_stream is not None,
+        "has_audio": bool(audio_streams),
+        "width": int(_probe_float(video_stream.get("width")) or 0) if video_stream else 0,
+        "height": int(_probe_float(video_stream.get("height")) or 0) if video_stream else 0,
+        "video_codec": (video_stream or {}).get("codec_name"),
+        "audio_codec": (audio_streams[0].get("codec_name") if audio_streams else None),
+        "duration_seconds": duration,
+        "audio_stream_count": len(audio_streams),
+    }
+
+
+def _probe_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def build_concat_args(

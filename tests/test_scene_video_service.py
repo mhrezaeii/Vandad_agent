@@ -1131,6 +1131,47 @@ async def test_multi_scene_mode_still_prepares_one_job_per_beat(
     assert "AUDIO:" in jobs[0].prompt
 
 
+async def test_multi_scene_local_character_image_is_uploaded_only_once(
+    db_session, content_service, company_and_platform, tmp_path
+):
+    company, _ = company_and_platform
+    character_root = tmp_path / "Paltform_charactar" / "Vandiyar"
+    character_root.mkdir(parents=True)
+    (character_root / "Emerald Blazer.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 1100
+    )
+    brand = await content_service.ensure_vandefence_brand(company_id=company.id)
+    scope = CompanyScope(
+        company_id=company.id, principal=Principal(subject="t", company_ids=frozenset({"*"}))
+    )
+    project = await content_service.create_scene_project(
+        scope=scope,
+        brand_id=brand.id,
+        topic="چند صحنه با شخصیت",
+        target_duration_seconds=15,
+        generation_mode="multi_scene",
+        character_key="Vandiyar/Emerald Blazer",
+    )
+    await db_session.commit()
+    hosted = "https://tempfile.example.test/vandad/character-references/Emerald Blazer.png"
+    provider = _UploadingReferenceMock(hosted_url=hosted, poll_steps=1)
+    service = _service(
+        db_session, provider, characters_root=tmp_path / "Paltform_charactar"
+    )
+
+    await service.prepare_scenes(
+        project, _scenario(count=3, duration=5.0), provider_id="mockupload"
+    )
+    await db_session.commit()
+    summary = await service.submit_pending(project)
+    await db_session.commit()
+
+    assert summary["submitted"] == 3
+    # A storyboard reuses one character: exactly one free upload is performed.
+    assert len(provider.uploads) == 1
+    assert [request.reference_image_url for request in provider.requests] == [hosted] * 3
+
+
 async def test_single_shot_never_silently_switches_to_multi_scene_jobs(
     db_session, content_service, company_and_platform
 ):

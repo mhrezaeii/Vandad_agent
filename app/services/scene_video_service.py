@@ -68,6 +68,7 @@ from app.services.video_assembly import (
     concat_scene_clips,
     ffmpeg_binary,
     ffprobe_binary,
+    probe_video_streams,
     run_ffmpeg,
 )
 from app.storage.base import ArtifactStorage
@@ -486,6 +487,23 @@ class SceneVideoService:
                     code="provider_unhealthy",
                 )
 
+        reference_image_url: str | None = None
+        if pending_jobs and provider.supports_reference_image:
+            # The reference image upload is free and one project uses one
+            # character, so resolve and host it once per submit instead of
+            # re-uploading the same bytes for every scene in a storyboard.
+            # Image-source failures must never consume the submission fence or
+            # reach a billable POST.
+            try:
+                reference_image_url = await self._resolve_reference_image(project, provider)
+            except SceneVideoPermanentError as exc:
+                for job in pending_jobs:
+                    job.status = SceneVideoJobStatus.FAILED.value
+                    job.error_code = exc.code
+                    job.error_message = exc.message
+                await self.session.flush()
+                raise
+
         for job in jobs:
             if job.provider_job_id is not None or job.id in active_submission_ids:
                 continue
@@ -502,18 +520,6 @@ class SceneVideoService:
                 continue
 
             await self._reserve_quota(project.company_id, provider)
-            # Resolve the character reference image BEFORE the submission fence:
-            # uploads are free and image-source failures must never consume the
-            # fence or reach a billable POST.
-            try:
-                reference_image_url = await self._resolve_reference_image(project, provider)
-            except SceneVideoPermanentError as exc:
-                job.status = SceneVideoJobStatus.FAILED.value
-                job.error_code = exc.code
-                job.error_message = exc.message
-                await self.session.flush()
-                first_permanent = first_permanent or exc
-                continue
             request = SceneVideoRequest(
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,
@@ -1029,6 +1035,12 @@ class SceneVideoService:
             artifact = await artifact_service.get_artifact(
                 job.artifact_id, company_id=project.company_id
             )
+            output_validation: dict[str, Any] | None = None
+            if provider.provider_id == "kie":
+                # The paid KIE MP4 carries provider-native Persian audio that is
+                # the final deliverable. Verify the stored media (audio stream,
+                # duration, dimensions, codec) before marking the project complete.
+                output_validation = self._verify_kie_delivery(job, artifact)
             narration = await self._narration_track(jobs, Path(tempfile.mkdtemp(prefix="vandad-tts-")))
             if narration is not None:
                 # TTS narration: mux onto the provider clip and store a voiced
@@ -1084,6 +1096,7 @@ class SceneVideoService:
                 "provider": provider.provider_id,
                 "scene_job_id": str(job.id),
                 "scene_artifact_id": str(artifact.id),
+                **({"output_validation": output_validation} if output_validation else {}),
                 "quality_review": {
                     "status": "not_applicable",
                     "reason": "single_provider_clip_is_final_deliverable",
@@ -1523,6 +1536,51 @@ class SceneVideoService:
             )
         )
         return narration_full
+
+    def _verify_kie_delivery(self, job: SceneVideoJob, artifact: Any) -> dict[str, Any]:
+        """Fail closed unless the paid KIE MP4 contains the expected native media."""
+        path = self.storage.local_path(artifact.storage_key) if self.storage else None
+        if path is None:
+            raise SceneVideoPermanentError(
+                "The KIE deliverable is not available on local storage for validation.",
+                code="local_assembly_storage_unavailable",
+            )
+        probe = probe_video_streams(path)
+        if probe is None:
+            raise SceneVideoPermanentError(
+                "ffprobe is required to verify the KIE native-audio deliverable but is not installed.",
+                code="ffprobe_unavailable",
+            )
+        if not probe["has_video"] or not probe["video_codec"]:
+            raise SceneVideoPermanentError(
+                "The KIE deliverable does not contain a usable video stream.",
+                code="invalid_video",
+            )
+        if not probe["has_audio"]:
+            raise SceneVideoPermanentError(
+                "The KIE deliverable is missing the expected native Persian audio track.",
+                code="native_audio_missing",
+            )
+        if not probe["width"] or not probe["height"]:
+            raise SceneVideoPermanentError(
+                "The KIE deliverable reported invalid video dimensions.",
+                code="invalid_video",
+            )
+        duration = probe["duration_seconds"]
+        if duration is None or duration <= 0:
+            raise SceneVideoPermanentError(
+                "The KIE deliverable reported an invalid duration.",
+                code="invalid_video",
+            )
+        requested = float(job.duration_seconds)
+        tolerance = max(2.0, requested * 0.15)
+        if abs(duration - requested) > tolerance:
+            raise SceneVideoPermanentError(
+                f"The KIE deliverable is {duration:.1f}s but {requested:.1f}s was requested; "
+                "the generated video does not match the paid single-shot contract.",
+                code="invalid_video",
+            )
+        return probe
 
     def _plan_real_product_overlays(
         self,

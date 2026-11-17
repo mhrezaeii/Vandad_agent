@@ -70,6 +70,10 @@ async def test_i2v_submits_documented_model_contract_with_reference_image():
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
+        if request.url.path.endswith("/character.png") and request.method == "GET":
+            return httpx.Response(
+                200, content=_PNG_1PX, headers={"content-type": "image/png"}
+            )
         if request.url.path.endswith("/chat/credit"):
             return _credit_ok()
         if request.url.path.endswith("/jobs/createTask"):
@@ -189,7 +193,7 @@ async def test_i2v_uploads_local_reference_image_via_documented_base64_endpoint(
     assert hosted_url == (
         "https://tempfile.example.test/vandad/character-references/character.png"
     )
-    assert ("POST", "/api/v1/file-base64-upload") in calls
+    assert ("POST", "/api/file-base64-upload") in calls
 
 
 async def test_i2v_upload_rejects_unsupported_image_content_and_oversize():
@@ -290,6 +294,10 @@ async def test_t2v_accepts_fractional_duration_as_documented_number():
 
 async def test_t2v_image_to_video_omits_aspect_ratio_for_single_reference_image():
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reference.png") and request.method == "GET":
+            return httpx.Response(
+                200, content=_PNG_1PX, headers={"content-type": "image/png"}
+            )
         if request.url.path.endswith("/chat/credit"):
             return _credit_ok()
         if request.url.path.endswith("/jobs/createTask"):
@@ -401,3 +409,135 @@ async def test_kie_rejects_durations_outside_model_contract():
             _request(31, reference_image_url="https://assets.example.test/c.png")
         )
     assert error.value.code == "provider_invalid_duration"
+
+
+# ------------------------------------------ reference image accessibility
+async def test_unreachable_reference_image_fails_before_credits_or_paid_submit():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("/character.png") and request.method == "GET":
+            return httpx.Response(404)
+        return httpx.Response(200, json={"code": 200, "data": 100})
+
+    provider = _provider(handler)
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await provider.generate_video(
+            _request(20, reference_image_url="https://assets.example.test/character.png")
+        )
+    assert error.value.code == "provider_reference_image_unreachable"
+    paths = [path for _method, path in calls]
+    assert "/api/v1/chat/credit" not in paths
+    assert "/api/v1/jobs/createTask" not in paths
+
+
+async def test_reference_image_must_return_image_content_and_respect_size_limit():
+    def wrong_type(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200, content=b"<html>not an image</html>", headers={"content-type": "text/html"}
+            )
+        return httpx.Response(200, json={"code": 200, "data": 100})
+
+    provider = _provider(wrong_type)
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await provider.generate_video(
+            _request(20, reference_image_url="https://assets.example.test/character.png")
+        )
+    assert error.value.code == "provider_reference_image_invalid"
+
+    def oversized(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                content=_PNG_1PX,
+                headers={
+                    "content-type": "image/png",
+                    "content-length": str(11 * 1024 * 1024),
+                },
+            )
+        return httpx.Response(200, json={"code": 200, "data": 100})
+
+    provider = _provider(oversized)
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await provider.generate_video(
+            _request(20, reference_image_url="https://assets.example.test/character.png")
+        )
+    assert error.value.code == "provider_reference_image_too_large"
+
+
+async def test_reference_image_host_failures_are_safe_preflight_outcomes():
+    def temporarily_down(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(503)
+        return httpx.Response(200, json={"code": 200, "data": 100})
+
+    provider = _provider(temporarily_down)
+    with pytest.raises(SceneVideoTransientError) as error:
+        await provider.generate_video(
+            _request(20, reference_image_url="https://assets.example.test/character.png")
+        )
+    assert error.value.code == "provider_preflight_transient"
+
+    def private_redirect(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(302, headers={"location": "https://127.0.0.1/character.png"})
+        return httpx.Response(200, json={"code": 200, "data": 100})
+
+    provider = _provider(private_redirect)
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await provider.generate_video(
+            _request(20, reference_image_url="https://assets.example.test/character.png")
+        )
+    assert error.value.code == "provider_reference_image_invalid"
+
+
+# ------------------------------------------------------- documented error codes
+async def test_record_info_accepts_legacy_505_only_with_a_structured_task_payload():
+    payload = {
+        "taskId": "task-505",
+        "state": "success",
+        "resultJson": json.dumps({"resultUrls": ["https://cdn.example.test/video.mp4"]}),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/jobs/recordInfo"):
+            return httpx.Response(200, json={"code": 505, "msg": "success", "data": payload})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    status = await provider.get_generation_status("kie:task-505")
+    assert status.state == SceneJobState.COMPLETED.value
+    assert status.video_url == "https://cdn.example.test/video.mp4"
+
+
+async def test_create_task_treats_505_as_feature_disabled_rejection():
+    posts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if request.url.path.endswith("/chat/credit"):
+            return _credit_ok()
+        if request.url.path.endswith("/jobs/createTask"):
+            posts += 1
+            return httpx.Response(200, json={"code": 505, "msg": "Feature Disabled"})
+        return httpx.Response(404)
+
+    provider = _provider(handler, model=T2V_MODEL_ID)
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await provider.generate_video(_request())
+    assert error.value.code == "provider_request_failed"
+    assert posts == 1
+
+
+async def test_record_info_505_without_a_task_payload_is_a_rejection():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/jobs/recordInfo"):
+            return httpx.Response(200, json={"code": 505, "msg": "Feature Disabled", "data": {}})
+        return httpx.Response(404)
+
+    provider = _provider(handler)
+    with pytest.raises(SceneVideoPermanentError) as error:
+        await provider.get_generation_status("kie:task-505")
+    assert error.value.code == "provider_request_failed"

@@ -16,7 +16,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from decimal import Decimal
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -109,6 +109,10 @@ class KIEConfig:
     upload_path: str = "vandad/character-references"
 
     def __post_init__(self) -> None:
+        # A blank optional upload host means "use the jobs base URL"; treat the
+        # common .env `VAR=` form as unset instead of failing validation.
+        if self.upload_base_url is not None and not self.upload_base_url.strip():
+            object.__setattr__(self, "upload_base_url", None)
         parsed = urlsplit(self.base_url)
         if (
             parsed.scheme != "https"
@@ -276,6 +280,11 @@ class KIESceneVideoProvider(SceneVideoProvider):
             )
 
         required_credits = self.estimate_credits(float(duration))
+        if reference_image_url:
+            # KIE must be able to fetch the image itself. Verify accessibility,
+            # content type and size BEFORE the credit preflight and any paid
+            # submission, so an unusable image can never consume credits.
+            await self._verify_reference_image_reachable(reference_image_url)
         try:
             balance = await self.get_credit_balance()
         except SceneVideoTransientError as exc:
@@ -363,7 +372,7 @@ class KIESceneVideoProvider(SceneVideoProvider):
 
         body["base64Data"] += _base64.b64encode(data).decode("ascii")
         upload_base = self.config.upload_base_url or self.config.base_url
-        url = f"{upload_base.rstrip('/')}/api/v1/file-base64-upload"
+        url = f"{upload_base.rstrip('/')}/api/file-base64-upload"
         try:
             client = self._client()
             async with client:
@@ -497,6 +506,111 @@ class KIESceneVideoProvider(SceneVideoProvider):
                     code="provider_reference_image_invalid",
                 )
         return value
+
+    async def _verify_reference_image_reachable(self, url: str) -> None:
+        """Confirm KIE can fetch the image before credits are checked or spent.
+
+        The check resolves redirects manually so every hop is re-validated as a
+        public HTTPS image URL, verifies the declared/actual size and the image
+        magic bytes, and raises a pre-submission error otherwise. No paid
+        request is made by this method.
+        """
+        current = url
+        client = self._client()
+        try:
+            async with client:
+                for _hop in range(4):
+                    async with client.stream(
+                        "GET", current, headers={"Accept": "image/*,*/*;q=0.8"}
+                    ) as response:
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            location = response.headers.get("location")
+                            if not location:
+                                raise SceneVideoPermanentError(
+                                    "The character reference image redirects without a location.",
+                                    code="provider_reference_image_unreachable",
+                                )
+                            current = self._validate_reference_image_url(
+                                urljoin(current, location)
+                            )
+                            continue
+                        if response.status_code in (401, 403, 404, 410):
+                            raise SceneVideoPermanentError(
+                                "The character reference image is not publicly accessible "
+                                f"(HTTP {response.status_code}).",
+                                code="provider_reference_image_unreachable",
+                            )
+                        if response.status_code == 429 or response.status_code >= 500:
+                            raise SceneVideoTransientError(
+                                "The character reference image host is temporarily unavailable "
+                                f"(HTTP {response.status_code}).",
+                                code="provider_preflight_transient",
+                            )
+                        if not 200 <= response.status_code < 300:
+                            raise SceneVideoPermanentError(
+                                "The character reference image could not be fetched "
+                                f"(HTTP {response.status_code}).",
+                                code="provider_reference_image_unreachable",
+                            )
+                        content_type = response.headers.get("content-type", "").lower()
+                        if content_type and not content_type.startswith("image/"):
+                            raise SceneVideoPermanentError(
+                                "The character reference image URL did not return an image.",
+                                code="provider_reference_image_invalid",
+                            )
+                        declared = self._declared_content_length(response.headers)
+                        if declared is not None and declared > _MAX_REFERENCE_IMAGE_BYTES:
+                            raise self._reference_image_too_large(declared)
+                        head = b""
+                        total = 0
+                        async for chunk in response.aiter_bytes(64 * 1024):
+                            total += len(chunk)
+                            if total > _MAX_REFERENCE_IMAGE_BYTES:
+                                raise self._reference_image_too_large(total)
+                            if len(head) < 16:
+                                head += chunk[: 16 - len(head)]
+                            if declared is not None and total >= declared:
+                                break
+                        if not head:
+                            raise SceneVideoPermanentError(
+                                "The character reference image URL returned no bytes.",
+                                code="provider_reference_image_unreachable",
+                            )
+                        self._reference_image_content_type(head)
+                        return
+        except httpx.TimeoutException as exc:
+            raise SceneVideoTransientError(
+                "The character reference image check timed out before any paid submission.",
+                code="provider_preflight_transient",
+            ) from exc
+        except httpx.TransportError as exc:
+            raise SceneVideoTransientError(
+                "The character reference image could not be fetched before any paid submission.",
+                code="provider_preflight_transient",
+            ) from exc
+        raise SceneVideoPermanentError(
+            "The character reference image redirected too many times.",
+            code="provider_reference_image_unreachable",
+        )
+
+    @staticmethod
+    def _declared_content_length(headers: httpx.Headers) -> int | None:
+        raw = headers.get("content-length")
+        if raw is None:
+            return None
+        try:
+            value = int(raw.strip())
+        except (AttributeError, ValueError):
+            return None
+        return value if value >= 0 else None
+
+    @staticmethod
+    def _reference_image_too_large(size: int) -> SceneVideoPermanentError:
+        return SceneVideoPermanentError(
+            f"The reference image is {size} bytes; KIE accepts at most "
+            f"{_MAX_REFERENCE_IMAGE_BYTES} bytes per image.",
+            code="provider_reference_image_too_large",
+        )
 
     async def get_generation_status(self, job_id: str) -> SceneGenerationStatus:
         task_id = self._task_id(job_id)
@@ -674,7 +788,16 @@ class KIESceneVideoProvider(SceneVideoProvider):
             raise SceneVideoTransientError(
                 f"KIE API returned error code {code}.", code="provider_server_error"
             )
-        if code not in (None, 200, 505):
+        # Current documentation defines 505 as "Feature Disabled". Only the
+        # recordInfo task-status route historically returned code 505 alongside
+        # a structured task payload; anything else is a real rejection.
+        structured_record = (
+            path == "/api/v1/jobs/recordInfo"
+            and isinstance(data, dict)
+            and bool(data.get("taskId") or data.get("state"))
+        )
+        accepted_codes = {None, 200, 505} if structured_record else {None, 200}
+        if code not in accepted_codes:
             message = redact_text(str(body.get("msg") or ""))[:200]
             raise SceneVideoPermanentError(
                 f"KIE API rejected the request{(': ' + message) if message else '.'}",

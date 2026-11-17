@@ -34,10 +34,10 @@ Mandatory vs optional settings:
 
 Two models are supported by the adapter:
 
-| Model | Mode | Duration | Reference image | Prompt limit |
+| Model | Input mode | Duration | Reference image | Prompt limit |
 |---|---|---|---|---|
-| `grok-imagine/image-to-video` (default) | 6..30 s, whole seconds, serialized as a string (`"20"`) | mandatory | 5000 chars |
-| `grok-imagine-video-1-5-preview` (legacy per-scene text-to-video) | 1..15 s (integer or fractional number) | optional | 4096 chars |
+| `grok-imagine/image-to-video` (default) | image-to-video | 6..30 s, whole seconds, serialized as a string (`"20"`) | mandatory (exactly one) | 5000 chars |
+| `grok-imagine-video-1-5-preview` (legacy per-scene text-to-video) | text-to-video | 1..15 s (integer or fractional number) | optional | 4096 chars |
 
 Both models return an MP4 with native audio; audio cannot be disabled. KIE
 prices video at 2.4 / 4.5 / 8 credits per second for 480p / 720p / 1080p, so a
@@ -55,6 +55,11 @@ With `generation_mode="single_shot"` (platform default via
 body field `generation_mode`):
 
 1. Platform monitoring/knowledge and GPT scenario generation run unchanged.
+   Before it can reach `script_ready`, the deterministic scenario review
+   requires the title, full narration, CTA and every scene's
+   narration/on-screen text/subtitle to contain Persian text; a pure-English
+   surface is retried as a generation failure and can never reach a paid
+   provider.
 2. After the operator approves the scenario, the complete multi-beat scenario
    is composed into ONE prompt (`app/services/prompt_composer.py`): the beats
    stay in order with their durations, the exact Persian narration is embedded
@@ -84,12 +89,16 @@ lists the available keys and validates each image. Two sources are supported:
 - `character_key` (recommended): a local registry image. Before the paid
   submission the file is validated (JPEG/PNG/WEBP magic bytes, 1KB..10MB) and
   uploaded through KIE's documented base64 file-upload endpoint
-  (`POST /api/v1/file-base64-upload`, free) which returns a public
+  (`POST /api/file-base64-upload`, free) which returns a public
   `downloadUrl` that the generation task fetches. The image bytes are really
   transmitted to KIE — the character is never "just mentioned in the prompt".
+  The adapter then fetches the returned URL once before the credit check to
+  confirm it is publicly accessible, is actually an image and is within the
+  10MB limit. A storyboard resolves and uploads the character only once.
 - `character_image_url`: an operator-supplied public HTTPS URL (JPEG/PNG/WEBP,
   standard port, no query/userinfo, non-private host). The adapter re-validates
-  it before submission; private/reserved hosts are rejected (SSRF-safe).
+  it before submission and fetches it before the credit check; private/reserved
+  hosts and redirects to non-public hosts are rejected (SSRF-safe).
 
 A single-shot project without any character source fails with a clear
 validation error BEFORE budget reservation and BEFORE any paid request. For
@@ -111,6 +120,12 @@ marked `provider_submission_unknown`; it is never automatically retried. The
 operator must inspect KIE task history before a manual retry. Explicit
 rate-limit responses and preflight failures are safe non-submission outcomes.
 
+Documented API code 505 is treated as "Feature Disabled" for every route except
+a `recordInfo` response that still carries a structured task payload (the
+legacy form), so a disabled createTask can never be mistaken for success.
+Reference-image accessibility, content type and size are verified before the
+credit preflight; a broken image can never consume credits.
+
 ## Media retrieval and assembly
 
 Generated result URLs are downloaded immediately and stored in the platform's
@@ -119,11 +134,15 @@ private/non-public destination IPs. If the provider's media hostname is known,
 set an exact hostname in `SCENE_VIDEO_KIE_DOWNLOAD_ALLOWED_HOSTS`.
 
 One-job projects (single-shot or single-scene) use the provider MP4 as the
-final deliverable. Multi-scene projects are concatenated locally with FFmpeg.
-Native audio is preserved and the local TTS mux is skipped for KIE so the
-generated Persian soundtrack is not silently overwritten. The final MP4's
-audio stream is verified via ffprobe during validation. FFmpeg and ffprobe are
-installed in the project runtime Docker image.
+final deliverable. Before the project is marked complete for KIE, the stored
+MP4 is probed with ffprobe: a video stream, provider-native audio stream,
+valid dimensions/codec and a duration matching the paid request (within a
+small tolerance) are required, otherwise finalization fails closed. The probe
+facts are stored in `assembly_metadata.output_validation`. Multi-scene projects
+are concatenated locally with FFmpeg. Native audio is preserved and the local
+TTS mux is skipped for KIE so the generated Persian soundtrack is not silently
+overwritten. FFmpeg and ffprobe are installed in the project runtime Docker
+image.
 
 ## Test safety
 
