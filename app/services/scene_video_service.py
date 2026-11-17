@@ -12,6 +12,7 @@ beyond what the provider or operator configured.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 import uuid
@@ -21,7 +22,7 @@ from math import gcd
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,7 @@ from app.integrations.video import (
 )
 from app.models import (
     ArtifactKind,
+    Company,
     ContentProject,
     ProjectStatus,
     ProviderQuotaUsage,
@@ -58,6 +60,12 @@ from app.services.character_service import (
     resolve_character_image,
 )
 from app.services.prompt_composer import PromptCompositionError, compose_single_shot_prompt
+from app.services.scene_novelty import (
+    extract_visual_signatures,
+    is_duplicate_visual,
+    normalize_visual_signature,
+    visual_fingerprint,
+)
 from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 from app.services.video_assembly import (
     build_audio_concat_args,
@@ -77,7 +85,7 @@ _SCENE_RESOURCE = "scene_video_job"
 _PREVIEW_BYTES = 64 * 1024
 
 
-def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
+def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference_image: bool = False) -> str:
     """Translate structured storyboard direction into a provider-ready prompt."""
     lines = [
         f"SCENE TYPE: {scene.scene_type}",
@@ -97,13 +105,20 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario) -> str:
         lines.append(f"CAMERA: {scene.camera_direction}")
     lines.append(f"TRANSITION INTO NEXT SCENE: {scene.transition}")
     lines.append(f"VISUAL PROMPT: {scene.visual_prompt}")
-    # Audio-capable models speak this as the Persian voice-over; silent
-    # models simply ignore the audio direction.
-    if scene.narration.strip():
+    if has_reference_image:
         lines.append(
-            "AUDIO: warm, professional Persian (Farsi) voice-over says exactly this, "
-            f"clearly and naturally: {scene.narration.strip()} "
-            "Under the voice-over, add a soft modern corporate background track and subtle UI sounds."
+            "REFERENCE IMAGE (immutable source): use the exact attached image as the "
+            "only character reference. Do not edit, retouch, restyle, redraw, replace "
+            "or alter the source image; preserve the same identity, face, hair, outfit, "
+            "accessories and proportions in every generated frame."
+        )
+    spoken_text = (scene.pronunciation_text or scene.narration).strip()
+    if spoken_text:
+        lines.append(
+            "AUDIO: warm, professional Iranian Persian (Farsi) voice-over says "
+            "exactly this text and follows its diacritics: "
+            f"{spoken_text} Under the voice-over, add a soft modern corporate "
+            "background track and subtle UI sounds."
         )
     return "\n".join(lines)
 
@@ -154,6 +169,11 @@ class SceneVideoService:
         # Scene generation and final quality review are separate capabilities.
         # A generation-only provider may prepare and submit clips; finalization
         # still fails closed unless composition and quality review are configured.
+        # Serialize preparation per tenant so parallel projects cannot both
+        # pass the novelty check before creating paid generation jobs.
+        await self.session.execute(
+            select(Company.id).where(Company.id == project.company_id).with_for_update()
+        )
         existing = {
             job.scene_index: job
             for job in (
@@ -162,6 +182,8 @@ class SceneVideoService:
                 )
             ).scalars()
         }
+
+        await self._assert_scene_novelty(project, scenario, existing)
 
         if self._generation_mode(project) == "single_shot":
             jobs = await self._prepare_single_shot(project, scenario, provider, existing)
@@ -173,6 +195,69 @@ class SceneVideoService:
         project.status = ProjectStatus.SCENES_PREPARED.value
         await self.session.flush()
         return jobs
+
+    @staticmethod
+    def _job_visual_signatures(job: SceneVideoJob) -> list[str]:
+        metadata = job.submission_metadata or {}
+        values = metadata.get("visual_signatures")
+        if isinstance(values, list):
+            return [normalize_visual_signature(str(value)) for value in values if str(value).strip()]
+        value = metadata.get("visual_signature")
+        if isinstance(value, str) and value.strip():
+            return [normalize_visual_signature(value)]
+        return extract_visual_signatures(job.prompt)
+
+    async def _assert_scene_novelty(
+        self, project: ContentProject, scenario: Scenario, existing: dict[int, SceneVideoJob]
+    ) -> None:
+        """Reject repeated visuals within this storyboard and recent tenant history."""
+        history_result = await self.session.execute(
+            select(SceneVideoJob)
+            .where(
+                SceneVideoJob.company_id == project.company_id,
+                SceneVideoJob.project_id != project.id,
+                or_(SceneVideoJob.attempts > 0, SceneVideoJob.provider_job_id.is_not(None)),
+            )
+            .order_by(SceneVideoJob.created_at.desc())
+            .limit(500)
+        )
+        historical = [signature for job in history_result.scalars() for signature in self._job_visual_signatures(job)]
+        scenes = sorted(scenario.scenes, key=lambda item: item.index)
+        candidate_signatures = [normalize_visual_signature(scene.visual_prompt) for scene in scenes]
+        single_shot_job = next((job for job in existing.values() if job.scene_key == "single-shot"), None)
+        if single_shot_job and single_shot_job.attempts > 0:
+            previous = self._job_visual_signatures(single_shot_job)
+            if previous and previous != candidate_signatures:
+                raise ConflictError("An already-submitted single-shot video cannot be changed; create a new project.")
+        seen: list[str] = []
+        for scene, signature in zip(scenes, candidate_signatures, strict=True):
+            if not signature:
+                raise ConflictError(f"Scene {scene.index + 1} has no usable visual signature.")
+            if any(is_duplicate_visual(signature, previous) for previous in seen):
+                raise ConflictError(
+                    f"Scene {scene.index + 1} repeats a visual already used in this storyboard; "
+                    "change its visual_prompt before generation."
+                )
+            for job in existing.values():
+                if job.scene_key == "single-shot":
+                    continue
+                if job.scene_index == scene.index:
+                    if job.attempts > 0:
+                        old = self._job_visual_signatures(job)
+                        if old and old[0] != signature:
+                            raise ConflictError(f"Scene {scene.index + 1} was already submitted and its visual prompt cannot change.")
+                    continue
+                if any(is_duplicate_visual(signature, previous) for previous in self._job_visual_signatures(job)):
+                    raise ConflictError(
+                        f"Scene {scene.index + 1} duplicates another scene in this project; "
+                        "change its visual_prompt before generation."
+                    )
+            if any(is_duplicate_visual(signature, previous) for previous in historical):
+                raise ConflictError(
+                    f"Scene {scene.index + 1} duplicates a recently generated scene for this company; "
+                    "create a distinct visual direction before spending provider credits."
+                )
+            seen.append(signature)
 
     async def _prepare_multi_scene(
         self,
@@ -188,6 +273,7 @@ class SceneVideoService:
                 "would create additional paid generation jobs. Start a new project instead.",
             )
         jobs: list[SceneVideoJob] = []
+        has_reference_image = bool((project.scene_options or {}).get("character_key") or (project.scene_options or {}).get("character_image_url"))
         for scene in scenario.scenes:
             job = existing.get(scene.index)
             if job is None:
@@ -198,12 +284,16 @@ class SceneVideoService:
                     scene_key=f"scene-{scene.index:02d}",
                     provider=provider.provider_id,
                     status=SceneVideoJobStatus.PENDING.value,
-                    prompt=build_scene_provider_prompt(scene, scenario),
-                    narration=scene.narration,
+                    prompt=build_scene_provider_prompt(scene, scenario, has_reference_image=has_reference_image),
+                    narration=scene.pronunciation_text or scene.narration,
                     on_screen_text=scene.on_screen_text,
                     subtitle_text=scene.subtitle_text or scene.narration,
                     duration_seconds=scene.duration_seconds,
                     max_attempts=self.max_attempts,
+                    submission_metadata={
+                        "visual_signature": normalize_visual_signature(scene.visual_prompt),
+                        "visual_fingerprint": visual_fingerprint(scene.visual_prompt),
+                    },
                 )
                 self.session.add(job)
                 await self.session.flush()
@@ -222,8 +312,13 @@ class SceneVideoService:
             else:
                 # Keep the persisted prompt/narration in sync with an approved
                 # scenario without resetting provider state.
-                job.prompt = build_scene_provider_prompt(scene, scenario)
-                job.narration = scene.narration
+                job.prompt = build_scene_provider_prompt(scene, scenario, has_reference_image=has_reference_image)
+                job.narration = scene.pronunciation_text or scene.narration
+                job.submission_metadata = {
+                    **(job.submission_metadata or {}),
+                    "visual_signature": normalize_visual_signature(scene.visual_prompt),
+                    "visual_fingerprint": visual_fingerprint(scene.visual_prompt),
+                }
                 job.on_screen_text = scene.on_screen_text
                 job.subtitle_text = scene.subtitle_text or scene.narration
                 job.duration_seconds = scene.duration_seconds
@@ -267,6 +362,7 @@ class SceneVideoService:
             prompt = compose_single_shot_prompt(
                 scenario,
                 character_description=character_description,
+                has_reference_image=bool(options.get("character_key") or options.get("character_image_url")),
                 max_characters=provider.max_prompt_characters or 5000,
             )
         except PromptCompositionError as exc:
@@ -282,7 +378,7 @@ class SceneVideoService:
                 provider=provider.provider_id,
                 status=SceneVideoJobStatus.PENDING.value,
                 prompt=prompt,
-                narration=scenario.narration,
+                narration=" ".join((scene.pronunciation_text or scene.narration).strip() for scene in sorted(scenario.scenes, key=lambda item: item.index)) + ((scenario.cta_pronunciation_text or scenario.cta).strip() and " " + (scenario.cta_pronunciation_text or scenario.cta).strip()),
                 on_screen_text="\n".join(
                     scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
                     if scene.on_screen_text
@@ -290,7 +386,11 @@ class SceneVideoService:
                 subtitle_text=scenario.narration,
                 duration_seconds=total_duration,
                 max_attempts=self.max_attempts,
-                submission_metadata={"generation_mode": "single_shot"},
+                submission_metadata={
+                    "generation_mode": "single_shot",
+                    "visual_signatures": [normalize_visual_signature(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
+                    "visual_fingerprints": [visual_fingerprint(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
+                },
             )
             self.session.add(job)
             await self.session.flush()
@@ -312,7 +412,7 @@ class SceneVideoService:
             # Keep the persisted prompt in sync with an approved scenario
             # without resetting provider submission state.
             job.prompt = prompt
-            job.narration = scenario.narration
+            job.narration = " ".join((scene.pronunciation_text or scene.narration).strip() for scene in sorted(scenario.scenes, key=lambda item: item.index)) + ((scenario.cta_pronunciation_text or scenario.cta).strip() and " " + (scenario.cta_pronunciation_text or scenario.cta).strip())
             job.on_screen_text = "\n".join(
                 scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
                 if scene.on_screen_text
@@ -320,6 +420,12 @@ class SceneVideoService:
             job.subtitle_text = scenario.narration
             job.duration_seconds = total_duration
             job.provider = provider.provider_id
+            job.submission_metadata = {
+                **(job.submission_metadata or {}),
+                "generation_mode": "single_shot",
+                "visual_signatures": [normalize_visual_signature(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
+                "visual_fingerprints": [visual_fingerprint(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
+            }
         return [job]
 
     async def _resolve_reference_image(
@@ -342,6 +448,10 @@ class SceneVideoService:
         external_url = str(options.get("character_image_url") or "").strip()
         character_key = str(options.get("character_key") or "").strip()
         if external_url:
+            updated_options = dict(options)
+            updated_options.pop("character_image_sha256", None)
+            updated_options["character_image_source"] = "external_url"
+            project.scene_options = updated_options
             return external_url
         if not character_key:
             return None
@@ -356,7 +466,15 @@ class SceneVideoService:
             image = resolve_character_image(self._characters_root, character_key)
         except CharacterImageError as exc:
             raise SceneVideoPermanentError(exc.message, code=exc.code) from exc
+        # Upload original bytes as-is: no resize, crop, re-encode or retouch.
         image_bytes = load_character_image_bytes(image)
+        digest = hashlib.sha256(image_bytes).hexdigest()
+        project.scene_options = {
+            **options,
+            "character_image_key": image.key,
+            "character_image_sha256": digest,
+            "character_image_source": "immutable_local_asset",
+        }
         return await uploader(image_bytes, file_name=image.file_name)
 
     # ---------------------------------------------------------------- submission
@@ -375,6 +493,14 @@ class SceneVideoService:
         )).scalars())
         if not jobs:
             raise ConflictError("No scenes have been prepared for this project.")
+        options = project.scene_options or {}
+        reference_requested = bool(options.get("character_key") or options.get("character_image_url"))
+        if reference_requested and not provider.supports_reference_image:
+            raise SceneVideoPermanentError(
+                f"Provider {provider.provider_id} cannot consume the supplied reference image; "
+                "generation is blocked instead of silently switching to text-to-video.",
+                code="provider_reference_image_unsupported",
+            )
         if provider.provider_id == "kie" and self.storage is None:
             raise ConflictError(
                 "Artifact storage must be configured before paid KIE generation.",
@@ -496,6 +622,11 @@ class SceneVideoService:
             # reach a billable POST.
             try:
                 reference_image_url = await self._resolve_reference_image(project, provider)
+                if reference_requested and not reference_image_url:
+                    raise SceneVideoPermanentError(
+                        "The requested reference image could not be resolved; no generation was submitted.",
+                        code="provider_reference_image_missing",
+                    )
             except SceneVideoPermanentError as exc:
                 for job in pending_jobs:
                     job.status = SceneVideoJobStatus.FAILED.value
@@ -520,6 +651,9 @@ class SceneVideoService:
                 continue
 
             await self._reserve_quota(project.company_id, provider)
+            reference_image_sha256 = (project.scene_options or {}).get("character_image_sha256")
+            if reference_image_sha256:
+                job.submission_metadata = {**(job.submission_metadata or {}), "character_image_sha256": reference_image_sha256}
             request = SceneVideoRequest(
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,
@@ -530,6 +664,7 @@ class SceneVideoService:
                     "project_id": str(project.id),
                     "scene_index": job.scene_index,
                     "generation_mode": self._generation_mode(project),
+                    "character_image_sha256": reference_image_sha256,
                 },
             )
             job.attempts += 1
