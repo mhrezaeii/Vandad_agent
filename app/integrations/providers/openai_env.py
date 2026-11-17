@@ -41,8 +41,12 @@ async def openai_chat_completion(
             {"role": "user", "content": user},
         ],
         "max_completion_tokens": max_tokens or settings.openai_max_completion_tokens,
+        "reasoning_effort": settings.openai_reasoning_effort,
     }
-    if temperature is not None:
+    # GPT-6 reasoning models reject sampling controls at non-none effort.
+    # Luna defaults to "none", so the existing deterministic temperature is
+    # retained for the cost-sensitive initial production configuration.
+    if temperature is not None and settings.openai_reasoning_effort == "none":
         payload["temperature"] = temperature
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
