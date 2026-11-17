@@ -938,12 +938,12 @@ class SceneVideoService:
                         reported_total += amount
                 except (InvalidOperation, ValueError):
                     pass
-            prediction_id = (job.submission_metadata or {}).get("prediction_id")
-            if prediction_id is None and str(job.provider_job_id or "").startswith("kie:"):
-                prediction_id = str(job.provider_job_id).split(":", 1)[1]
+            provider_task_id = (job.submission_metadata or {}).get("task_id")
+            if provider_task_id is None and str(job.provider_job_id or "").startswith("kie:"):
+                provider_task_id = str(job.provider_job_id).split(":", 1)[1]
             predictions.append({
                 "scene_index": job.scene_index,
-                "prediction_id": str(prediction_id) if prediction_id is not None else None,
+                "task_id": str(provider_task_id) if provider_task_id is not None else None,
                 "provider_job_id": str(job.provider_job_id) if job.provider_job_id else None,
                 "model_id": cost.get("model"),
                 "status": job.provider_status or job.status,
