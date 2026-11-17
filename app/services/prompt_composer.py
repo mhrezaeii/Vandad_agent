@@ -33,8 +33,9 @@ class PromptCompositionError(Exception):
 _PERSIAN_DELIVERY_RULES = (
     "SPEECH (mandatory): Speak fluent Iranian Persian (Farsi) with natural "
     "Iranian pronunciation and intonation. Do NOT speak English. Do NOT "
-    "translate, paraphrase, shorten or omit the Persian narration provided "
-    "below; speak each line exactly as written, in order, synchronised with "
+    "translate, paraphrase, shorten or omit the Persian pronunciation_text "
+    "provided below; obey its diacritics and speak each line exactly as written, "
+    "in order, synchronised with "
     "the matching visual beat."
 )
 
@@ -55,6 +56,7 @@ def compose_single_shot_prompt(
     scenario: Scenario,
     *,
     character_description: str | None = None,
+    has_reference_image: bool = False,
     max_characters: int = 5000,
 ) -> str:
     """Compose the complete scenario into one image-to-video generation prompt.
@@ -79,14 +81,19 @@ def compose_single_shot_prompt(
     )
 
     character_block = (character_description or "").strip()
-    if character_block:
+    if has_reference_image or character_block:
         lines.append(
-            "CHARACTER CONSISTENCY (mandatory): The attached reference image "
-            f"defines the only character: {character_block}. Keep this exact "
-            "identity in every beat of the video: same face, hairstyle, outfit "
-            "colours and accessories. Never introduce a different person and "
-            "never alter the character's appearance between shots."
+            "REFERENCE IMAGE (immutable source, mandatory): Use the exact attached "
+            "image as the sole character source. Do not edit, retouch, restyle, redraw, "
+            "replace, beautify, crop or otherwise alter the source image. Animate from "
+            "this reference only; preserve the same face, age, hair, clothing, accessories, "
+            "proportions and identity in every generated frame. Do not invent a substitute."
         )
+        if character_block:
+            lines.append(
+                f"CHARACTER DESCRIPTION (operator supplied): {character_block}. "
+                "This description supplements the image and never overrides it."
+            )
 
     if scenario.visual_style:
         lines.append(f"VISUAL STYLE: {scenario.visual_style.strip()}")
@@ -102,12 +109,18 @@ def compose_single_shot_prompt(
             beat.append(f"CAMERA: {scene.camera_direction.strip()}")
         beat.append(f"VISUAL: {scene.visual_prompt.strip()}")
         lines.append(" ".join(beat))
-        lines.append(f"NARRATION (speak exactly, in Persian): {scene.narration.strip()}")
+        lines.append(
+            "NARRATION (speak exactly, in Persian, obeying diacritics): "
+            f"{(scene.pronunciation_text or scene.narration).strip()}"
+        )
         if scene.on_screen_text:
             lines.append(f"ON-SCREEN TEXT (Persian, RTL): {scene.on_screen_text.strip()}")
 
     if scenario.cta.strip():
-        lines.append(f"ENDING CTA (speak exactly, in Persian): {scenario.cta.strip()}")
+        lines.append(
+            "ENDING CTA (speak exactly, in Persian, obeying diacritics): "
+            f"{(scenario.cta_pronunciation_text or scenario.cta).strip()}"
+        )
 
     prompt = "\n".join(lines)
     if len(prompt) > max_characters:

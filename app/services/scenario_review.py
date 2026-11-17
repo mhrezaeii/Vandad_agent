@@ -89,12 +89,14 @@ def review_scenario(
             ("title", scenario.title),
             ("narration", scenario.narration),
             ("cta", scenario.cta or ""),
+            ("cta_pronunciation_text", scenario.cta_pronunciation_text or scenario.cta or ""),
         ]
         for scene in scenario.scenes:
             where = f"scene {scene.index + 1}"
             persian_targets.extend(
                 [
                     (f"{where} narration", scene.narration),
+                    (f"{where} pronunciation_text", scene.pronunciation_text or scene.narration),
                     (f"{where} on_screen_text", scene.on_screen_text or ""),
                     (f"{where} subtitle_text", scene.subtitle_text or ""),
                 ]

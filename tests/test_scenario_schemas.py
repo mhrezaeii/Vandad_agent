@@ -107,6 +107,42 @@ def test_normalize_rejects_scene_without_visual_prompt():
         normalize_scenario(raw, request)
 
 
+def test_pronunciation_text_preserves_words_and_rejects_rewrites():
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][0]["pronunciation_text"] = "سَلام فارسی"
+    scenario = normalize_scenario(raw, request)
+    assert scenario.scenes[0].pronunciation_text == "سَلام فارسی"
+    raw["scenes"][0]["pronunciation_text"] = "درود فارسی"
+    with pytest.raises(ValueError, match="exact narration words"):
+        normalize_scenario(raw, request)
+
+
+def test_production_fa_scenario_requires_vowelized_pronunciation_text():
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30, require_pronunciation_text=True)
+    raw = _raw_scenario(count=2, duration=15.0)
+    with pytest.raises(ValueError, match="pronunciation_text with diacritics"):
+        normalize_scenario(raw, request)
+    raw["scenes"][0]["pronunciation_text"] = "سَلام فارسی"
+    raw["scenes"][1]["pronunciation_text"] = "دُرُست فارسی"
+    scenario = normalize_scenario(raw, request)
+    assert scenario.scenes[0].pronunciation_text == "سَلام فارسی"
+
+
+def test_storyboard_prompt_requests_vowelized_text_and_uses_brand_lexicon():
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30, pronunciation_lexicon={"وندیار": "وَندیار"})
+    system, user = build_scenario_prompt(request)
+    assert "pronunciation_text" in user
+    assert "اعراب" in system
+    assert "وَندیار" in user
+
+
+def test_storyboard_prompt_allows_only_the_supplied_reference_character():
+    request = ScenarioRequest(topic="معرفی محصول", target_duration_seconds=30, has_reference_image=True)
+    system, _user = build_scenario_prompt(request)
+    assert "تصویر مرجع کاراکتر" in system
+
+
 def test_parse_scenario_content_accepts_fenced_json():
     request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
     payload = json.dumps(_raw_scenario(), ensure_ascii=False)

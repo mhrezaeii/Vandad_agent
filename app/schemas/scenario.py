@@ -13,6 +13,8 @@ the requested target duration.
 from __future__ import annotations
 
 import math
+import re
+import unicodedata
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -51,6 +53,10 @@ class ScenarioRequest(BaseModel):
     scene_count: int | None = Field(default=None, ge=MIN_SCENES, le=MAX_SCENES)
     product_context: str | None = Field(default=None, max_length=3000)
     platform_knowledge_context: str | None = Field(default=None, max_length=12000)
+    pronunciation_lexicon: dict[str, str] = Field(default_factory=dict, max_length=100)
+    require_pronunciation_text: bool = False
+    has_reference_image: bool = False
+    reference_character_description: str | None = Field(default=None, max_length=1000)
 
     @field_validator("topic")
     @classmethod
@@ -70,9 +76,33 @@ class ScenarioRequest(BaseModel):
                 cleaned.append(normalized)
         return cleaned
 
+    @field_validator("pronunciation_lexicon")
+    @classmethod
+    def _clean_pronunciation_lexicon(cls, value: dict[str, str]) -> dict[str, str]:
+        cleaned: dict[str, str] = {}
+        for term, pronunciation in value.items():
+            key, spoken = str(term).strip(), str(pronunciation).strip()
+            if not key or not spoken:
+                continue
+            if len(key) > 100 or len(spoken) > 200:
+                raise ValueError("Pronunciation lexicon entries exceed their length limits.")
+            cleaned[key] = spoken
+        return cleaned
+
     @property
     def resolved_scene_count(self) -> int:
         return self.scene_count or expected_scene_count(self.target_duration_seconds)
+
+
+_DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+
+
+def _spoken_tokens(value: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", value or "").translate(
+        str.maketrans({"ي": "ی", "ك": "ک"})
+    )
+    normalized = _DIACRITICS_RE.sub("", normalized)
+    return re.findall(r"[\w]+", normalized, flags=re.UNICODE)
 
 
 class SceneSpec(BaseModel):
@@ -82,6 +112,7 @@ class SceneSpec(BaseModel):
 
     index: int = Field(default=0, ge=0)
     narration: str = Field(min_length=1, max_length=2000, description="Persian narration for this scene.")
+    pronunciation_text: str | None = Field(default=None, max_length=2000, description="Same spoken words with Persian diacritics for pronunciation.")
     visual_prompt: str = Field(
         min_length=1,
         max_length=2000,
@@ -102,13 +133,21 @@ class SceneSpec(BaseModel):
             raise ValueError("Field must not be blank.")
         return stripped
 
-    @field_validator("on_screen_text", "subtitle_text")
+    @field_validator("on_screen_text", "subtitle_text", "pronunciation_text")
     @classmethod
     def _strip_optional(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = value.strip()
         return stripped or None
+
+    @model_validator(mode="after")
+    def _validate_pronunciation_text(self) -> SceneSpec:
+        if self.pronunciation_text is None:
+            self.pronunciation_text = self.narration
+        elif _spoken_tokens(self.pronunciation_text) != _spoken_tokens(self.narration):
+            raise ValueError("pronunciation_text must preserve the exact narration words and order.")
+        return self
 
 
 class Scenario(BaseModel):
@@ -121,6 +160,7 @@ class Scenario(BaseModel):
     scenes: list[SceneSpec] = Field(min_length=MIN_SCENES, max_length=MAX_SCENES)
     narration: str = Field(min_length=1, description="Full Persian narration, scenes joined in order.")
     cta: str = Field(default="", max_length=500)
+    cta_pronunciation_text: str | None = Field(default=None, max_length=500)
     caption: str = Field(default="", max_length=2000)
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     target_duration_seconds: int = Field(ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS)
@@ -150,6 +190,10 @@ class Scenario(BaseModel):
         total = sum(scene.duration_seconds for scene in self.scenes)
         if total <= 0:
             raise ValueError("Scenario scenes must have a positive total duration.")
+        if self.cta_pronunciation_text is None:
+            self.cta_pronunciation_text = self.cta
+        elif _spoken_tokens(self.cta_pronunciation_text) != _spoken_tokens(self.cta):
+            raise ValueError("cta_pronunciation_text must preserve the exact CTA words and order.")
         return self
 
     @property
@@ -221,6 +265,14 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
     if not isinstance(raw_scenes, list) or not raw_scenes:
         raise ValueError("Scenario payload must contain a non-empty 'scenes' array.")
 
+    if request.require_pronunciation_text:
+        for position, item in enumerate(raw_scenes):
+            spoken = item.get("pronunciation_text") if isinstance(item, dict) else None
+            narration_value = (item.get("narration") or item.get("voiceover") or item.get("text")) if isinstance(item, dict) else None
+            if not isinstance(spoken, str) or not spoken.strip() or not _DIACRITICS_RE.search(spoken):
+                raise ValueError(f"Scene {position + 1} must include Persian pronunciation_text with diacritics.")
+            if not isinstance(narration_value, str) or _spoken_tokens(spoken) != _spoken_tokens(narration_value):
+                raise ValueError(f"Scene {position + 1} pronunciation_text changed narration words or order.")
     target_duration = float(request.target_duration_seconds)
     fallback_duration = max(MIN_SCENE_DURATION_SECONDS, target_duration / len(raw_scenes))
 
@@ -245,6 +297,7 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
             SceneSpec(
                 index=position,
                 narration=narration,
+                pronunciation_text=item.get("pronunciation_text"),
                 visual_prompt=visual_prompt,
                 duration_seconds=duration,
                 on_screen_text=item.get("on_screen_text") or item.get("display_text"),
@@ -283,6 +336,12 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
     cta = raw.get("cta") or raw.get("call_to_action") or request.cta_text or ""
     if not isinstance(cta, str):
         cta = ""
+    cta_pronunciation_text = raw.get("cta_pronunciation_text")
+    if request.require_pronunciation_text and cta.strip():
+        if not isinstance(cta_pronunciation_text, str) or not cta_pronunciation_text.strip() or not _DIACRITICS_RE.search(cta_pronunciation_text):
+            raise ValueError("CTA must include cta_pronunciation_text with Persian diacritics.")
+        if _spoken_tokens(cta_pronunciation_text) != _spoken_tokens(cta):
+            raise ValueError("cta_pronunciation_text changed CTA words or order.")
 
     caption = raw.get("caption")
     if not isinstance(caption, str):
@@ -298,6 +357,7 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
         scenes=scenes,
         narration=narration,
         cta=cta,
+        cta_pronunciation_text=cta_pronunciation_text,
         caption=caption,
         hashtags=hashtags,
         target_duration_seconds=request.target_duration_seconds,
