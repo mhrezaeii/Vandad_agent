@@ -1104,7 +1104,7 @@ class ContentService:
                     if prompt_key:
                         scene[prompt_key] = (
                             scene[prompt_key].rstrip()
-                            + "\\n\\nOperator revision feedback: "
+                            + "\n\nOperator revision feedback: "
                             + note
                         )
 
