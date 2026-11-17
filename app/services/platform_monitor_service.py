@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.providers import ProviderExecutor, ProviderRegistry
-from app.models import BrandPlatformLink, Platform, PlatformConnection, PlatformKnowledgeSnapshot
+from app.models import BrandPlatformLink, Platform, PlatformKnowledgeSnapshot
 from app.security.crypto import MasterKeyBox
 from app.services.platform_discovery_service import PlatformDiscoveryService
 from app.services.platform_knowledge_service import PlatformKnowledgeService

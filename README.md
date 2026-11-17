@@ -17,7 +17,7 @@ Vandad Agent is the backend foundation for a multi-company operations and conten
 ```powershell
 # Generate unique local database, Redis and credential-encryption secrets.
 .\scripts\setup.ps1
-# Add the KIE API key to .env and set OPENAI_API_KEY and configure GPT model in backend .env.
+# Add OPENAI_API_KEY and SCENE_VIDEO_KIE_API_KEY to backend .env.
 docker compose up -d --build
 ```
 

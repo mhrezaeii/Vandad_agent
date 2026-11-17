@@ -1,7 +1,10 @@
 """Server-side OpenAI Chat Completions client configured only from environment."""
 from __future__ import annotations
+
 from typing import Any
+
 import httpx
+
 from app.core.config import get_settings
 
 class OpenAIEnvError(RuntimeError):
@@ -52,7 +55,10 @@ async def openai_chat_completion(*, system: str, user: str, timeout_seconds: flo
     if not isinstance(message, (str, dict)) or not message:
         raise OpenAIEnvError("OpenAI returned an empty completion.")
     usage = body.get("usage") or {}
-    usage_metadata: dict[str, Any] = {key: usage.get(key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+    usage_metadata: dict[str, Any] = {
+        key: usage.get(key)
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+    }
     for key in ("cost", "total_cost", "cost_usd"):
         if usage.get(key) is not None:
             usage_metadata[key] = usage[key]
