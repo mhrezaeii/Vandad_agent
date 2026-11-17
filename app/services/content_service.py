@@ -1067,7 +1067,32 @@ class ContentService:
         project gets its own provider jobs, budget reservation and workflow
         execution, while retaining the approved scenario as its base.
         """
-        source = await self.get_project(project_id, company_id=scope.company_id)
+        # Lock the reviewed project so two fast/retried reject clicks cannot
+        # create and bill parallel revisions from the same video.
+        source = await self.session.scalar(
+            select(ContentProject)
+            .where(
+                ContentProject.id == project_id,
+                ContentProject.company_id == scope.company_id,
+            )
+            .with_for_update()
+        )
+        if source is None:
+            raise NotFoundError("Content project not found.")
+        existing_revisions = list((await self.session.execute(
+            select(ContentProject.id, ContentProject.scene_options).where(
+                ContentProject.company_id == scope.company_id,
+                ContentProject.brand_id == source.brand_id,
+                ContentProject.video_mode == "scene",
+            )
+        )).all())
+        if any(
+            (options or {}).get("revision_of_project_id") == str(source.id)
+            for _revision_id, options in existing_revisions
+        ):
+            raise ConflictError(
+                "A newer video revision already exists. Review the latest revision instead."
+            )
         if source.video_mode != "scene":
             raise ConflictError("Only scene-video projects can be regenerated.")
         if source.status != ProjectStatus.COMPLETED.value or not source.final_artifact_id:

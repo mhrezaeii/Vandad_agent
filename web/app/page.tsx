@@ -796,7 +796,7 @@ export default function HomePage() {
                       <div className="human-gate">
                         <p>سناریو آماده است. قبل از تأیید شما هیچ درخواست تولید ویدیویی ارسال نمی‌شود.</p>
                         <div className="actions">
-                          <button className="button success" onClick={() => void approveContentProject(selectedContentProject)}>تأیید سناریو و شروع تولید ویدیو</button>
+                          <button className="button success" disabled={loading} onClick={() => void approveContentProject(selectedContentProject)}>تأیید سناریو و شروع تولید ویدیو</button>
                           
                         </div>
                       </div>
@@ -805,7 +805,7 @@ export default function HomePage() {
                     {selectedContentProject.video_mode === "scene" && selectedContentProject.status === "approved" && (
                       <div className="human-gate">
                         <p>سناریو تأیید شده است اما تولید ویدیو هنوز شروع نشده؛ می‌توانید ارسال را دوباره انجام دهید.</p>
-                        <button className="button" onClick={() => void generateProjectVideo(selectedContentProject)}>شروع تولید ویدیو</button>
+                        <button className="button" disabled={loading} onClick={() => void generateProjectVideo(selectedContentProject)}>شروع تولید ویدیو</button>
                       </div>
                     )}
                     {selectedContentProject.status === "completed" && (
@@ -816,7 +816,7 @@ export default function HomePage() {
                         <div className="human-gate reject-gate">
                           <label>اگر ویدیو مناسب نیست، دلیل یا اصلاح موردنظر را بنویسید (اختیاری)</label>
                           <textarea dir="rtl" value={videoFeedback} onChange={(event) => setVideoFeedback(event.target.value)} placeholder="مثلاً صحنه دوم تکراری است، حرکت دوربین طبیعی نیست، شخصیت باید واضح‌تر باشد…" />
-                          <button className="button danger" onClick={() => void rejectAndRegenerateVideo(selectedContentProject)}>رد ویدیو و تولید نسخه جدید</button>
+                          <button className="button danger" disabled={loading} onClick={() => void rejectAndRegenerateVideo(selectedContentProject)}>رد ویدیو و تولید نسخه جدید</button>
                           <p className="muted small">نسخه فعلی حذف نمی‌شود؛ نسخه جدید با شناسه و تاریخچه مستقل ساخته می‌شود و سناریوی تأییدشده حفظ خواهد شد.</p>
                         </div>
                       </div>
