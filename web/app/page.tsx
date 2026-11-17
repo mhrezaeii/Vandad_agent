@@ -716,7 +716,7 @@ export default function HomePage() {
                         <p>سناریو آماده است. قبل از تأیید شما هیچ درخواست تولید ویدیویی ارسال نمی‌شود.</p>
                         <div className="actions">
                           <button className="button success" onClick={() => void approveContentProject(selectedContentProject)}>تأیید سناریو و شروع تولید ویدیو</button>
-                          <button className="button ghost" onClick={() => void generateProjectScript(selectedContentProject)}>تولید مجدد سناریو</button>
+                          
                         </div>
                       </div>
                     )}
