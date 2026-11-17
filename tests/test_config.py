@@ -60,7 +60,7 @@ def test_video_registry_is_kie_only_and_requires_a_key():
 
 
 def test_video_registry_rejects_unselected_future_providers():
-    settings = Settings(scene_video_provider="wavespeed", _env_file=None)
+    settings = Settings(scene_video_provider="future_provider", _env_file=None)
     with pytest.raises(ValueError, match="supports only 'kie'"):
         build_video_registry_from_settings(settings)
 
