@@ -43,7 +43,7 @@ def content_service(db_session, engine_pair, redis_manager):
         executor,
         _keybox(),
         workflow_queue=WorkflowQueue(redis_manager.client),
-        scene_video_registry=build_scene_video_registry(),
+        scene_video_registry=build_scene_video_registry(include_mock=True),
     )
 
 
@@ -96,7 +96,7 @@ async def _project(db_session, content_service, company_id) -> ContentProject:
 
 
 def _service(db_session, provider: MockSceneVideoProvider, **kwargs) -> SceneVideoService:
-    registry = build_scene_video_registry(mock_provider=provider)
+    registry = build_scene_video_registry(include_mock=True, mock_provider=provider)
     return SceneVideoService(db_session, registry, **kwargs)
 
 

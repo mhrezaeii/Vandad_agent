@@ -162,7 +162,7 @@ DEFAULT_SCENE_VIDEO_PROVIDER = "kie"
 
 def build_scene_video_registry(
     *,
-    include_mock: bool = True,
+    include_mock: bool = False,
     kie_config: KIEConfig | None = None,
     mock_provider: MockSceneVideoProvider | None = None,
 ) -> SceneVideoProviderRegistry:
