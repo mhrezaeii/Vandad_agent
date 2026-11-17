@@ -1053,6 +1053,97 @@ class ContentService:
         await self.session.refresh(project)
         return project
 
+    async def regenerate_scene_video(
+        self,
+        project_id: uuid.UUID,
+        *,
+        scope: CompanyScope,
+        feedback: str = "",
+        provider_id: str | None = None,
+    ) -> ContentProject:
+        """Create a fresh video revision from an already approved scenario.
+
+        The reviewed source project and its artifacts remain immutable. A new
+        project gets its own provider jobs, budget reservation and workflow
+        execution, while retaining the approved scenario as its base.
+        """
+        source = await self.get_project(project_id, company_id=scope.company_id)
+        if source.video_mode != "scene":
+            raise ConflictError("Only scene-video projects can be regenerated.")
+        if source.status != ProjectStatus.COMPLETED.value or not source.final_artifact_id:
+            raise ConflictError(
+                "A video must be completed and available before it can be rejected for regeneration.",
+                details=[{"status": source.status}],
+            )
+        if not source.scenario:
+            raise ConflictError("The source project has no approved scenario.")
+
+        note = feedback.strip()
+        options = copy.deepcopy(source.scene_options or {})
+        previous_revision = int(options.get("revision_number") or 1)
+        root_project_id = options.get("revision_root_project_id") or str(source.id)
+        options.update({
+            "revision_root_project_id": root_project_id,
+            "revision_of_project_id": str(source.id),
+            "revision_number": previous_revision + 1,
+            "revision_feedback": note,
+        })
+
+        scenario = copy.deepcopy(source.scenario)
+        if note and isinstance(scenario, dict):
+            scenes = scenario.get("scenes")
+            if isinstance(scenes, list):
+                for scene in scenes:
+                    if not isinstance(scene, dict):
+                        continue
+                    prompt_key = next(
+                        (key for key in ("visual_prompt", "prompt", "visual_description")
+                         if isinstance(scene.get(key), str)),
+                        None,
+                    )
+                    if prompt_key:
+                        scene[prompt_key] = (
+                            scene[prompt_key].rstrip()
+                            + "\\n\\nOperator revision feedback: "
+                            + note
+                        )
+
+        revision = ContentProject(
+            company_id=source.company_id,
+            brand_id=source.brand_id,
+            topic=source.topic,
+            status=ProjectStatus.APPROVED.value,
+            script_text=source.script_text,
+            script_segments=copy.deepcopy(source.script_segments),
+            video_mode="scene",
+            scenario=scenario,
+            scene_options=options,
+            scene_video_provider=provider_id or source.scene_video_provider,
+            video_title=source.video_title,
+            call_to_action=source.call_to_action,
+            llm_usage=copy.deepcopy(source.llm_usage),
+        )
+        self.session.add(revision)
+        await self.session.flush()
+        self.audit.record(
+            event_type="content.scene_video_revision_requested",
+            action="regenerate_video",
+            company_id=scope.company_id,
+            resource_type=PROJECT_RESOURCE,
+            resource_id=revision.id,
+            metadata={
+                "source_project_id": str(source.id),
+                "revision_number": previous_revision + 1,
+                "feedback_provided": bool(note),
+            },
+        )
+        await self.session.flush()
+        return await self.generate_scene_video(
+            revision.id,
+            scope=scope,
+            provider_id=provider_id or source.scene_video_provider,
+        )
+
     async def cancel_scene_video(
         self, project_id: uuid.UUID, *, scope: CompanyScope
     ) -> ContentProject:

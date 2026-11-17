@@ -167,6 +167,14 @@ class SceneVideoStartRequest(BaseModel):
     provider_id: str | None = Field(default=None, max_length=50)
 
 
+class SceneVideoRejectRequest(BaseModel):
+    """Human review feedback used to request a fresh video version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    feedback: str = Field(default="", max_length=2000)
+
+
 class ContentProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

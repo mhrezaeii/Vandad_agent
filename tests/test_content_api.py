@@ -215,6 +215,31 @@ async def test_character_and_legacy_avatar_routes_are_not_exposed(client, header
     assert legacy_video.status_code == 404
 
 
+async def test_reject_video_requires_a_completed_scene_project(client, headers):
+    brand_id = await _brand_id(client, headers)
+    created = await client.post(
+        "/api/v1/content/scene-projects",
+        json={
+            "brand_id": brand_id,
+            "topic": "معرفی قابلیت پایش هوشمند",
+            "target_duration_seconds": 30,
+            "provider_id": "mock",
+            "generation_mode": "multi_scene",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+
+    rejected = await client.post(
+        f"/api/v1/content/scene-projects/{project_id}/reject-video",
+        json={"feedback": "تصاویر تکراری هستند؛ تنوع بصری بیشتری لازم است."},
+        headers=headers,
+    )
+    assert rejected.status_code == 409
+    assert "completed" in rejected.json()["detail"].lower()
+
+
 async def test_video_endpoints_hide_unfinished_projects(client, headers):
     await _brand_id(client, headers)
     unknown = uuid.uuid4()

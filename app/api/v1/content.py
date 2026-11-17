@@ -26,6 +26,7 @@ from app.schemas.content import (
     SceneProjectCreate,
     SceneVideoJobRead,
     SceneVideoStartRequest,
+    SceneVideoRejectRequest,
 )
 from app.security.authorization import CompanyScope
 from app.services.content_service import ContentService
@@ -333,6 +334,25 @@ async def generate_scene_video(
 ) -> ContentProjectRead:
     project = await service.generate_scene_video(
         project_id, scope=scope, provider_id=payload.provider_id
+    )
+    return ContentProjectRead.model_validate(project)
+
+
+@router.post(
+    "/scene-projects/{project_id}/reject-video",
+    response_model=ContentProjectRead,
+)
+async def reject_scene_video(
+    project_id: uuid.UUID,
+    payload: SceneVideoRejectRequest,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> ContentProjectRead:
+    """Reject a completed video and immediately queue a new revision."""
+    project = await service.regenerate_scene_video(
+        project_id,
+        scope=scope,
+        feedback=payload.feedback,
     )
     return ContentProjectRead.model_validate(project)
 
