@@ -1192,7 +1192,12 @@ async def test_prepare_scenes_rejects_duplicate_visuals_inside_one_storyboard(
     )
     await db_session.commit()
     scenario = _scenario(count=2, duration=6.0)
-    scenes = [scenario.scenes[0], scenario.scenes[1].model_copy(update={"visual_prompt": scenario.scenes[0].visual_prompt})]
+    scenes = [
+        scenario.scenes[0],
+        scenario.scenes[1].model_copy(
+            update={"visual_prompt": scenario.scenes[0].visual_prompt}
+        ),
+    ]
     scenario = scenario.model_copy(update={"scenes": scenes})
     service = _service(db_session, MockSceneVideoProvider())
     with pytest.raises(ConflictError, match="repeats a visual"):

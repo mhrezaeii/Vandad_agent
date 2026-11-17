@@ -133,7 +133,11 @@ class ContentScenarioService:
             hashtags=list(cta_config.get("hashtags") or []),
             language=brand.language,
             platform_knowledge_context=knowledge_context,
-            pronunciation_lexicon=(visual_config.get("pronunciation_lexicon") if isinstance(visual_config.get("pronunciation_lexicon"), dict) else {}),
+            pronunciation_lexicon=(
+                visual_config.get("pronunciation_lexicon")
+                if isinstance(visual_config.get("pronunciation_lexicon"), dict)
+                else {}
+            ),
             require_pronunciation_text=brand.language.split("-", 1)[0].lower() == "fa",
             has_reference_image=bool(options.get("character_key") or options.get("character_image_url")),
             reference_character_description=options.get("character_description"),

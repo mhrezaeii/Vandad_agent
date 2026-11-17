@@ -131,7 +131,11 @@ def test_production_fa_scenario_requires_vowelized_pronunciation_text():
 
 
 def test_storyboard_prompt_requests_vowelized_text_and_uses_brand_lexicon():
-    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30, pronunciation_lexicon={"وندیار": "وَندیار"})
+    request = ScenarioRequest(
+        topic="موضوع تست",
+        target_duration_seconds=30,
+        pronunciation_lexicon={"وندیار": "وَندیار"},
+    )
     system, user = build_scenario_prompt(request)
     assert "pronunciation_text" in user
     assert "اعراب" in system

@@ -60,13 +60,13 @@ from app.services.character_service import (
     resolve_character_image,
 )
 from app.services.prompt_composer import PromptCompositionError, compose_single_shot_prompt
+from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 from app.services.scene_novelty import (
     extract_visual_signatures,
     is_duplicate_visual,
     normalize_visual_signature,
     visual_fingerprint,
 )
-from app.services.provider_budget_service import ProviderBudgetService, parse_reported_cost
 from app.services.video_assembly import (
     build_audio_concat_args,
     build_narration_mux_args,
@@ -121,6 +121,31 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
             "background track and subtle UI sounds."
         )
     return "\n".join(lines)
+
+
+def _scenario_pronunciation_text(scenario: Scenario) -> str:
+    parts = [
+        (scene.pronunciation_text or scene.narration).strip()
+        for scene in sorted(scenario.scenes, key=lambda item: item.index)
+    ]
+    cta = (scenario.cta_pronunciation_text or scenario.cta).strip()
+    if cta:
+        parts.append(cta)
+    return " ".join(part for part in parts if part)
+
+
+def _scenario_visual_signatures(scenario: Scenario) -> list[str]:
+    return [
+        normalize_visual_signature(scene.visual_prompt)
+        for scene in sorted(scenario.scenes, key=lambda item: item.index)
+    ]
+
+
+def _scenario_visual_fingerprints(scenario: Scenario) -> list[str]:
+    return [
+        visual_fingerprint(scene.visual_prompt)
+        for scene in sorted(scenario.scenes, key=lambda item: item.index)
+    ]
 
 
 class SceneVideoService:
@@ -245,7 +270,10 @@ class SceneVideoService:
                     if job.attempts > 0:
                         old = self._job_visual_signatures(job)
                         if old and old[0] != signature:
-                            raise ConflictError(f"Scene {scene.index + 1} was already submitted and its visual prompt cannot change.")
+                            raise ConflictError(
+                                f"Scene {scene.index + 1} was already submitted and its visual prompt "
+                                "cannot change."
+                            )
                     continue
                 if any(is_duplicate_visual(signature, previous) for previous in self._job_visual_signatures(job)):
                     raise ConflictError(
@@ -273,7 +301,8 @@ class SceneVideoService:
                 "would create additional paid generation jobs. Start a new project instead.",
             )
         jobs: list[SceneVideoJob] = []
-        has_reference_image = bool((project.scene_options or {}).get("character_key") or (project.scene_options or {}).get("character_image_url"))
+        options = project.scene_options or {}
+        has_reference_image = bool(options.get("character_key") or options.get("character_image_url"))
         for scene in scenario.scenes:
             job = existing.get(scene.index)
             if job is None:
@@ -378,7 +407,7 @@ class SceneVideoService:
                 provider=provider.provider_id,
                 status=SceneVideoJobStatus.PENDING.value,
                 prompt=prompt,
-                narration=" ".join((scene.pronunciation_text or scene.narration).strip() for scene in sorted(scenario.scenes, key=lambda item: item.index)) + ((scenario.cta_pronunciation_text or scenario.cta).strip() and " " + (scenario.cta_pronunciation_text or scenario.cta).strip()),
+                narration=_scenario_pronunciation_text(scenario),
                 on_screen_text="\n".join(
                     scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
                     if scene.on_screen_text
@@ -388,8 +417,8 @@ class SceneVideoService:
                 max_attempts=self.max_attempts,
                 submission_metadata={
                     "generation_mode": "single_shot",
-                    "visual_signatures": [normalize_visual_signature(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
-                    "visual_fingerprints": [visual_fingerprint(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
+                    "visual_signatures": _scenario_visual_signatures(scenario),
+                    "visual_fingerprints": _scenario_visual_fingerprints(scenario),
                 },
             )
             self.session.add(job)
@@ -412,7 +441,7 @@ class SceneVideoService:
             # Keep the persisted prompt in sync with an approved scenario
             # without resetting provider submission state.
             job.prompt = prompt
-            job.narration = " ".join((scene.pronunciation_text or scene.narration).strip() for scene in sorted(scenario.scenes, key=lambda item: item.index)) + ((scenario.cta_pronunciation_text or scenario.cta).strip() and " " + (scenario.cta_pronunciation_text or scenario.cta).strip())
+            job.narration = _scenario_pronunciation_text(scenario)
             job.on_screen_text = "\n".join(
                 scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
                 if scene.on_screen_text
@@ -423,8 +452,8 @@ class SceneVideoService:
             job.submission_metadata = {
                 **(job.submission_metadata or {}),
                 "generation_mode": "single_shot",
-                "visual_signatures": [normalize_visual_signature(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
-                "visual_fingerprints": [visual_fingerprint(scene.visual_prompt) for scene in sorted(scenario.scenes, key=lambda item: item.index)],
+                "visual_signatures": _scenario_visual_signatures(scenario),
+                "visual_fingerprints": _scenario_visual_fingerprints(scenario),
             }
         return [job]
 
@@ -653,7 +682,10 @@ class SceneVideoService:
             await self._reserve_quota(project.company_id, provider)
             reference_image_sha256 = (project.scene_options or {}).get("character_image_sha256")
             if reference_image_sha256:
-                job.submission_metadata = {**(job.submission_metadata or {}), "character_image_sha256": reference_image_sha256}
+                job.submission_metadata = {
+                    **(job.submission_metadata or {}),
+                    "character_image_sha256": reference_image_sha256,
+                }
             request = SceneVideoRequest(
                 scene_id=f"{project.id}:{job.scene_index}",
                 prompt=job.prompt,

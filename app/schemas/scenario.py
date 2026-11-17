@@ -112,7 +112,11 @@ class SceneSpec(BaseModel):
 
     index: int = Field(default=0, ge=0)
     narration: str = Field(min_length=1, max_length=2000, description="Persian narration for this scene.")
-    pronunciation_text: str | None = Field(default=None, max_length=2000, description="Same spoken words with Persian diacritics for pronunciation.")
+    pronunciation_text: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Same spoken words with Persian diacritics for pronunciation.",
+    )
     visual_prompt: str = Field(
         min_length=1,
         max_length=2000,
@@ -268,7 +272,9 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
     if request.require_pronunciation_text:
         for position, item in enumerate(raw_scenes):
             spoken = item.get("pronunciation_text") if isinstance(item, dict) else None
-            narration_value = (item.get("narration") or item.get("voiceover") or item.get("text")) if isinstance(item, dict) else None
+            narration_value = None
+            if isinstance(item, dict):
+                narration_value = item.get("narration") or item.get("voiceover") or item.get("text")
             if not isinstance(spoken, str) or not spoken.strip() or not _DIACRITICS_RE.search(spoken):
                 raise ValueError(f"Scene {position + 1} must include Persian pronunciation_text with diacritics.")
             if not isinstance(narration_value, str) or _spoken_tokens(spoken) != _spoken_tokens(narration_value):
@@ -338,7 +344,11 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
         cta = ""
     cta_pronunciation_text = raw.get("cta_pronunciation_text")
     if request.require_pronunciation_text and cta.strip():
-        if not isinstance(cta_pronunciation_text, str) or not cta_pronunciation_text.strip() or not _DIACRITICS_RE.search(cta_pronunciation_text):
+        if (
+            not isinstance(cta_pronunciation_text, str)
+            or not cta_pronunciation_text.strip()
+            or not _DIACRITICS_RE.search(cta_pronunciation_text)
+        ):
             raise ValueError("CTA must include cta_pronunciation_text with Persian diacritics.")
         if _spoken_tokens(cta_pronunciation_text) != _spoken_tokens(cta):
             raise ValueError("cta_pronunciation_text changed CTA words or order.")
