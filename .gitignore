@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environment / secrets - never commit
+.env
+.env.*
+!.env.example
+
+# Databases / local artifacts
+*.db
+*.sqlite3/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local media/model runtimes and generated outputs
+runtime/
+outputs/
+data/
+*.mp4
+*.avi
+*.wav
+*.mp3
+*.onnx
+*.pth
+*.pt
+*.part
+
+# Next.js frontend
+node_modules/
+web/.next/
+web/out/
+web/.env.local
+artifacts/
+
+# Google session secrets (never commit)
+assets/flow-cookies.json
+data/
+config/
+# Browser/session credentials
+**/*cookies*.json
+**/*cookie*.json
