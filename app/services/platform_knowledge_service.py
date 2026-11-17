@@ -204,15 +204,29 @@ class PlatformKnowledgeService:
             )
         system, user = build_knowledge_prompt(platform, documents)
         if connection_id is None:
-            from app.integrations.providers.openai_env import OpenAIEnvError, openai_chat_completion
+            from app.services.openai_env_execution_service import OpenAIEnvExecutionService
+
+            budget_key = hashlib.sha256(
+                f"{platform.company_id}:{platform.id}:{system}:{user}".encode()
+            ).hexdigest()
             try:
-                metadata = await openai_chat_completion(
-                    system=system, user=user, timeout_seconds=180.0,
-                    temperature=0.1, max_tokens=5000, json_mode=True,
+                metadata = await OpenAIEnvExecutionService(self.session).execute(
+                    company_id=platform.company_id,
+                    system=system,
+                    user=user,
+                    timeout_seconds=180.0,
+                    temperature=0.1,
+                    max_tokens=5000,
+                    json_mode=True,
+                    operation="platform.knowledge.extract",
+                    idempotency_key=f"knowledge:{budget_key}",
+                    task_id=task_id,
                 )
-            except OpenAIEnvError as error:
+            except ProviderError as error:
                 raise PlatformKnowledgeExtractionError(
-                    str(error), code="openai_request_failed", retryable=True
+                    error.message,
+                    code=error.code or "openai_request_failed",
+                    retryable=error.is_transient,
                 ) from error
         else:
             budget_key = hashlib.sha256(

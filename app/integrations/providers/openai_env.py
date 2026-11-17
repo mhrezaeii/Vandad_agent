@@ -11,6 +11,10 @@ from app.core.config import get_settings
 class OpenAIEnvError(RuntimeError):
     """Sanitized OpenAI request failure; never includes credentials or raw bodies."""
 
+    def __init__(self, message: str, *, definitive_rejection: bool = False) -> None:
+        super().__init__(message)
+        self.definitive_rejection = definitive_rejection
+
 
 async def openai_chat_completion(
     *,
@@ -62,13 +66,22 @@ async def openai_chat_completion(
                 json=payload,
             )
     if response.status_code == 401:
-        raise OpenAIEnvError("OpenAI rejected OPENAI_API_KEY. Check the key in backend .env.")
+        raise OpenAIEnvError(
+            "OpenAI rejected OPENAI_API_KEY. Check the key in backend .env.",
+            definitive_rejection=True,
+        )
     if response.status_code == 429:
-        raise OpenAIEnvError("OpenAI rate limit or quota reached. Check billing and usage limits.")
+        raise OpenAIEnvError(
+            "OpenAI rate limit or quota reached. Check billing and usage limits.",
+            definitive_rejection=True,
+        )
     if response.status_code >= 500:
         raise OpenAIEnvError(f"OpenAI service returned HTTP {response.status_code}.")
     if response.status_code >= 400:
-        raise OpenAIEnvError(f"OpenAI rejected the request (HTTP {response.status_code}).")
+        raise OpenAIEnvError(
+            f"OpenAI rejected the request (HTTP {response.status_code}).",
+            definitive_rejection=response.status_code in {400, 401, 403, 404, 405, 413, 415, 422, 429},
+        )
     try:
         body = response.json()
         message = body["choices"][0]["message"]["content"]
