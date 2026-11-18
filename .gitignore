@@ -44,6 +44,10 @@ web/.next/
 web/out/
 web/.env.local
 artifacts/
+# Generated frontend build/audit artifacts
+*.tsbuildinfo
+web/audit-report.json
+web/npm-audit-report.json
 
 # Google session secrets (never commit)
 assets/flow-cookies.json

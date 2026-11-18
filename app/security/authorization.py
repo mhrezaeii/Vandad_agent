@@ -44,6 +44,18 @@ class CompanyScope:
     principal: Principal
 
 
+@dataclass(frozen=True)
+class AuthenticatedUser:
+    """Snapshot of an application account resolved from a bearer token."""
+
+    id: uuid.UUID
+    email: str
+    full_name: str
+    status: str
+    role: str
+    company_id: uuid.UUID | None
+
+
 class AuthorizationError(ForbiddenError):
     pass
 
@@ -82,6 +94,13 @@ def build_principal_from_settings(settings: Settings) -> Principal:
             company_ids=frozenset({"*"}),
             roles=frozenset({"owner", "admin", "operator", "viewer"}),
         )
+    if settings.requires_proxy_auth:
+        token_secret = settings.auth_token_secret
+        if token_secret is None or not token_secret.get_secret_value():
+            raise ForbiddenError(
+                "AUTH_TOKEN_SECRET is required in staging/production so application "
+                "users cannot be issued tokens signed with the development key."
+            )
     ids = frozenset(part.strip() for part in raw.split(",") if part.strip())
     return Principal(
         subject="bootstrap",

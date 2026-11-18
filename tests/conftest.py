@@ -67,6 +67,7 @@ from app.security.authorization import Principal  # noqa: E402
 from app.security.crypto import MasterKeyBox  # noqa: E402
 
 TABLES = (
+    "users",
     "audit_events",
     "provider_usage_records",
     "company_provider_budgets",

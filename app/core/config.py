@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     auth_proxy_roles_header: str = "X-Auth-Request-Roles"
     cors_allowed_origins: str = "http://localhost:3000"
 
+    # --- Application user authentication (see app.security.tokens) -------------
+    # HMAC key for signed bearer tokens. Required in staging/production; local
+    # development falls back to a deterministic, non-secret development key.
+    auth_token_secret: SecretStr | None = None
+    # Access-token lifetime in seconds (default 12 hours).
+    auth_token_ttl_seconds: int = Field(default=60 * 60 * 12, ge=60, le=60 * 60 * 24 * 30)
+    # Set to true to allow the first registered account to become an approved
+    # administrator. Intended for single-tenant installs without an identity proxy.
+    auth_bootstrap_first_admin: bool = False
+
     # --- Artifact storage (see app.storage) --------------------------------------
     # Root directory for generated workflow artifacts (mounted volume in Docker).
     artifact_storage_root: str = "data/artifacts"
@@ -167,6 +177,14 @@ class Settings(BaseSettings):
         secret = value.get_secret_value() if value is not None else ""
         if secret and len(secret) < 32:
             raise ValueError("auth_proxy_shared_secret must contain at least 32 characters")
+        return value
+
+    @field_validator("auth_token_secret")
+    @classmethod
+    def _validate_auth_token_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        secret = value.get_secret_value() if value is not None else ""
+        if secret and len(secret) < 32:
+            raise ValueError("auth_token_secret must contain at least 32 characters")
         return value
 
     @field_validator("bootstrap_principal_company_ids")

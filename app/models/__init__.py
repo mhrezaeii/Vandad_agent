@@ -28,6 +28,7 @@ from app.models.platform_connection import ConnectionStatus, PlatformConnection
 from app.models.platform_knowledge_snapshot import PlatformKnowledgeSnapshot
 from app.models.platform_source_document import PlatformSourceDocument
 from app.models.provider_budget import CompanyProviderBudget, ProviderUsageRecord
+from app.models.user import User, UserRole, UserStatus
 from app.models.workflow import Workflow
 from app.models.workflow import WorkflowStatus as WorkflowDefinitionStatus
 from app.models.workflow_artifact import ArtifactKind, WorkflowArtifact
@@ -94,6 +95,9 @@ __all__ = [
     "SceneVideoJob",
     "SceneVideoJobStatus",
     "TimestampMixin",
+    "User",
+    "UserRole",
+    "UserStatus",
     "Workflow",
     "WorkflowArtifact",
     "WorkflowDefinitionStatus",

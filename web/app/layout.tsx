@@ -1,20 +1,29 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import type { ReactNode } from "react";
 import "./globals.css";
-import { AuthGate } from "@/app/auth";
-import { LanguageSelector } from "@/app/auth";
+import { AppProviders } from "@/app/providers";
 
 export const metadata: Metadata = {
-  title: "Vandad Agent",
-  description: "پنل مدیریت عملیات و Agentهای ونداد",
+  title: "ونداد | کارخانه تولید محتوای هوشمند",
+  description:
+    "پنل تولید ویدیوی برند ونداد: سناریوسازی فارسی، اجرای Agentها و خروجی ویدیویی.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#070b16",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
   return (
-    <html lang="fa" dir="rtl">
+    <html lang="fa" dir="rtl" suppressHydrationWarning>
       <body>
-        <AuthGate>
-          {children}
-        </AuthGate>
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

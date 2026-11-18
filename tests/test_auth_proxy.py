@@ -1,4 +1,4 @@
-"""Production identity-proxy authentication and role enforcement."""
+﻿"""Production identity-proxy authentication and role enforcement."""
 
 from __future__ import annotations
 
@@ -45,16 +45,16 @@ def _request(
     return Request({"type": "http", "method": method, "headers": raw_headers, "app": app})
 
 
-def test_production_identity_requires_proxy_shared_secret():
+async def test_production_identity_requires_proxy_shared_secret():
     request = _request(headers={"X-Auth-Proxy-Secret": ""})
     with pytest.raises(UnauthorizedError):
-        get_principal(request)
+        await get_principal(request)
 
 
-def test_production_identity_maps_user_company_and_roles():
+async def test_production_identity_maps_user_company_and_roles():
     company_id = str(uuid.uuid4())
     request = _request(companies=[company_id], roles="viewer,operator")
-    principal = get_principal(request)
+    principal = await get_principal(request)
 
     assert principal.subject == "operator@example.test"
     assert principal.company_ids == frozenset({company_id})
@@ -70,10 +70,10 @@ async def test_viewer_can_read_but_cannot_mutate_company_scope():
         await company_scope(_request(method="POST", companies=[company_id]))
 
 
-def test_admin_controls_require_owner_or_admin_role():
+async def test_admin_controls_require_owner_or_admin_role():
     with pytest.raises(ForbiddenError):
-        require_company_admin(_request(roles="operator"))
-    admin = require_company_admin(_request(roles="admin"))
+        await require_company_admin(_request(roles="operator"))
+    admin = await require_company_admin(_request(roles="admin"))
     assert "admin" in admin.roles
 
 
@@ -115,13 +115,13 @@ def test_staging_rejects_empty_bootstrap_company_scope():
 
 
 
-def test_production_identity_rejects_wrong_proxy_secret():
+async def test_production_identity_rejects_wrong_proxy_secret():
     request = _request(secret="wrong-proxy-secret-0123456789-abcdef")
     with pytest.raises(UnauthorizedError):
-        get_principal(request)
+        await get_principal(request)
 
 
-def test_production_identity_rejects_invalid_company_membership_claim():
+async def test_production_identity_rejects_invalid_company_membership_claim():
     request = _request()
     request.scope["headers"] = [
         (key, value)
@@ -129,10 +129,10 @@ def test_production_identity_rejects_invalid_company_membership_claim():
         if key != b"x-auth-request-company-ids"
     ] + [(b"x-auth-request-company-ids", b"not-a-uuid")]
     with pytest.raises(UnauthorizedError, match="invalid company claim"):
-        get_principal(request)
+        await get_principal(request)
 
 
-def test_production_identity_rejects_unknown_only_roles():
+async def test_production_identity_rejects_unknown_only_roles():
     request = _request(roles="superuser,root")
     with pytest.raises(ForbiddenError, match="no recognized platform role"):
-        get_principal(request)
+        await get_principal(request)
