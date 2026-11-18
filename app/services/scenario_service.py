@@ -57,6 +57,7 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "Only show product capabilities explicitly provided in the topic or brand context."
     )
     platform_knowledge = request.platform_knowledge_context or "No verified platform knowledge snapshot is linked."
+    analysis_hint = request.analysis_context or "No additional analysis context."
     cta_hint = request.cta_text or "یک دعوت به اقدام کوتاه و روشن"
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
     pronunciation_lexicon = (
@@ -104,6 +105,7 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         f"{request.reference_character_description or 'فقط به تصویر مرجع تکیه کن و ظاهر جدید اختراع نکن.'}\n"
         f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\n"
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
+        f"تحلیل داخلی انتخاب موضوع (فقط مرجع؛ محدود به شواهد بالا): {analysis_hint}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
         f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
         "ساختار JSON الزامی:\n"

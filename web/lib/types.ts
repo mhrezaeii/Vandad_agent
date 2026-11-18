@@ -136,6 +136,57 @@ export type WorkflowStepList = {
   total: number;
 };
 
+export type AgentTaskStatus =
+  | "pending"
+  | "queued"
+  | "awaiting_approval"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type AgentTask = {
+  id: string;
+  company_id: string;
+  agent_key: string;
+  capability: string;
+  title: string;
+  status: AgentTaskStatus;
+  priority: number;
+  input_payload: Record<string, unknown>;
+  result_payload: Record<string, unknown> | null;
+  idempotency_key: string | null;
+  requested_by: string | null;
+  cancel_requested: boolean;
+  attempt_count: number;
+  max_attempts: number;
+  spend_ceiling_usd: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  agent_dispatch_ready: boolean;
+};
+
+export type AgentTaskEvent = {
+  id: string;
+  task_id: string;
+  company_id: string;
+  sequence: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentTaskList = {
+  items: AgentTask[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type ScenarioScene = {
   index?: number;
   key?: string;

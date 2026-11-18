@@ -53,6 +53,7 @@ class ScenarioRequest(BaseModel):
     scene_count: int | None = Field(default=None, ge=MIN_SCENES, le=MAX_SCENES)
     product_context: str | None = Field(default=None, max_length=3000)
     platform_knowledge_context: str | None = Field(default=None, max_length=12000)
+    analysis_context: str | None = Field(default=None, max_length=4000)
     pronunciation_lexicon: dict[str, str] = Field(default_factory=dict, max_length=100)
     require_pronunciation_text: bool = False
     has_reference_image: bool = False

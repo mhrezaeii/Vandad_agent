@@ -4,9 +4,14 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { api, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { ACTIVE_PROJECT_STATUSES, useProduction } from "@/lib/use-production";
+import {
+  ACTIVE_PROJECT_STATUSES,
+  useProduction,
+  type StageEntry,
+} from "@/lib/use-production";
 import type {
   AccountList,
+  AgentTask,
   AuthUser,
   Brand,
   CharacterImage,
@@ -35,6 +40,17 @@ type ScenarioSceneView = {
   on_screen_text?: string | null;
   duration_seconds?: number;
   scene_type?: string;
+};
+
+type AnalysisView = {
+  selected_topic?: string;
+  selection_reason?: string;
+  brand_fit?: number;
+  candidate_count?: number;
+  duplicate_count?: number;
+  source_count?: number;
+  platform_count?: number;
+  sources?: string[];
 };
 
 type ScenarioView = {
@@ -86,6 +102,48 @@ function readScenario(project: ContentProject | null): ScenarioView | null {
   return project.scenario as unknown as ScenarioView;
 }
 
+function readAnalysis(
+  project: ContentProject | null,
+  task: AgentTask | null,
+): AnalysisView | null {
+  const raw =
+    (project?.scene_options?.analysis as Record<string, unknown> | undefined) ??
+    (task?.result_payload?.analysis as Record<string, unknown> | undefined);
+  if (!raw || typeof raw !== "object") return null;
+  const sources = (Array.isArray(raw.sources) ? raw.sources : [])
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (
+        item &&
+        typeof item === "object" &&
+        typeof (item as { source_url?: unknown }).source_url === "string"
+      ) {
+        return (item as { source_url: string }).source_url;
+      }
+      return "";
+    })
+    .filter((value) => Boolean(value));
+  const number = (key: string) =>
+    typeof raw[key] === "number" ? (raw[key] as number) : undefined;
+  const text = (key: string) =>
+    typeof raw[key] === "string" ? (raw[key] as string) : undefined;
+  return {
+    selected_topic: text("selected_topic"),
+    selection_reason: text("selection_reason"),
+    brand_fit: number("brand_fit"),
+    candidate_count: number("candidate_count"),
+    duplicate_count: number("duplicate_count"),
+    source_count: number("source_count"),
+    platform_count: number("platform_count"),
+    sources,
+  };
+}
+
+function readQcStatus(task: AgentTask | null) {
+  const value = task?.result_payload?.qc_status;
+  return typeof value === "string" ? value : null;
+}
+
 function initials(value: string) {
   const parts = value.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "؟";
@@ -135,27 +193,98 @@ function TimelineStep({
   );
 }
 
+function StageRow({ stage, last }: { stage: StageEntry; last: boolean }) {
+  const { stageLabel, stageStatusLabel, formatNumber } = useI18n();
+  const details: Array<[string, string | number | boolean]> = [];
+  for (const key of [
+    "topic",
+    "title",
+    "platform_count",
+    "candidate_count",
+    "duplicate_count",
+    "source_count",
+    "scene_count",
+    "duration_seconds",
+    "video_status",
+    "brand_fit",
+  ]) {
+    const value = stage.payload[key];
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      details.push([key, value]);
+    }
+  }
+  return (
+    <li
+      className={cx(
+        "timeline-step",
+        `tone-${statusTone(stage.status ?? "running")}`,
+      )}
+    >
+      <span className="timeline-rail" aria-hidden="true">
+        <span className="timeline-dot" />
+        {!last ? <span className="timeline-line" /> : null}
+      </span>
+      <div className="timeline-body">
+        <div className="timeline-head">
+          <strong>{stageLabel(stage.stage)}</strong>
+          {stage.status ? (
+            <StatusPill
+              status={stage.status}
+              label={stageStatusLabel(stage.status)}
+            />
+          ) : null}
+        </div>
+        {details.length > 0 ? (
+          <div className="timeline-meta">
+            {details.map(([key, value]) => (
+              <span key={key}>
+                {key.replaceAll("_", " ")}:{" "}
+                {typeof value === "number" ? formatNumber(value) : String(value)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
 export function Dashboard() {
-  const { t, locale, formatNumber, formatDateTime, projectStatus, executionStatus } =
-    useI18n();
+  const {
+    t,
+    locale,
+    formatNumber,
+    formatDateTime,
+    projectStatus,
+    executionStatus,
+    taskStatus,
+  } = useI18n();
   const { user, logout } = useAuth();
   const production = useProduction();
   const {
+    task,
+    stages,
     project,
     execution,
     steps,
-    executionKind,
+    history,
+    historyLoading,
     videoUrl,
     error: productionError,
     busy: productionBusy,
     cancelling,
+    retrying,
     restoring,
     start,
     cancel,
-    retryScenario,
+    retry,
     reset,
     refresh,
-    selectExecution,
+    openTask,
     setError: setProductionError,
   } = production;
 
@@ -169,6 +298,7 @@ export function Dashboard() {
   const [optionsLoading, setOptionsLoading] = useState(true);
 
   const [topic, setTopic] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
   const [duration, setDuration] = useState(20);
   const [providerId, setProviderId] = useState("");
   const [characterKey, setCharacterKey] = useState("");
@@ -290,7 +420,13 @@ export function Dashboard() {
   const scenarioDuration =
     scenario?.total_duration_seconds ??
     scenes.reduce((total, scene) => total + (scene.duration_seconds ?? 0), 0);
-  const isActive = project ? ACTIVE_PROJECT_STATUSES.has(project.status) : false;
+  const analysis = readAnalysis(project, task);
+  const qcStatus = readQcStatus(task);
+  const taskActive =
+    !!task &&
+    ["pending", "queued", "awaiting_approval", "running"].includes(task.status);
+  const isActive =
+    taskActive || (project ? ACTIVE_PROJECT_STATUSES.has(project.status) : false);
   const isCompleted = project?.status === "completed";
   const scenarioApproved =
     !!project &&
@@ -304,9 +440,13 @@ export function Dashboard() {
       "completed",
     ].includes(project.status);
   const canCancel =
-    !!project && !["completed", "cancelled"].includes(project.status);
-  const canRetryScenario =
-    project?.status === "draft" || project?.status === "script_failed";
+    (!!task &&
+      ["pending", "queued", "awaiting_approval", "running"].includes(
+        task.status,
+      )) ||
+    (!!project && !["completed", "cancelled"].includes(project.status));
+  const canRetry =
+    task?.status === "failed" && task.attempt_count < task.max_attempts;
 
   const providerLabel =
     providers.find((item) => item.provider_id === project?.scene_video_provider)
@@ -321,8 +461,12 @@ export function Dashboard() {
       setFormError(t("noProfileSelected"));
       return;
     }
-    if (topic.trim().length < 3) {
+    if (topic.trim().length > 0 && topic.trim().length < 3) {
       setFormError(t("topicTooShort"));
+      return;
+    }
+    if (sourceUrl.trim() && !/^https?:\/\//i.test(sourceUrl.trim())) {
+      setFormError(t("sourceUrlHint"));
       return;
     }
     if (!Number.isFinite(duration) || duration < 5 || duration > 120) {
@@ -333,10 +477,14 @@ export function Dashboard() {
       setFormError(t("noCharacterSelected"));
       return;
     }
+    const brandName =
+      selectedBrand?.display_name || selectedBrand?.name || t("appName");
     try {
       await start({
         brandId: selectedBrandId,
-        topic: topic.trim(),
+        title: topic.trim() || `${t("productionTitle")} — ${brandName}`,
+        topic: topic.trim() || null,
+        sourceUrl: sourceUrl.trim() || null,
         durationSeconds: duration,
         providerId: providerId || null,
         characterKey,
@@ -448,6 +596,7 @@ export function Dashboard() {
                 : null,
         },
         { label: t("metaCost"), value: formatCost(project.cost_metadata) },
+        { label: t("qcStatus"), value: qcStatus },
       ].filter((item) => Boolean(item.value))
     : [];
 
@@ -662,7 +811,11 @@ export function Dashboard() {
           ) : null}
 
           <div className="form-grid">
-            <Field label={t("topicLabel")} htmlFor="topic" hint={t("productionSubtitle")}>
+            <Field
+              label={t("topicLabel")}
+              htmlFor="topic"
+              hint={t("topicOptionalHint")}
+            >
               <textarea
                 id="topic"
                 name="topic"
@@ -671,6 +824,23 @@ export function Dashboard() {
                 placeholder={t("topicPlaceholder")}
                 value={topic}
                 onChange={(event) => setTopic(event.target.value)}
+                disabled={productionBusy || !!project}
+              />
+            </Field>
+
+            <Field
+              label={t("sourceUrlLabel")}
+              htmlFor="source-url"
+              hint={t("sourceUrlHint")}
+            >
+              <input
+                id="source-url"
+                name="source-url"
+                type="url"
+                dir="ltr"
+                placeholder={t("sourceUrlPlaceholder")}
+                value={sourceUrl}
+                onChange={(event) => setSourceUrl(event.target.value)}
                 disabled={productionBusy || !!project}
               />
             </Field>
@@ -745,7 +915,7 @@ export function Dashboard() {
               className="button button--primary button--start"
               onClick={() => void startProcess()}
               disabled={
-                productionBusy || restoring || !!project || characters.length === 0
+                productionBusy || restoring || !!task || characters.length === 0
               }
             >
               {productionBusy ? (
@@ -759,7 +929,7 @@ export function Dashboard() {
                 </>
               )}
             </button>
-            {project ? (
+            {task ? (
               <button
                 type="button"
                 className="button button--ghost"
@@ -778,30 +948,42 @@ export function Dashboard() {
           <section className="glass card">
             <Spinner label={t("loading")} />
           </section>
-        ) : project ? (
+        ) : task ? (
           <section className="glass card process-card">
             <header className="card-head">
               <div>
                 <h2>{t("activeProcess")}</h2>
                 <p>
-                  {t("projectId")}:{" "}
-                  <code dir="ltr">{project.id.slice(0, 8)}</code>
+                  {t("taskId")}: <code dir="ltr">{task.id.slice(0, 8)}</code>
+                  {project ? (
+                    <>
+                      {" · "}
+                      {t("projectId")}:{" "}
+                      <code dir="ltr">{project.id.slice(0, 8)}</code>
+                    </>
+                  ) : null}
                 </p>
               </div>
               <div className="process-head-actions">
                 <StatusPill
-                  status={project.status}
-                  label={projectStatus(project.status)}
+                  status={task.status}
+                  label={taskStatus(task.status)}
                 />
-                {canRetryScenario ? (
+                {project ? (
+                  <StatusPill
+                    status={project.status}
+                    label={projectStatus(project.status)}
+                  />
+                ) : null}
+                {canRetry ? (
                   <button
                     type="button"
                     className="button button--ghost button--tiny"
-                    onClick={() => void retryScenario()}
-                    disabled={productionBusy}
-                    title={t("retryHint")}
+                    onClick={() => void retry()}
+                    disabled={retrying}
+                    title={t("retryTask")}
                   >
-                    {t("retryScenario")}
+                    {retrying ? <Spinner /> : t("retryTask")}
                   </button>
                 ) : null}
                 {canCancel ? (
@@ -835,17 +1017,18 @@ export function Dashboard() {
             </header>
 
             {productionError ? (
-              <Alert
-                tone="error"
-                onClose={() => setProductionError(null)}
-              >
+              <Alert tone="error" onClose={() => setProductionError(null)}>
                 {productionError}
               </Alert>
             ) : null}
+            {task.error_message ? (
+              <Alert tone="error">{task.error_message}</Alert>
+            ) : null}
 
             <div className="process-ids">
+              <CopyField label={t("taskId")} value={task.id} />
+              <CopyField label={t("projectId")} value={project?.id} />
               <CopyField label={t("workflowId")} value={execution?.id} />
-              <CopyField label={t("projectId")} value={project.id} />
             </div>
 
             <div className="execution-bar">
@@ -861,36 +1044,88 @@ export function Dashboard() {
                   />
                 ) : null}
               </div>
-              {project.script_workflow_execution_id &&
-              project.video_workflow_execution_id ? (
-                <div className="segmented segmented--small">
-                  <button
-                    type="button"
-                    className={cx(executionKind === "script" && "is-active")}
-                    onClick={() => selectExecution("script")}
-                  >
-                    {t("statusScenario")}
-                  </button>
-                  <button
-                    type="button"
-                    className={cx(executionKind === "video" && "is-active")}
-                    onClick={() => selectExecution("video")}
-                  >
-                    {t("statusVideo")}
-                  </button>
-                </div>
-              ) : null}
+              <span className="muted small">
+                {t("taskAttempt")} {formatNumber(task.attempt_count)} /{" "}
+                {formatNumber(task.max_attempts)}
+              </span>
             </div>
 
             {execution?.error_message ? (
               <Alert tone="error">{execution.error_message}</Alert>
             ) : null}
-            {project.error_message ? (
+            {project?.error_message && !task.error_message ? (
               <Alert tone="error">{project.error_message}</Alert>
             ) : null}
 
+            <h3 className="section-subtitle">{t("agentStagesTitle")}</h3>
+            {stages.length === 0 ? (
+              <p className="empty-inline">{t("agentStagesEmpty")}</p>
+            ) : (
+              <ol className="timeline">
+                {stages.map((stage, index) => (
+                  <StageRow
+                    key={stage.id}
+                    stage={stage}
+                    last={index === stages.length - 1}
+                  />
+                ))}
+              </ol>
+            )}
+
+            {analysis ? (
+              <div className="analysis-block">
+                <h3 className="section-subtitle">{t("analysisTitle")}</h3>
+                <dl className="meta-grid">
+                  {analysis.selected_topic ? (
+                    <div>
+                      <dt>{t("analysisTopic")}</dt>
+                      <dd dir="auto">{analysis.selected_topic}</dd>
+                    </div>
+                  ) : null}
+                  {analysis.brand_fit != null ? (
+                    <div>
+                      <dt>{t("analysisFit")}</dt>
+                      <dd>
+                        {formatNumber(Math.round(analysis.brand_fit * 100))}%
+                      </dd>
+                    </div>
+                  ) : null}
+                  {analysis.candidate_count != null ? (
+                    <div>
+                      <dt>{t("analysisCandidates")}</dt>
+                      <dd>{formatNumber(analysis.candidate_count)}</dd>
+                    </div>
+                  ) : null}
+                  {analysis.duplicate_count != null ? (
+                    <div>
+                      <dt>{t("analysisDuplicates")}</dt>
+                      <dd>{formatNumber(analysis.duplicate_count)}</dd>
+                    </div>
+                  ) : null}
+                  {analysis.source_count != null ? (
+                    <div>
+                      <dt>{t("analysisSources")}</dt>
+                      <dd>{formatNumber(analysis.source_count)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {analysis.sources && analysis.sources.length > 0 ? (
+                  <ul className="source-list" dir="ltr">
+                    {analysis.sources.map((url) => (
+                      <li key={url}>
+                        <a href={url} target="_blank" rel="noreferrer">
+                          {url}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+
+            <h3 className="section-subtitle">{t("videoWorkflowTitle")}</h3>
             {steps.length === 0 ? (
-              <p className="empty-inline">{t("timelineEmpty")}</p>
+              <p className="empty-inline">{t("videoWorkflowEmpty")}</p>
             ) : (
               <ol className="timeline">
                 {steps.map((step, index) => (
@@ -906,7 +1141,7 @@ export function Dashboard() {
             {isActive ? (
               <p className="live-note">
                 <span className="live-dot" aria-hidden="true" />
-                {t("statusVideo")} · {t("refresh")} · 3s
+                {t("refresh")} · 3s
               </p>
             ) : null}
           </section>
@@ -921,6 +1156,74 @@ export function Dashboard() {
             <p>{t("timelineEmpty")}</p>
           </section>
         )}
+
+        <section className="glass card">
+          <header className="card-head">
+            <div>
+              <h2>{t("historyTitle")}</h2>
+            </div>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void refresh()}
+              title={t("refresh")}
+              aria-label={t("refresh")}
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none">
+                <path
+                  d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </header>
+          {historyLoading && history.length === 0 ? (
+            <Spinner label={t("loading")} />
+          ) : history.length === 0 ? (
+            <p className="empty-inline">{t("historyEmpty")}</p>
+          ) : (
+            <ul className="history-list">
+              {history.map((item) => {
+                const current = item.id === task?.id;
+                return (
+                  <li
+                    key={item.id}
+                    className={cx("history-row", current && "is-current")}
+                  >
+                    <div className="history-info">
+                      <strong dir="auto">{item.title}</strong>
+                      <small>
+                        {formatDateTime(item.created_at)} ·{" "}
+                        {formatNumber(item.attempt_count)}/
+                        {formatNumber(item.max_attempts)}
+                      </small>
+                    </div>
+                    <StatusPill
+                      status={item.status}
+                      label={taskStatus(item.status)}
+                    />
+                    {current ? (
+                      <span className="pill pill--info">
+                        {t("historyCurrent")}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button--ghost button--tiny"
+                        onClick={() => void openTask(item.id)}
+                      >
+                        {t("historyOpen")}
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
 
         <div className="dash-columns">
           <section className="glass card">

@@ -3,12 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, apiBlob, errorMessage } from "@/lib/api";
 import type {
+  AgentTask,
+  AgentTaskEvent,
+  AgentTaskList,
   ContentProject,
   WorkflowExecution,
   WorkflowStep,
+  WorkflowStepList,
 } from "@/lib/types";
 
-const ACTIVE_KEY = "vandad.activeProject";
+const ACTIVE_KEY = "vandad.activeTask";
 const POLL_INTERVAL_MS = 3000;
 
 export const ACTIVE_PROJECT_STATUSES = new Set<string>([
@@ -23,45 +27,107 @@ export const ACTIVE_PROJECT_STATUSES = new Set<string>([
   "assembling",
 ]);
 
-const VIDEO_STAGE_STATUSES = new Set<string>([
-  "approved",
-  "scenes_prepared",
-  "video_generation_pending",
-  "video_generating",
-  "video_generated",
-  "assembling",
+export const ACTIVE_TASK_STATUSES = new Set<string>([
+  "pending",
+  "queued",
+  "awaiting_approval",
+  "running",
+]);
+
+const TERMINAL_TASK_STATUSES = new Set<string>([
+  "completed",
+  "failed",
+  "cancelled",
 ]);
 
 export type StartInput = {
   brandId: string;
-  topic: string;
+  title: string;
+  topic: string | null;
+  sourceUrl: string | null;
   durationSeconds: number;
   providerId: string | null;
   characterKey: string | null;
+  characterImageUrl?: string | null;
 };
 
-export type ExecutionKind = "script" | "video";
+/** One backend-reported stage of the content production agent. */
+export type StageEntry = {
+  id: string;
+  sequence: number;
+  stage: string;
+  status: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
 
-type WorkflowStepList = { items: WorkflowStep[]; total: number };
+function projectIdFrom(
+  task: AgentTask | null,
+  events: AgentTaskEvent[],
+): string | null {
+  const fromResult = task?.result_payload?.project_id;
+  if (typeof fromResult === "string" && fromResult) return fromResult;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const value = events[index]?.payload?.project_id;
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
+}
+
+function toStages(events: AgentTaskEvent[]): StageEntry[] {
+  return events
+    .filter(
+      (event) => event.event_type === "progress" || event.event_type === "run.failed",
+    )
+    .map((event) => ({
+      id: event.id,
+      sequence: event.sequence,
+      stage:
+        typeof event.payload?.stage === "string"
+          ? event.payload.stage
+          : event.event_type === "run.failed"
+            ? "run.failed"
+            : "progress",
+      status:
+        typeof event.payload?.stage_status === "string"
+          ? event.payload.stage_status
+          : event.event_type === "run.failed"
+            ? "failed"
+            : null,
+      payload: event.payload,
+      createdAt: event.created_at,
+    }))
+    .sort((left, right) => left.sequence - right.sequence);
+}
 
 export function useProduction() {
+  const [task, setTask] = useState<AgentTask | null>(null);
+  const [events, setEvents] = useState<AgentTaskEvent[]>([]);
   const [project, setProject] = useState<ContentProject | null>(null);
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
-  const [executionKind, setExecutionKind] = useState<ExecutionKind>("script");
+  const [history, setHistory] = useState<AgentTask[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [restoring, setRestoring] = useState(true);
 
+  const taskRef = useRef<AgentTask | null>(null);
   const projectRef = useRef<ContentProject | null>(null);
-  const kindRef = useRef<ExecutionKind>("script");
   const startLock = useRef(false);
-  const advanceLock = useRef(false);
-  const advanceAttempts = useRef<Record<string, number>>({});
+  const syncLock = useRef(false);
   const videoRef = useRef<string | null>(null);
+  const videoProjectRef = useRef<string | null>(null);
   const videoLoadingRef = useRef<string | null>(null);
+  const lastTerminalRef = useRef<string | null>(null);
+
+  const setTaskState = useCallback((next: AgentTask | null) => {
+    taskRef.current = next;
+    setTask(next);
+  }, []);
 
   const setProjectState = useCallback((next: ContentProject | null) => {
     projectRef.current = next;
@@ -71,113 +137,140 @@ export function useProduction() {
   const clearVideo = useCallback(() => {
     if (videoRef.current) URL.revokeObjectURL(videoRef.current);
     videoRef.current = null;
+    videoProjectRef.current = null;
     videoLoadingRef.current = null;
     setVideoUrl(null);
   }, []);
 
   const loadVideo = useCallback(
     async (current: ContentProject) => {
+      if (current.status !== "completed" || !current.final_artifact_id) {
+        return;
+      }
       if (
-        current.status !== "completed" ||
-        !current.final_artifact_id ||
-        videoRef.current ||
+        (videoProjectRef.current === current.id && videoRef.current) ||
         videoLoadingRef.current === current.id
       ) {
         return;
       }
+      if (videoProjectRef.current !== current.id) clearVideo();
       videoLoadingRef.current = current.id;
       try {
         const blob = await apiBlob(`/content/videos/${current.id}/content`);
         if (videoRef.current) URL.revokeObjectURL(videoRef.current);
         videoRef.current = URL.createObjectURL(blob);
+        videoProjectRef.current = current.id;
         setVideoUrl(videoRef.current);
       } finally {
         videoLoadingRef.current = null;
       }
     },
-    [],
+    [clearVideo],
   );
 
-  const syncExecution = useCallback(
-    async (current: ContentProject, kind: ExecutionKind) => {
-      const executionId =
-        kind === "video"
-          ? current.video_workflow_execution_id
-          : current.script_workflow_execution_id;
-      if (!executionId) {
-        setExecution(null);
-        setSteps([]);
-        return;
-      }
+  const syncExecution = useCallback(async (current: ContentProject) => {
+    const executionId = current.video_workflow_execution_id;
+    if (!executionId) {
+      setExecution(null);
+      setSteps([]);
+      return;
+    }
+    try {
       const [nextExecution, stepList] = await Promise.all([
         api<WorkflowExecution>(`/executions/${executionId}`),
         api<WorkflowStepList>(`/executions/${executionId}/steps`),
       ]);
       setExecution(nextExecution);
       setSteps(stepList.items);
-    },
-    [],
-  );
+    } catch (cause) {
+      // The execution may still be committing on the backend; the next poll
+      // retries. Never surface a transient 404 as a production failure.
+      if ((cause as { status?: number }).status !== 404) throw cause;
+    }
+  }, []);
 
   const syncProject = useCallback(
     async (projectId: string) => {
+      if (projectRef.current?.id !== projectId) clearVideo();
       const next = await api<ContentProject>(`/content/projects/${projectId}`);
       setProjectState(next);
-      await syncExecution(next, kindRef.current);
+      await syncExecution(next);
       await loadVideo(next);
       return next;
     },
-    [loadVideo, setProjectState, syncExecution],
+    [clearVideo, loadVideo, setProjectState, syncExecution],
   );
 
-  const refresh = useCallback(async () => {
-    const current = projectRef.current;
-    if (!current) return null;
+  const syncTask = useCallback(
+    async (taskId: string) => {
+      const next = await api<AgentTask>(`/agent-tasks/${taskId}`);
+      setTaskState(next);
+      const eventList = await api<AgentTaskEvent[]>(
+        `/agent-tasks/${taskId}/events?after=0&limit=500`,
+      );
+      setEvents(eventList);
+      const projectId = projectIdFrom(next, eventList);
+      if (projectId) {
+        await syncProject(projectId);
+      } else {
+        setProjectState(null);
+        setExecution(null);
+        setSteps([]);
+      }
+      return next;
+    },
+    [setProjectState, setTaskState, syncProject],
+  );
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
     try {
-      return await syncProject(current.id);
+      const list = await api<AgentTaskList>(
+        "/agent-tasks?agent_key=content&limit=20",
+      );
+      setHistory(
+        list.items.filter(
+          (item) => item.capability === "content.production.run",
+        ),
+      );
+    } catch {
+      // History is supplementary; a failure must not break the live view.
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const current = taskRef.current;
+    if (!current) {
+      await loadHistory();
+      return null;
+    }
+    if (syncLock.current) return current;
+    syncLock.current = true;
+    try {
+      return await syncTask(current.id);
     } catch (cause) {
       setError(errorMessage(cause));
       return null;
+    } finally {
+      syncLock.current = false;
     }
-  }, [syncProject]);
+  }, [loadHistory, syncTask]);
 
-  const selectExecution = useCallback(
-    (kind: ExecutionKind) => {
-      kindRef.current = kind;
-      setExecutionKind(kind);
-      const current = projectRef.current;
-      if (current) {
-        void syncExecution(current, kind).catch((cause) =>
-          setError(errorMessage(cause)),
-        );
-      }
-    },
-    [syncExecution],
-  );
-
-  // Restore an in-flight project after a page reload.
+  // Restore the last task after a reload.
   useEffect(() => {
     let cancelled = false;
     const saved =
       typeof window !== "undefined"
         ? window.localStorage.getItem(ACTIVE_KEY)
         : null;
-    if (!saved) {
-      setRestoring(false);
-      return;
-    }
     (async () => {
       try {
-        const next = await api<ContentProject>(`/content/projects/${saved}`);
-        if (cancelled) return;
-        setProjectState(next);
-        const kind: ExecutionKind = next.video_workflow_execution_id
-          ? "video"
-          : "script";
-        kindRef.current = kind;
-        setExecutionKind(kind);
-        await syncExecution(next, kind);
-        await loadVideo(next);
+        if (saved) {
+          await syncTask(saved);
+        }
+        await loadHistory();
       } catch (cause) {
         if (cancelled) return;
         const status = (cause as { status?: number }).status;
@@ -193,59 +286,27 @@ export function useProduction() {
     return () => {
       cancelled = true;
     };
-  }, [loadVideo, setProjectState, syncExecution]);
+  }, [loadHistory, syncTask]);
 
-  // Poll while the pipeline is in flight.
+  // Poll while either the agent task or the video project is still moving.
+  const taskActive = !!task && ACTIVE_TASK_STATUSES.has(task.status);
+  const projectActive = !!project && ACTIVE_PROJECT_STATUSES.has(project.status);
   useEffect(() => {
-    if (!project || !ACTIVE_PROJECT_STATUSES.has(project.status)) return;
+    if (!taskActive && !projectActive) return;
     const timer = window.setInterval(() => {
       void refresh();
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [project?.id, project?.status, refresh, project]);
+  }, [taskActive, projectActive, refresh]);
 
-  // Advance the real backend pipeline through its operator gates. This never
-  // fabricates progress: each call starts an actual backend workflow.
+  // Refresh history once when the task reaches a terminal state.
   useEffect(() => {
-    if (!project) return;
-    if (project.status !== "script_ready" && project.status !== "approved") {
-      return;
-    }
-    if (advanceLock.current) return;
-    const stageKey = `${project.id}:${project.status}`;
-    const attempts = advanceAttempts.current[stageKey] ?? 0;
-    // A permanent backend rejection must not be retried forever on every poll.
-    if (attempts >= 3) return;
-    advanceAttempts.current[stageKey] = attempts + 1;
-    const current = project;
-    advanceLock.current = true;
-    (async () => {
-      try {
-        if (current.status === "script_ready") {
-          await api(`/content/scene-projects/${current.id}/approve-scenario`, {
-            method: "POST",
-            body: JSON.stringify({ approved: true }),
-          });
-        }
-        await api(`/content/scene-projects/${current.id}/generate-video`, {
-          method: "POST",
-          body: JSON.stringify({
-            provider_id: current.scene_video_provider ?? undefined,
-          }),
-        });
-        const next = await syncProject(current.id);
-        if (next.video_workflow_execution_id) {
-          kindRef.current = "video";
-          setExecutionKind("video");
-          await syncExecution(next, "video");
-        }
-      } catch (cause) {
-        setError(errorMessage(cause));
-      } finally {
-        advanceLock.current = false;
-      }
-    })();
-  }, [project, syncExecution, syncProject]);
+    if (!task) return;
+    if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+    if (lastTerminalRef.current === task.id) return;
+    lastTerminalRef.current = task.id;
+    void loadHistory();
+  }, [task, loadHistory]);
 
   useEffect(() => {
     return () => {
@@ -263,101 +324,134 @@ export function useProduction() {
       setError(null);
       clearVideo();
       try {
-        const created = await api<ContentProject>("/content/scene-projects", {
+        const inputPayload: Record<string, unknown> = {
+          brand_id: input.brandId,
+          target_duration_seconds: input.durationSeconds,
+        };
+        if (input.topic?.trim()) inputPayload.topic = input.topic.trim();
+        if (input.sourceUrl?.trim()) inputPayload.source_url = input.sourceUrl.trim();
+        if (input.providerId) inputPayload.provider_id = input.providerId;
+        if (input.characterKey) inputPayload.character_key = input.characterKey;
+        if (input.characterImageUrl) {
+          inputPayload.character_image_url = input.characterImageUrl;
+        }
+        const created = await api<AgentTask>("/agent-tasks", {
           method: "POST",
           body: JSON.stringify({
-            brand_id: input.brandId,
-            topic: input.topic,
-            target_duration_seconds: input.durationSeconds,
-            provider_id: input.providerId ?? undefined,
-            character_key: input.characterKey ?? undefined,
+            agent_key: "content",
+            capability: "content.production.run",
+            title: input.title,
+            input_payload: inputPayload,
+            idempotency_key: `content-production:${input.brandId}:${Date.now()}:${Math.random()
+              .toString(36)
+              .slice(2, 10)}`,
           }),
         });
         window.localStorage.setItem(ACTIVE_KEY, created.id);
-        setProjectState(created);
-        const started = await api<ContentProject>(
-          `/content/scene-projects/${created.id}/generate-scenario`,
-          { method: "POST", body: JSON.stringify({}) },
-        );
-        setProjectState(started);
-        kindRef.current = "script";
-        setExecutionKind("script");
-        await syncExecution(started, "script");
-        return started;
+        setTaskState(created);
+        setEvents([]);
+        setProjectState(null);
+        setExecution(null);
+        setSteps([]);
+        lastTerminalRef.current = null;
+        await syncTask(created.id);
+        await loadHistory();
+        return created;
       } finally {
         startLock.current = false;
         setBusy(false);
       }
     },
-    [clearVideo, setProjectState, syncExecution],
+    [clearVideo, loadHistory, setProjectState, setTaskState, syncTask],
   );
 
   const cancel = useCallback(async () => {
-    const current = projectRef.current;
+    const current = taskRef.current;
     if (!current || cancelling) return;
     setCancelling(true);
     setError(null);
     try {
-      const next = await api<ContentProject>(
-        `/content/scene-projects/${current.id}/cancel`,
-        { method: "POST" },
-      );
-      setProjectState(next);
-      await syncExecution(next, kindRef.current);
+      await api<AgentTask>(`/agent-tasks/${current.id}/cancel`, {
+        method: "POST",
+      });
+      await syncTask(current.id);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
       setCancelling(false);
     }
-  }, [cancelling, setProjectState, syncExecution]);
+  }, [cancelling, syncTask]);
 
-  const retryScenario = useCallback(async () => {
-    const current = projectRef.current;
-    if (!current || busy) return;
-    setBusy(true);
+  const retry = useCallback(async () => {
+    const current = taskRef.current;
+    if (!current || retrying) return;
+    setRetrying(true);
     setError(null);
     try {
-      const started = await api<ContentProject>(
-        `/content/scene-projects/${current.id}/generate-scenario`,
-        { method: "POST", body: JSON.stringify({}) },
-      );
-      setProjectState(started);
-      await syncExecution(started, "script");
+      await api<AgentTask>(`/agent-tasks/${current.id}/retry`, {
+        method: "POST",
+      });
+      lastTerminalRef.current = null;
+      await syncTask(current.id);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      setRetrying(false);
     }
-  }, [busy, setProjectState, syncExecution]);
+  }, [retrying, syncTask]);
+
+  const openTask = useCallback(
+    async (taskId: string) => {
+      setError(null);
+      clearVideo();
+      setEvents([]);
+      setProjectState(null);
+      setExecution(null);
+      setSteps([]);
+      window.localStorage.setItem(ACTIVE_KEY, taskId);
+      try {
+        await syncTask(taskId);
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    },
+    [clearVideo, setProjectState, syncTask],
+  );
 
   const reset = useCallback(() => {
     window.localStorage.removeItem(ACTIVE_KEY);
     clearVideo();
+    setTaskState(null);
+    setEvents([]);
     setProjectState(null);
     setExecution(null);
     setSteps([]);
     setError(null);
-    kindRef.current = "script";
-    setExecutionKind("script");
-  }, [clearVideo, setProjectState]);
+    lastTerminalRef.current = null;
+  }, [clearVideo, setProjectState, setTaskState]);
 
   return {
+    task,
+    events,
+    stages: toStages(events),
     project,
     execution,
     steps,
-    executionKind,
+    history,
+    historyLoading,
     videoUrl,
     error,
     busy,
     cancelling,
+    retrying,
     restoring,
     start,
     cancel,
-    retryScenario,
+    retry,
     reset,
     refresh,
-    selectExecution,
+    openTask,
     setError,
-    isVideoStage: project ? VIDEO_STAGE_STATUSES.has(project.status) : false,
+    isVideoStage: project ? project.status !== "completed" : false,
   };
 }

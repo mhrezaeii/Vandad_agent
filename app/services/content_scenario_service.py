@@ -54,6 +54,7 @@ class ContentScenarioService:
         connection_id: uuid.UUID | None = None,
         timeout_seconds: float = 180.0,
         task_id: uuid.UUID | None = None,
+        analysis: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         project = await self.session.get(ContentProject, project_id)
         if project is None or project.company_id != company_id:
@@ -100,6 +101,7 @@ class ContentScenarioService:
             )
 
         knowledge_context = self._build_knowledge_context(latest_by_platform.values())
+        analysis_context = self._build_analysis_context(analysis)
         cta_config = brand.cta_config or {}
         visual_config = brand.visual_config or {}
         options = project.scene_options or {}
@@ -124,6 +126,7 @@ class ContentScenarioService:
             hashtags=list(cta_config.get("hashtags") or []),
             language=brand.language,
             platform_knowledge_context=knowledge_context,
+            analysis_context=analysis_context,
             pronunciation_lexicon=(
                 visual_config.get("pronunciation_lexicon")
                 if isinstance(visual_config.get("pronunciation_lexicon"), dict)
@@ -199,6 +202,35 @@ class ContentScenarioService:
         raise ConflictError(
             "Linked platform knowledge could not be compacted into a usable context."
         )
+
+    @staticmethod
+    def _build_analysis_context(analysis: dict[str, Any] | None) -> str | None:
+        if not analysis:
+            return None
+        compact = {
+            "selected_topic": analysis.get("selected_topic"),
+            "selection_reason": analysis.get("selection_reason"),
+            "brand_fit": analysis.get("brand_fit"),
+            "supporting_points": [
+                {
+                    "topic": item.get("topic"),
+                    "description": item.get("description"),
+                    "source_url": item.get("source_url"),
+                }
+                for item in (analysis.get("supporting_points") or [])[:5]
+                if isinstance(item, dict)
+            ],
+            "sources": [
+                {
+                    "source_url": item.get("source_url"),
+                    "evidence": item.get("evidence"),
+                }
+                for item in (analysis.get("sources") or [])[:5]
+                if isinstance(item, dict)
+            ],
+        }
+        encoded = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+        return encoded[:4000]
 
     @staticmethod
     def _result(project: ContentProject, *, replayed: bool) -> dict[str, Any]:

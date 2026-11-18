@@ -100,9 +100,15 @@ const fa = {
 
   productionTitle: "اجرای فرآیند تولید",
   productionSubtitle:
-    "موضوع ویدیو را مشخص کنید؛ سناریو، تأیید و تولید ویدیو به‌صورت خودکار اجرا می‌شود.",
-  topicLabel: "موضوع ویدیو",
+    "موضوع ویدیو را مشخص کنید؛ پایش، تحلیل، سناریو، تأیید و تولید ویدیو به‌صورت خودکار اجرا می‌شود.",
+  topicLabel: "موضوع ویدیو (اختیاری)",
   topicPlaceholder: "مثلاً معرفی خدمات مشاوره حقوقی آنلاین",
+  topicOptionalHint:
+    "اگر خالی بماند، موضوع از نتیجه پایش منابع برند انتخاب می‌شود.",
+  sourceUrlLabel: "آدرس منبع پایش (اختیاری)",
+  sourceUrlHint:
+    "اگر برند هنوز به منبعی متصل نیست، آدرس عمومی سایت را وارد کنید.",
+  sourceUrlPlaceholder: "https://example.com",
   durationLabel: "مدت تقریبی (ثانیه)",
   characterLabel: "تصویر مرجع شخصیت",
   characterHint: "برای مدل تصویر-به-ویدیو، انتخاب شخصیت الزامی است.",
@@ -114,6 +120,7 @@ const fa = {
 
   workflowId: "شناسه اجرای Workflow",
   projectId: "شناسه پروژه",
+  taskId: "شناسه اجرای Agent",
   noWorkflowYet: "هنوز اجرایی ثبت نشده است.",
   openWorkflow: "اجرای جاری",
 
@@ -121,6 +128,28 @@ const fa = {
   timelineEmpty: "پس از آغاز فرآیند، مراحل اینجا نمایش داده می‌شوند.",
   stepAttempt: "تلاش",
   stepDuration: "مدت",
+
+  agentStagesTitle: "مراحل اجرای Agent",
+  agentStagesEmpty: "مراحل واقعی سرور پس از شروع فرآیند اینجا نمایش داده می‌شوند.",
+  videoWorkflowTitle: "مراحل Workflow تولید ویدیو",
+  videoWorkflowEmpty: "پس از ارسال به سرویس ویدیو، گام‌های Workflow اینجا نمایش داده می‌شوند.",
+  historyTitle: "تاریخچه اجراها",
+  historyEmpty: "هنوز اجرایی ثبت نشده است.",
+  historyOpen: "مشاهده",
+  historyCurrent: "جاری",
+  taskAttempt: "تلاش",
+
+  analysisTitle: "تحلیل موضوع",
+  analysisTopic: "موضوع انتخاب‌شده",
+  analysisFit: "تطابق با برند",
+  analysisCandidates: "نامزدهای بررسی‌شده",
+  analysisDuplicates: "موارد تکراری حذف‌شده",
+  analysisSources: "منابع استناد",
+  analysisEmpty: "تحلیل موضوع برای این اجرا در دسترس نیست.",
+
+  qcStatus: "وضعیت بازبینی کیفیت",
+  finalReady: "ویدیوی نهایی آماده است",
+  retryTask: "تلاش مجدد فرآیند",
 
   statusIdle: "آماده",
   statusScenario: "تولید سناریو",
@@ -240,6 +269,38 @@ const fa = {
   "step.cancelled": "لغو‌شده",
   "step.retrying": "تلاش مجدد",
 
+  "task.pending": "در انتظار",
+  "task.queued": "در صف",
+  "task.awaiting_approval": "در انتظار تأیید",
+  "task.running": "در حال اجرا",
+  "task.completed": "تکمیل‌شده",
+  "task.failed": "ناموفق",
+  "task.cancelled": "لغو‌شده",
+
+  "stageStatus.running": "در حال اجرا",
+  "stageStatus.completed": "تکمیل‌شده",
+  "stageStatus.waiting": "در انتظار",
+  "stageStatus.failed": "ناموفق",
+
+  "stage.production.started": "آغاز فرآیند تولید",
+  "stage.production.resumed": "ادامه فرآیند ذخیره‌شده",
+  "stage.monitoring.started": "پایش منابع برند",
+  "stage.monitoring.completed": "پایش منابع تکمیل شد",
+  "stage.analysis.started": "تحلیل و انتخاب موضوع",
+  "stage.analysis.completed": "تحلیل موضوع تکمیل شد",
+  "stage.project.ready": "پروژه محتوا آماده شد",
+  "stage.scenario.started": "تولید سناریو با GPT",
+  "stage.scenario.completed": "سناریو تولید شد",
+  "stage.scenario.retry": "تلاش مجدد تولید سناریو",
+  "stage.scenario.approval.started": "بازبینی و تأیید سناریو",
+  "stage.scenario.approved": "سناریو تأیید شد",
+  "stage.video.dispatch.started": "ارسال به سرویس ویدیو",
+  "stage.video.dispatched": "ویدیو در صف تولید",
+  "stage.video.waiting": "انتظار برای ویدیوی نهایی",
+  "stage.video.wait.timeout": "ویدیو هنوز در حال تولید است",
+  "stage.delivery.completed": "تحویل ویدیوی نهایی",
+  "stage.run.failed": "خطای اجرا",
+
   "node.start": "آغاز فرآیند",
   "node.finish": "پایان",
   "node.generate_scenario": "تولید سناریو",
@@ -344,9 +405,15 @@ const en: Record<MessageKey, string> = {
 
   productionTitle: "Run the production pipeline",
   productionSubtitle:
-    "Describe the video topic; scenario generation, approval and rendering run automatically.",
-  topicLabel: "Video topic",
+    "Describe the video topic; monitoring, analysis, scenario generation, approval and rendering run automatically.",
+  topicLabel: "Video topic (optional)",
   topicPlaceholder: "e.g. Introducing our online legal consultation service",
+  topicOptionalHint:
+    "Leave empty to let the pipeline select a topic from brand monitoring.",
+  sourceUrlLabel: "Monitoring source URL (optional)",
+  sourceUrlHint:
+    "If the brand has no linked source yet, enter its public website URL.",
+  sourceUrlPlaceholder: "https://example.com",
   durationLabel: "Approximate duration (seconds)",
   characterLabel: "Character reference image",
   characterHint: "Image-to-video models require a character reference.",
@@ -358,6 +425,7 @@ const en: Record<MessageKey, string> = {
 
   workflowId: "Workflow execution ID",
   projectId: "Project ID",
+  taskId: "Agent task ID",
   noWorkflowYet: "No execution recorded yet.",
   openWorkflow: "Active execution",
 
@@ -365,6 +433,30 @@ const en: Record<MessageKey, string> = {
   timelineEmpty: "Steps appear here once the process starts.",
   stepAttempt: "Attempt",
   stepDuration: "Duration",
+
+  agentStagesTitle: "Agent execution stages",
+  agentStagesEmpty:
+    "Real backend stages appear here once the process starts.",
+  videoWorkflowTitle: "Video workflow steps",
+  videoWorkflowEmpty:
+    "Workflow nodes appear here after the video job is dispatched.",
+  historyTitle: "Execution history",
+  historyEmpty: "No executions recorded yet.",
+  historyOpen: "Open",
+  historyCurrent: "Current",
+  taskAttempt: "Attempt",
+
+  analysisTitle: "Topic analysis",
+  analysisTopic: "Selected topic",
+  analysisFit: "Brand fit",
+  analysisCandidates: "Candidates reviewed",
+  analysisDuplicates: "Duplicates removed",
+  analysisSources: "Cited sources",
+  analysisEmpty: "Topic analysis is not available for this run.",
+
+  qcStatus: "Quality review status",
+  finalReady: "The final video is ready",
+  retryTask: "Retry pipeline",
 
   statusIdle: "Ready",
   statusScenario: "Generating scenario",
@@ -486,6 +578,38 @@ const en: Record<MessageKey, string> = {
   "step.cancelled": "Cancelled",
   "step.retrying": "Retrying",
 
+  "task.pending": "Pending",
+  "task.queued": "Queued",
+  "task.awaiting_approval": "Awaiting approval",
+  "task.running": "Running",
+  "task.completed": "Completed",
+  "task.failed": "Failed",
+  "task.cancelled": "Cancelled",
+
+  "stageStatus.running": "Running",
+  "stageStatus.completed": "Completed",
+  "stageStatus.waiting": "Waiting",
+  "stageStatus.failed": "Failed",
+
+  "stage.production.started": "Production started",
+  "stage.production.resumed": "Resumed stored run",
+  "stage.monitoring.started": "Monitoring brand sources",
+  "stage.monitoring.completed": "Monitoring completed",
+  "stage.analysis.started": "Analyzing and selecting a topic",
+  "stage.analysis.completed": "Topic analysis completed",
+  "stage.project.ready": "Content project ready",
+  "stage.scenario.started": "Generating scenario with GPT",
+  "stage.scenario.completed": "Scenario generated",
+  "stage.scenario.retry": "Regenerating the scenario",
+  "stage.scenario.approval.started": "Reviewing and approving scenario",
+  "stage.scenario.approved": "Scenario approved",
+  "stage.video.dispatch.started": "Dispatching to video provider",
+  "stage.video.dispatched": "Video job queued",
+  "stage.video.waiting": "Waiting for the final video",
+  "stage.video.wait.timeout": "Video is still rendering",
+  "stage.delivery.completed": "Final video delivered",
+  "stage.run.failed": "Execution failed",
+
   "node.start": "Start",
   "node.finish": "Finish",
   "node.generate_scenario": "Generate scenario",
@@ -512,6 +636,9 @@ type I18nValue = {
   projectStatus: (status: string) => string;
   executionStatus: (status: string) => string;
   stepStatus: (status: string) => string;
+  taskStatus: (status: string) => string;
+  stageLabel: (stage: string) => string;
+  stageStatusLabel: (status: string) => string;
   nodeLabel: (nodeKey: string) => string;
 };
 
@@ -575,6 +702,18 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
       projectStatus: (status) => statusOf("project", status),
       executionStatus: (status) => statusOf("execution", status),
       stepStatus: (status) => statusOf("step", status),
+      taskStatus: (status) => {
+        const key = `task.${status}` as MessageKey;
+        return catalog[key] ?? status;
+      },
+      stageLabel: (stage) => {
+        const key = `stage.${stage}` as MessageKey;
+        return catalog[key] ?? stage.replaceAll(".", " ");
+      },
+      stageStatusLabel: (status) => {
+        const key = `stageStatus.${status}` as MessageKey;
+        return catalog[key] ?? status;
+      },
       nodeLabel: (nodeKey) => {
         const key = `node.${nodeKey}` as MessageKey;
         return catalog[key] ?? nodeKey.replaceAll("_", " ");

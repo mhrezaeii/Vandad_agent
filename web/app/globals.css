@@ -1897,6 +1897,86 @@ option {
   overflow-wrap: anywhere;
 }
 
+.section-subtitle {
+  margin: 20px 0 10px;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.analysis-block {
+  margin-top: 6px;
+}
+
+.source-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.source-list li {
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.source-list a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.source-list a:hover {
+  text-decoration: underline;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(9, 15, 28, 0.5);
+}
+
+.history-row.is-current {
+  border-color: var(--line-strong);
+  box-shadow: inset 0 0 0 1px rgba(124, 157, 255, 0.18);
+}
+
+.history-info {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.history-info strong {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-info small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .admin-list {
   list-style: none;
   margin: 0;

@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from sqlalchemy import select
+
 from app.agents import AgentRegistry
 from app.agents.contracts import has_capability_contract, validate_capability_payload
 from app.core.exceptions import ConflictError, NotFoundError
@@ -202,14 +204,32 @@ class MonitoringAgentHandler:
 
 
 class ContentAgentHandler:
-    """Generate an approved-brand scenario from its latest company knowledge."""
+    """Run the full content production pipeline from one agent task.
+
+    The handler owns stage order and dependencies; the browser only observes.
+    Monitoring and analysis are real backend work, scenario text comes from the
+    configured GPT provider, and video rendering still runs through the existing
+    workflow engine and provider registry.
+    """
 
     agent_key = "content"
-    capabilities = frozenset({"content.scenario.generate"})
+    capabilities = frozenset({
+        "content.scenario.generate",
+        "content.analysis.select",
+        "content.production.run",
+    })
 
     async def execute(self, capability: str, context: AgentExecutionContext) -> dict[str, Any]:
-        if capability != "content.scenario.generate":
-            raise ConflictError("Unsupported content capability.")
+        if capability == "content.scenario.generate":
+            return await self._generate_scenario(context)
+        if capability == "content.analysis.select":
+            return await self._analyse(context)
+        if capability == "content.production.run":
+            return await self._run_production(context)
+        raise ConflictError("Unsupported content capability.")
+
+    # ------------------------------------------------------------ scenario only
+    async def _generate_scenario(self, context: AgentExecutionContext) -> dict[str, Any]:
         await context.report_progress("content.scenario.started")
 
         def _required_uuid(field: str) -> uuid.UUID:
@@ -238,7 +258,644 @@ class ContentAgentHandler:
             )
             await context.report_progress("content.scenario.completed", project_id=str(project_id))
             await session.commit()
-            return {"capability": capability, **result}
+            return {"capability": "content.scenario.generate", **result}
+
+    # ---------------------------------------------------------------- analysis
+    async def _analyse(self, context: AgentExecutionContext) -> dict[str, Any]:
+        from app.services.content_analysis_service import ContentAnalysisService
+
+        try:
+            brand_id = uuid.UUID(str(context.payload["brand_id"]))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError("Analysis tasks require a valid brand_id.") from exc
+        await context.report_progress("analysis.started", stage_status="running")
+        async with context.session_factory() as session:
+            analysis = await ContentAnalysisService(session).select(
+                company_id=context.company_id,
+                brand_id=brand_id,
+                topic=context.payload.get("topic"),
+                limit=int(context.payload.get("limit") or 10),
+            )
+            await session.commit()
+        await context.report_progress(
+            "analysis.completed",
+            stage_status="completed",
+            topic=analysis.get("selected_topic"),
+            candidate_count=analysis.get("candidate_count"),
+            duplicate_count=analysis.get("duplicate_count"),
+            source_count=analysis.get("source_count"),
+            brand_fit=analysis.get("brand_fit"),
+        )
+        return {
+            "capability": "content.analysis.select",
+            "analysis": analysis,
+            "selected_topic": analysis.get("selected_topic"),
+            "brand_fit": analysis.get("brand_fit"),
+            "candidate_count": analysis.get("candidate_count"),
+            "duplicate_count": analysis.get("duplicate_count"),
+        }
+
+    # ------------------------------------------------------- one-click pipeline
+    async def _run_production(self, context: AgentExecutionContext) -> dict[str, Any]:
+        from app.core.config import get_settings
+        from app.models import ContentProject, ProjectStatus
+
+        payload = context.payload
+        company_id = context.company_id
+        task_id = context.task_id
+        try:
+            brand_id = uuid.UUID(str(payload["brand_id"]))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError("Production tasks require a valid brand_id.") from exc
+
+        topic_hint = (payload.get("topic") or "").strip() or None
+        source_url = (payload.get("source_url") or "").strip() or None
+        connection_id: uuid.UUID | None = None
+        if payload.get("connection_id"):
+            try:
+                connection_id = uuid.UUID(str(payload["connection_id"]))
+            except (ValueError, TypeError) as exc:
+                raise ValueError("Production tasks require a valid connection_id.") from exc
+        duration = int(payload.get("target_duration_seconds") or 30)
+        scene_count = payload.get("scene_count")
+        provider_id = (payload.get("provider_id") or "").strip() or None
+        provider_fallbacks = [
+            str(item).strip()
+            for item in (payload.get("provider_fallbacks") or [])
+            if str(item).strip()
+        ]
+        character_key = (payload.get("character_key") or "").strip() or None
+        character_image_url = (payload.get("character_image_url") or "").strip() or None
+        character_description = (payload.get("character_description") or "").strip() or None
+        wait_seconds = max(0.0, float(payload.get("video_wait_seconds") or 0))
+        poll_seconds = max(1.0, float(payload.get("video_poll_seconds") or 3))
+
+        if (get_settings().scene_video_generation_mode or "").lower() == "single_shot" and not (
+            character_key or character_image_url
+        ):
+            # Fail fast before paying for monitoring/GPT, but only when the
+            # effective provider actually needs a reference image. Local mock
+            # runs and text-to-video providers do not.
+            requires_reference = True
+            registry = context.scene_video_registry
+            effective_provider = (
+                provider_id or context.default_scene_video_provider or ""
+            ).strip()
+            if registry is not None and effective_provider:
+                try:
+                    requires_reference = bool(
+                        registry.get(effective_provider).requires_reference_image
+                    )
+                except Exception:  # noqa: BLE001 - unknown provider fails closed
+                    requires_reference = True
+            if requires_reference:
+                raise ConflictError(
+                    "Single-shot video generation requires a character reference image."
+                )
+
+        await context.report_progress("production.started", stage_status="running")
+
+        # Phase A: resolve the brand, detect a retry, and guarantee a source.
+        brand_language = "fa-IR"
+        brand_name = ""
+        project_id: uuid.UUID | None = None
+        needs_scenario = True
+        async with context.session_factory() as session:
+            service = self._content_service(session, context)
+            brand = await service.get_brand(brand_id, company_id=company_id)
+            if brand.status != "active":
+                raise ConflictError("The selected brand is not active.")
+            brand_language = brand.language
+            brand_name = brand.display_name or brand.name
+            existing = await self._find_project_for_task(session, company_id, task_id)
+            if existing is not None:
+                project_id = existing.id
+                needs_scenario = not (
+                    existing.scenario and existing.status not in {"draft", "script_failed"}
+                )
+                if existing.status in {"failed", "cancelled"}:
+                    raise ConflictError(
+                        existing.error_message
+                        or "The previous production attempt failed; start a new task."
+                    )
+            else:
+                await self._ensure_source_platform(
+                    session, service, brand, source_url, company_id
+                )
+            await session.commit()
+
+        # Phase B: real monitoring of the brand's linked sources.
+        analysis: dict[str, Any] | None = None
+        if needs_scenario:
+            from app.services.platform_monitor_service import PlatformMonitorService
+
+            await context.report_progress("monitoring.started", stage_status="running")
+            async with context.session_factory() as session:
+                monitor = await PlatformMonitorService(
+                    session,
+                    context.provider_registry,
+                    context.provider_executor,
+                    context.master_key_box,
+                ).monitor_brand(
+                    brand_id=brand_id,
+                    company_id=company_id,
+                    connection_id=connection_id,
+                )
+            platforms = monitor.get("platforms") or []
+            if not monitor.get("snapshot_available"):
+                raise ConflictError(
+                    "Monitoring did not produce verified knowledge: "
+                    + self._monitoring_failure_detail(monitor)
+                )
+            await context.report_progress(
+                "monitoring.completed",
+                stage_status="completed",
+                platform_count=len(platforms),
+                source_count=sum(
+                    1
+                    for item in platforms
+                    if item.get("status") in {"ok", "skipped"}
+                ),
+            )
+
+            # Phase C: deterministic analysis over the new snapshots.
+            from app.services.content_analysis_service import ContentAnalysisService
+
+            await context.report_progress("analysis.started", stage_status="running")
+            async with context.session_factory() as session:
+                analysis = await ContentAnalysisService(session).select(
+                    company_id=company_id,
+                    brand_id=brand_id,
+                    topic=topic_hint,
+                    limit=10,
+                )
+                await session.commit()
+            await context.report_progress(
+                "analysis.completed",
+                stage_status="completed",
+                topic=analysis.get("selected_topic"),
+                candidate_count=analysis.get("candidate_count"),
+                duplicate_count=analysis.get("duplicate_count"),
+                source_count=analysis.get("source_count"),
+                brand_fit=analysis.get("brand_fit"),
+            )
+
+        # Phase D: create the scene project once and persist the retry marker.
+        async with context.session_factory() as session:
+            service = self._content_service(session, context)
+            project = await session.get(ContentProject, project_id) if project_id else None
+            if project is None:
+                selected_topic = (analysis or {}).get("selected_topic") or topic_hint
+                if not selected_topic:
+                    raise ConflictError("No content topic could be selected from monitoring.")
+                project = await service.create_scene_project(
+                    scope=self._scope(context),
+                    brand_id=brand_id,
+                    topic=selected_topic,
+                    target_duration_seconds=duration,
+                    scene_count=scene_count,
+                    provider_id=provider_id,
+                    character_key=character_key,
+                    character_image_url=character_image_url,
+                    character_description=character_description,
+                )
+                project_id = project.id
+            options = dict(project.scene_options or {})
+            if analysis is not None:
+                options["analysis"] = analysis
+            options["agent_task_id"] = str(task_id)
+            project.scene_options = options
+            await session.commit()
+            project_status = project.status
+            project_scenario = project.scenario
+            project_options = dict(project.scene_options or {})
+            project_topic = project.topic
+
+        await context.report_progress(
+            "project.ready", stage_status="completed", project_id=str(project_id)
+        )
+
+        # Phase E: GPT scenario plus the deterministic quality gate. A rejected
+        # or malformed generation is regenerated once with the same evidence
+        # before the task fails, so one bad model response does not waste the run.
+        if project_status in {"draft", "script_failed"}:
+            from app.services.content_scenario_service import ContentScenarioService
+            from app.services.scenario_service import ScenarioGenerationError
+
+            review_error: str | None = None
+            for attempt in (1, 2):
+                if attempt == 1:
+                    await context.report_progress(
+                        "scenario.started",
+                        stage_status="running",
+                        project_id=str(project_id),
+                        attempt=attempt,
+                    )
+                try:
+                    async with context.session_factory() as session:
+                        await ContentScenarioService(
+                            session,
+                            context.provider_registry,
+                            context.provider_executor,
+                            context.master_key_box,
+                        ).generate(
+                            company_id=company_id,
+                            project_id=project_id,
+                            connection_id=connection_id,
+                            timeout_seconds=180.0,
+                            task_id=task_id,
+                            analysis=(
+                                project_options.get("analysis")
+                                if isinstance(project_options.get("analysis"), dict)
+                                else analysis
+                            ),
+                        )
+                        await session.commit()
+                except ScenarioGenerationError:
+                    if attempt == 2:
+                        raise
+                    await context.report_progress(
+                        "scenario.retry",
+                        stage_status="waiting",
+                        project_id=str(project_id),
+                        attempt=2,
+                    )
+                    continue
+
+                async with context.session_factory() as session:
+                    project = await session.get(ContentProject, project_id)
+                    if project is None:
+                        raise NotFoundError("Content project not found for this company.")
+                    issues = self._review_project(project, brand_language)
+                    if not issues:
+                        project_status = project.status
+                        project_scenario = project.scenario
+                        project_options = dict(project.scene_options or {})
+                        review_error = None
+                        break
+                    review_error = (
+                        "Scenario quality review failed: " + "; ".join(issues[:5])
+                    )
+                    project.status = ProjectStatus.SCRIPT_FAILED.value
+                    project.error_message = review_error
+                    failed_options = dict(project.scene_options or {})
+                    failed_options["review_issues"] = issues[:10]
+                    project.scene_options = failed_options
+                    await session.commit()
+                if attempt == 1:
+                    await context.report_progress(
+                        "scenario.retry",
+                        stage_status="waiting",
+                        project_id=str(project_id),
+                        attempt=2,
+                    )
+            if review_error is not None:
+                raise ConflictError(review_error)
+            await context.report_progress(
+                "scenario.completed",
+                stage_status="completed",
+                topic=project_topic,
+                title=(project_scenario or {}).get("title"),
+                scene_count=len((project_scenario or {}).get("scenes") or []),
+                duration_seconds=(project_scenario or {}).get("total_duration_seconds"),
+            )
+        elif project_status == "script_ready":
+            async with context.session_factory() as session:
+                project = await session.get(ContentProject, project_id)
+                if project is None:
+                    raise NotFoundError("Content project not found for this company.")
+                issues = self._review_project(project, brand_language)
+                if issues:
+                    raise ConflictError(
+                        "Scenario quality review failed: " + "; ".join(issues[:5])
+                    )
+
+        # Phase F: automated operator gate (the review above is the approval).
+        if project_status == "script_ready":
+            await context.report_progress("scenario.approval.started", stage_status="running")
+            async with context.session_factory() as session:
+                service = self._content_service(session, context)
+                approved = await service.approve_scene_scenario(
+                    project_id, scope=self._scope(context)
+                )
+                await session.commit()
+                project_status = approved.status
+            await context.report_progress("scenario.approved", stage_status="completed")
+        elif project_status not in {
+            "approved",
+            "scenes_prepared",
+            "video_generation_pending",
+            "video_generating",
+            "video_generated",
+            "assembling",
+            "completed",
+        }:
+            raise ConflictError(
+                f"Production cannot continue from status '{project_status}'."
+            )
+
+        # Phase G: dispatch through the existing video workflow engine.
+        video_execution_id: uuid.UUID | None = None
+        if project_status == "approved":
+            selected_provider = (
+                provider_id
+                or (project_options.get("provider_id") if project_options else None)
+                or context.default_scene_video_provider
+                or ""
+            )
+            selected_provider = str(selected_provider).strip()
+            if selected_provider == "mock" and context.is_production:
+                raise ConflictError(
+                    "The mock scene-video provider is forbidden in production."
+                )
+            await context.report_progress(
+                "video.dispatch.started",
+                stage_status="running",
+                project_id=str(project_id),
+                provider_id=selected_provider or None,
+            )
+            async with context.session_factory() as session:
+                service = self._content_service(session, context)
+                updated = await service.generate_scene_video(
+                    project_id,
+                    scope=self._scope(context),
+                    provider_id=selected_provider or None,
+                    task_id=task_id,
+                    provider_fallbacks=provider_fallbacks,
+                )
+                await session.commit()
+                project_status = updated.status
+                video_execution_id = updated.video_workflow_execution_id
+            await context.report_progress(
+                "video.dispatched",
+                stage_status="running",
+                project_id=str(project_id),
+                workflow_execution_id=(
+                    str(video_execution_id) if video_execution_id else None
+                ),
+                provider_id=selected_provider or None,
+                video_status=project_status,
+            )
+        else:
+            async with context.session_factory() as session:
+                project = await session.get(ContentProject, project_id)
+                video_execution_id = project.video_workflow_execution_id if project else None
+
+        # Phase H: bounded wait, then verify the persisted final artifact.
+        if project_status != "completed":
+            await context.report_progress(
+                "video.waiting",
+                stage_status="waiting",
+                project_id=str(project_id),
+                video_status=project_status,
+            )
+            deadline = asyncio.get_running_loop().time() + wait_seconds
+            while wait_seconds > 0:
+                context.raise_if_cancelled()
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(poll_seconds)
+                async with context.session_factory() as session:
+                    current = await session.get(ContentProject, project_id)
+                    if current is None:
+                        raise NotFoundError("Content project not found for this company.")
+                    project_status = current.status
+                    if project_status in {"failed", "cancelled"}:
+                        raise ConflictError(
+                            current.error_message
+                            or f"Video production ended with status '{project_status}'."
+                        )
+                if project_status == "completed":
+                    break
+
+        async with context.session_factory() as session:
+            project = await session.get(ContentProject, project_id)
+            if project is None:
+                raise NotFoundError("Content project not found for this company.")
+            project_status = project.status
+            final_artifact_id = project.final_artifact_id
+            video_execution_id = project.video_workflow_execution_id
+            scenario = project.scenario or {}
+            assembly = project.assembly_metadata or {}
+            project_options = dict(project.scene_options or {})
+            error_message = project.error_message
+
+        if project_status in {"failed", "cancelled"}:
+            raise ConflictError(
+                error_message or f"Production ended with status '{project_status}'."
+            )
+        if project_status == "completed" and final_artifact_id is None:
+            raise ConflictError("Video production completed without a persisted artifact.")
+
+        qc_status = self._qc_status(assembly)
+        video_status = (
+            "completed"
+            if project_status == "completed"
+            else "in_progress"
+            if project_status
+            in {
+                "approved",
+                "scenes_prepared",
+                "video_generation_pending",
+                "video_generating",
+                "video_generated",
+                "assembling",
+            }
+            else project_status
+        )
+        final_ready = project_status == "completed"
+        await context.report_progress(
+            "delivery.completed" if final_ready else "video.wait.timeout",
+            stage_status="completed" if final_ready else "waiting",
+            project_id=str(project_id),
+            video_status=video_status,
+            final_video_ready=final_ready,
+            scene_count=len(scenario.get("scenes") or []),
+            duration_seconds=scenario.get("total_duration_seconds"),
+        )
+        return {
+            "capability": "content.production.run",
+            "project_id": str(project_id),
+            "project_status": project_status,
+            "workflow_execution_id": (
+                str(video_execution_id) if video_execution_id else None
+            ),
+            "video_status": video_status,
+            "final_video_ready": final_ready,
+            "final_artifact_id": str(final_artifact_id) if final_artifact_id else None,
+            "title": scenario.get("title") or project.video_title,
+            "scene_count": len(scenario.get("scenes") or []),
+            "total_duration_seconds": scenario.get("total_duration_seconds"),
+            "qc_status": qc_status,
+            "brand_name": brand_name,
+            "analysis": self._analysis_summary(
+                project_options.get("analysis")
+                if isinstance(project_options.get("analysis"), dict)
+                else analysis
+            ),
+        }
+
+    # ----------------------------------------------------------------- helpers
+    @staticmethod
+    def _scope(context: AgentExecutionContext):  # noqa: ANN205 - CompanyScope
+        from app.security.authorization import CompanyScope, Principal
+
+        return CompanyScope(
+            company_id=context.company_id,
+            principal=Principal(
+                subject="agent-worker",
+                company_ids=frozenset({str(context.company_id)}),
+            ),
+        )
+
+    @staticmethod
+    def _content_service(session, context: AgentExecutionContext):  # noqa: ANN001
+        from app.services.content_service import ContentService
+
+        return ContentService(
+            session,
+            context.provider_registry,
+            context.provider_executor,
+            context.master_key_box,
+            workflow_queue=context.workflow_queue,
+            scene_video_registry=context.scene_video_registry,
+        )
+
+    @staticmethod
+    async def _find_project_for_task(
+        session, company_id: uuid.UUID, task_id: uuid.UUID
+    ):  # noqa: ANN001, ANN205
+        from app.models import ContentProject
+
+        return await session.scalar(
+            select(ContentProject)
+            .where(
+                ContentProject.company_id == company_id,
+                ContentProject.scene_options["agent_task_id"].astext == str(task_id),
+            )
+            .order_by(ContentProject.created_at.desc())
+        )
+
+    @staticmethod
+    async def _ensure_source_platform(
+        session,  # noqa: ANN001
+        service,  # noqa: ANN001
+        brand,  # noqa: ANN001
+        source_url: str | None,
+        company_id: uuid.UUID,
+    ) -> None:
+        from app.common.slug import slugify
+        from app.core.exceptions import UnprocessableEntityError
+        from app.integrations.platform_discovery.public_sources import (
+            normalise_url,
+            validate_public_url,
+        )
+        from app.models import IntegrationType, Platform, PlatformStatus, PlatformType
+        from app.schemas.platform import PlatformCreate
+        from app.services.platform_service import PlatformService
+
+        linked = await service.list_brand_platforms(brand.id, company_id=company_id)
+        if linked:
+            return
+        if not source_url:
+            raise ConflictError(
+                "No monitored source is linked to this brand. Provide a public "
+                "source URL in the start form or link a platform first."
+            )
+        try:
+            validated = validate_public_url(source_url)
+        except ValueError as exc:
+            raise UnprocessableEntityError(
+                f"The source URL is not allowed: {exc}"
+            ) from exc
+        normalised = normalise_url(validated)
+        platform = await session.scalar(
+            select(Platform).where(
+                Platform.company_id == company_id,
+                Platform.base_url == normalised,
+            )
+        )
+        if platform is None:
+            base_slug = slugify(brand.name) or "brand-source"
+            platform = await PlatformService(session).create_platform(
+                PlatformCreate(
+                    name=brand.display_name or brand.name,
+                    slug=f"{base_slug}-{uuid.uuid4().hex[:6]}",
+                    platform_type=PlatformType.WEBSITE,
+                    base_url=normalised,
+                    description=(
+                        f"منبع پایش عمومی برند {brand.display_name or brand.name}"
+                    ),
+                    status=PlatformStatus.ACTIVE,
+                    integration_type=IntegrationType.MANUAL,
+                ),
+                company_id=company_id,
+            )
+        await service.set_brand_platforms(
+            brand.id, company_id=company_id, platform_ids=[platform.id]
+        )
+
+    @staticmethod
+    def _review_project(project, language: str) -> list[str]:  # noqa: ANN001
+        from app.schemas.scenario import Scenario
+        from app.services.scenario_review import review_scenario
+
+        if not project.scenario:
+            return ["scenario is missing."]
+        try:
+            scenario = Scenario.model_validate(project.scenario)
+        except Exception as exc:  # noqa: BLE001 - validation text is the review issue
+            return [f"scenario does not match the required schema: {exc}"]
+        options = project.scene_options or {}
+        target = int(options.get("target_duration_seconds") or scenario.target_duration_seconds)
+        return review_scenario(
+            scenario, target_duration_seconds=target, language=language
+        )
+
+    @staticmethod
+    def _monitoring_failure_detail(monitor: dict[str, Any]) -> str:
+        platforms = monitor.get("platforms") or []
+        details = [
+            f"{item.get('platform')}: {item.get('detail') or item.get('status')}"
+            for item in platforms
+            if item.get("status") in {"error", "skipped"}
+        ]
+        return "; ".join(details[:5]) or str(monitor.get("status") or "no_knowledge")
+
+    @staticmethod
+    def _qc_status(assembly: dict[str, Any]) -> str | None:
+        quality = assembly.get("quality_review")
+        if isinstance(quality, dict):
+            status = quality.get("status") or (
+                "passed" if quality.get("accepted") is True else None
+            )
+            if status:
+                return str(status)
+        if isinstance(assembly.get("output_validation"), dict):
+            return "validated"
+        if assembly.get("artifact_id"):
+            return "assembled"
+        return None
+
+    @staticmethod
+    def _analysis_summary(analysis: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not analysis:
+            return None
+        return {
+            "selected_topic": analysis.get("selected_topic"),
+            "selection_reason": analysis.get("selection_reason"),
+            "brand_fit": analysis.get("brand_fit"),
+            "candidate_count": analysis.get("candidate_count"),
+            "duplicate_count": analysis.get("duplicate_count"),
+            "source_count": analysis.get("source_count"),
+            "platform_count": analysis.get("platform_count"),
+            "sources": [
+                item.get("source_url")
+                for item in (analysis.get("sources") or [])[:5]
+                if isinstance(item, dict) and item.get("source_url")
+            ],
+        }
+
 
 
 

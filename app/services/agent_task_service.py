@@ -67,6 +67,9 @@ class AgentTaskService:
             "status", "agent_key", "capability", "cancel_requested", "run_id",
             "attempt", "error_code", "stage", "project_id", "workflow_execution_id",
             "provider_id", "cost_status", "snapshot_id", "available_after_seconds",
+            "stage_status", "topic", "candidate_count", "source_count", "scene_count",
+            "title", "duration_seconds", "brand_fit", "video_status",
+            "final_video_ready", "platform_count", "duplicate_count", "project_status",
         }
         safe_payload: dict[str, Any] = {}
         for key, value in safe_source.items():

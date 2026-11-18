@@ -34,6 +34,9 @@ os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("LOG_FORMAT", "console")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("SCENE_VIDEO_PROVIDER", "mock")
+# Never let a developer's local .env turn the first test registration into an
+# auto-approved administrator; auth tests assert the pending-approval flow.
+os.environ["AUTH_BOOTSTRAP_FIRST_ADMIN"] = "false"
 # Unit tests cover the legacy multi-scene orchestration unless a test opts in to single-shot.
 os.environ["SCENE_VIDEO_GENERATION_MODE"] = "multi_scene"
 # Deterministic 32-byte master key for tests only (never used outside pytest).
