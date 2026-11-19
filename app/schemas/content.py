@@ -99,6 +99,83 @@ class ContentConnectionRequest(BaseModel):
     connection_id: uuid.UUID | None = None
 
 
+class BrandMemorySnapshotRead(BaseModel):
+    """One knowledge snapshot in a platform's monitoring history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    extracted_at: datetime
+    source_document_count: int = 0
+    model: str | None = None
+
+
+class BrandMemoryPlatformRead(BaseModel):
+    """A linked platform plus its latest knowledge and monitoring history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    base_url: str | None = None
+    platform_type: str | None = None
+    status: str | None = None
+    snapshot: BrandMemorySnapshotRead | None = None
+    knowledge: dict[str, Any] | None = None
+    history: list[BrandMemorySnapshotRead] = Field(default_factory=list)
+
+
+class BrandMemoryAnalysisRead(BaseModel):
+    """Deterministic, evidence-backed topic analysis derived from memory."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    selected_topic: str | None = None
+    selection_reason: str | None = None
+    brand_fit: float | None = None
+    candidate_count: int | None = None
+    duplicate_count: int | None = None
+    source_count: int | None = None
+    platform_count: int | None = None
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    supporting_points: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BrandMemoryRead(BaseModel):
+    """Brand knowledge memory composed from monitoring snapshots."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    brand_id: uuid.UUID
+    brand_name: str
+    language: str
+    has_knowledge: bool
+    platform_count: int
+    source_count: int
+    snapshot_count: int
+    suggested_topic: str | None = None
+    analysis: BrandMemoryAnalysisRead | None = None
+    platforms: list[BrandMemoryPlatformRead] = Field(default_factory=list)
+    updated_at: datetime | None = None
+
+
+class BrandMemoryRefreshRequest(BaseModel):
+    """Optional public source used to link a brand that has no platform yet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_url: str | None = Field(default=None, max_length=2048)
+    connection_id: uuid.UUID | None = None
+
+
+class BrandMemoryRefreshRead(BaseModel):
+    """Result of a monitoring refresh: raw status plus the refreshed memory."""
+
+    status: str
+    monitor: dict[str, Any] = Field(default_factory=dict)
+    memory: BrandMemoryRead
+
+
 class ContentProjectCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

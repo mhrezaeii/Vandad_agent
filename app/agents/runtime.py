@@ -384,39 +384,57 @@ class ContentAgentHandler:
                 )
             await session.commit()
 
-        # Phase B: real monitoring of the brand's linked sources.
+        # Phase B: real monitoring of the brand's linked sources. Recent
+        # knowledge is reused so the production run does not re-crawl right
+        # after the operator refreshed the same brand on the page.
         analysis: dict[str, Any] | None = None
         if needs_scenario:
+            from app.services.brand_memory_service import brand_knowledge_freshness
             from app.services.platform_monitor_service import PlatformMonitorService
 
-            await context.report_progress("monitoring.started", stage_status="running")
             async with context.session_factory() as session:
-                monitor = await PlatformMonitorService(
+                freshness = await brand_knowledge_freshness(
                     session,
-                    context.provider_registry,
-                    context.provider_executor,
-                    context.master_key_box,
-                ).monitor_brand(
-                    brand_id=brand_id,
                     company_id=company_id,
-                    connection_id=connection_id,
+                    brand_id=brand_id,
+                    max_age_hours=get_settings().content_knowledge_max_age_hours,
                 )
-            platforms = monitor.get("platforms") or []
-            if not monitor.get("snapshot_available"):
-                raise ConflictError(
-                    "Monitoring did not produce verified knowledge: "
-                    + self._monitoring_failure_detail(monitor)
+            if freshness["fresh"]:
+                await context.report_progress(
+                    "monitoring.reused",
+                    stage_status="completed",
+                    platform_count=freshness["platform_count"],
+                    source_count=freshness["snapshot_count"],
                 )
-            await context.report_progress(
-                "monitoring.completed",
-                stage_status="completed",
-                platform_count=len(platforms),
-                source_count=sum(
-                    1
-                    for item in platforms
-                    if item.get("status") in {"ok", "skipped"}
-                ),
-            )
+            else:
+                await context.report_progress("monitoring.started", stage_status="running")
+                async with context.session_factory() as session:
+                    monitor = await PlatformMonitorService(
+                        session,
+                        context.provider_registry,
+                        context.provider_executor,
+                        context.master_key_box,
+                    ).monitor_brand(
+                        brand_id=brand_id,
+                        company_id=company_id,
+                        connection_id=connection_id,
+                    )
+                platforms = monitor.get("platforms") or []
+                if not monitor.get("snapshot_available"):
+                    raise ConflictError(
+                        "Monitoring did not produce verified knowledge: "
+                        + self._monitoring_failure_detail(monitor)
+                    )
+                await context.report_progress(
+                    "monitoring.completed",
+                    stage_status="completed",
+                    platform_count=len(platforms),
+                    source_count=sum(
+                        1
+                        for item in platforms
+                        if item.get("status") in {"ok", "skipped"}
+                    ),
+                )
 
             # Phase C: deterministic analysis over the new snapshots.
             from app.services.content_analysis_service import ContentAnalysisService
@@ -784,56 +802,9 @@ class ContentAgentHandler:
         source_url: str | None,
         company_id: uuid.UUID,
     ) -> None:
-        from app.common.slug import slugify
-        from app.core.exceptions import UnprocessableEntityError
-        from app.integrations.platform_discovery.public_sources import (
-            normalise_url,
-            validate_public_url,
-        )
-        from app.models import IntegrationType, Platform, PlatformStatus, PlatformType
-        from app.schemas.platform import PlatformCreate
-        from app.services.platform_service import PlatformService
+        from app.services.brand_source_service import ensure_brand_source
 
-        linked = await service.list_brand_platforms(brand.id, company_id=company_id)
-        if linked:
-            return
-        if not source_url:
-            raise ConflictError(
-                "No monitored source is linked to this brand. Provide a public "
-                "source URL in the start form or link a platform first."
-            )
-        try:
-            validated = validate_public_url(source_url)
-        except ValueError as exc:
-            raise UnprocessableEntityError(
-                f"The source URL is not allowed: {exc}"
-            ) from exc
-        normalised = normalise_url(validated)
-        platform = await session.scalar(
-            select(Platform).where(
-                Platform.company_id == company_id,
-                Platform.base_url == normalised,
-            )
-        )
-        if platform is None:
-            base_slug = slugify(brand.name) or "brand-source"
-            platform = await PlatformService(session).create_platform(
-                PlatformCreate(
-                    name=brand.display_name or brand.name,
-                    slug=f"{base_slug}-{uuid.uuid4().hex[:6]}",
-                    platform_type=PlatformType.WEBSITE,
-                    base_url=normalised,
-                    description=(
-                        f"منبع پایش عمومی برند {brand.display_name or brand.name}"
-                    ),
-                    status=PlatformStatus.ACTIVE,
-                    integration_type=IntegrationType.MANUAL,
-                ),
-                company_id=company_id,
-            )
-        await service.set_brand_platforms(
-            brand.id, company_id=company_id, platform_ids=[platform.id]
-        )
+        await ensure_brand_source(session, service, brand, source_url, company_id)
 
     @staticmethod
     def _review_project(project, language: str) -> list[str]:  # noqa: ANN001

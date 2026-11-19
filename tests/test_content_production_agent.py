@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -88,7 +89,9 @@ def _scenario_payload(*, title="معرفی ونداد"):
     }
 
 
-async def _seed_brand(db_session, company, platform, *, link=True, snapshot=True):
+async def _seed_brand(
+    db_session, company, platform, *, link=True, snapshot=True, snapshot_age_hours=48
+):
     brand = ContentBrand(
         company_id=company.id,
         name=f"brand-{uuid.uuid4().hex[:8]}",
@@ -113,6 +116,7 @@ async def _seed_brand(db_session, company, platform, *, link=True, snapshot=True
                 platform_id=platform.id,
                 source_document_ids=[str(uuid.uuid4())],
                 source_fingerprint="b" * 64,
+                extracted_at=datetime.now(UTC) - timedelta(hours=snapshot_age_hours),
                 knowledge_json={
                     "summary": "ونداد پایش منابع و تولید سناریو را مدیریت می‌کند.",
                     "capabilities": [
@@ -612,3 +616,69 @@ async def test_single_shot_guard_allows_provider_without_reference_requirement(
 
     with pytest.raises(PipelineReached):
         await ContentAgentHandler().execute("content.production.run", context)
+
+
+async def test_production_reuses_fresh_knowledge_without_monitoring(
+    db_session, session_factory, company_and_platform, monkeypatch
+):
+    company, platform = company_and_platform
+    brand = await _seed_brand(
+        db_session, company, platform, snapshot_age_hours=1
+    )
+    monitored = {"called": False}
+
+    async def fake_monitor(self, **kwargs):
+        monitored["called"] = True
+        return {"status": "completed", "platforms": [], "snapshot_available": True}
+
+    async def fake_generate(self, *, company_id, project_id, **kwargs):
+        project = await self.session.get(ContentProject, project_id)
+        scenario = _scenario_payload()
+        project.scenario = scenario
+        project.script_segments = scenario["scenes"]
+        project.status = ProjectStatus.SCRIPT_READY.value
+        await self.session.commit()
+        return {"project_id": str(project_id), "project_status": project.status}
+
+    async def fake_generate_video(self, project_id, *, scope, **kwargs):
+        project = await self.session.get(ContentProject, project_id)
+        execution = WorkflowExecution(
+            company_id=scope.company_id,
+            workflow_name="scene video test",
+            workflow_type="video_production",
+            status="running",
+        )
+        self.session.add(execution)
+        await self.session.flush()
+        project.status = ProjectStatus.COMPLETED.value
+        project.final_artifact_id = uuid.uuid4()
+        project.video_workflow_execution_id = execution.id
+        project.assembly_metadata = {
+            "quality_review": {"status": "passed", "accepted": True}
+        }
+        await self.session.commit()
+        return project
+
+    monkeypatch.setattr(PlatformMonitorService, "monitor_brand", fake_monitor)
+    monkeypatch.setattr(ContentScenarioService, "generate", fake_generate)
+    monkeypatch.setattr(ContentService, "generate_scene_video", fake_generate_video)
+
+    stages: list[tuple[str, dict]] = []
+    context = _context(
+        company.id,
+        uuid.uuid4(),
+        session_factory,
+        {
+            "brand_id": str(brand.id),
+            "topic": "معرفی قابلیت پایش پلتفرم",
+            "video_wait_seconds": 0,
+        },
+        stages,
+    )
+    result = await ContentAgentHandler().execute("content.production.run", context)
+
+    assert result["project_status"] == "completed"
+    assert monitored["called"] is False
+    stage_names = [stage for stage, _details in stages]
+    assert "monitoring.reused" in stage_names
+    assert "monitoring.started" not in stage_names

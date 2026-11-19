@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     end_card_seconds: float = Field(default=3.0, ge=1.0, le=10.0)
     platform_monitor_enabled: bool = True
     platform_monitor_interval_seconds: int = Field(default=21600, ge=60)
+    # Production reuses knowledge extracted within this window instead of
+    # re-crawling immediately after the operator refreshed the same brand.
+    # Zero disables reuse (always monitor).
+    content_knowledge_max_age_hours: int = Field(default=12, ge=0, le=720)
 
     # Shared KIE task polling and output settings.
     scene_video_poll_interval_seconds: float = Field(default=3.0, gt=0, le=3600)

@@ -14,6 +14,9 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.models import ContentBrand
 from app.schemas.content import (
     BrandCreate,
+    BrandMemoryRead,
+    BrandMemoryRefreshRead,
+    BrandMemoryRefreshRequest,
     BrandPlatformLinksUpdate,
     BrandUpdate,
     ContentBrandRead,
@@ -29,6 +32,7 @@ from app.schemas.content import (
     SceneVideoStartRequest,
 )
 from app.security.authorization import CompanyScope
+from app.services.brand_memory_service import BrandMemoryService
 from app.services.content_service import ContentService
 from app.services.platform_monitor_service import PlatformMonitorService
 
@@ -190,6 +194,52 @@ async def monitor_brand_platforms(
             details=result["platforms"],
         )
     return result
+
+
+@router.get("/brands/{brand_id}/memory", response_model=BrandMemoryRead)
+async def read_brand_memory(
+    brand_id: uuid.UUID,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> BrandMemoryRead:
+    """Return the knowledge and monitoring history accumulated for a brand."""
+    memory = await BrandMemoryService(service.session).read(
+        company_id=scope.company_id, brand_id=brand_id
+    )
+    return BrandMemoryRead.model_validate(memory)
+
+
+@router.post(
+    "/brands/{brand_id}/memory/refresh", response_model=BrandMemoryRefreshRead
+)
+async def refresh_brand_memory(
+    brand_id: uuid.UUID,
+    payload: BrandMemoryRefreshRequest,
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+    service: Annotated[ContentService, Depends(get_content_service)],
+) -> BrandMemoryRefreshRead:
+    """Monitor the brand's linked sources and return the refreshed memory."""
+    result = await BrandMemoryService(
+        service.session,
+        content_service=service,
+        registry=request.app.state.provider_registry,
+        executor=request.app.state.provider_executor,
+        master_key_box=request.app.state.master_key_box,
+    ).refresh(
+        company_id=scope.company_id,
+        brand_id=brand_id,
+        source_url=(payload.source_url or "").strip() or None,
+        connection_id=payload.connection_id,
+    )
+    if result["status"] == "no_linked_platforms":
+        raise ConflictError(
+            "No monitored source is linked to this brand. Provide a public "
+            "source URL or link a platform first."
+        )
+    if result["status"] == "no_active_platforms":
+        raise ConflictError("The selected brand has no active linked platforms.")
+    return BrandMemoryRefreshRead.model_validate(result)
 
 
 @router.post("/projects", response_model=ContentProjectRead, status_code=201)

@@ -43,6 +43,65 @@ export type Brand = {
   status: string;
 };
 
+export type MemorySnapshot = {
+  id: string;
+  extracted_at: string;
+  source_document_count: number;
+  model: string | null;
+};
+
+export type BrandMemoryPlatform = {
+  id: string;
+  name: string;
+  base_url: string | null;
+  platform_type: string | null;
+  status: string | null;
+  snapshot: MemorySnapshot | null;
+  knowledge: Record<string, unknown> | null;
+  history: MemorySnapshot[];
+};
+
+export type BrandMemoryAnalysis = {
+  selected_topic?: string | null;
+  selection_reason?: string | null;
+  brand_fit?: number | null;
+  candidate_count?: number | null;
+  duplicate_count?: number | null;
+  source_count?: number | null;
+  platform_count?: number | null;
+  sources?: Array<{
+    platform_id?: string;
+    source_url?: string;
+    evidence?: string;
+  }>;
+  supporting_points?: Array<{
+    topic?: string;
+    description?: string;
+    source_url?: string;
+    brand_fit?: number;
+  }>;
+};
+
+export type BrandMemory = {
+  brand_id: string;
+  brand_name: string;
+  language: string;
+  has_knowledge: boolean;
+  platform_count: number;
+  source_count: number;
+  snapshot_count: number;
+  suggested_topic: string | null;
+  analysis: BrandMemoryAnalysis | null;
+  platforms: BrandMemoryPlatform[];
+  updated_at: string | null;
+};
+
+export type BrandMemoryRefresh = {
+  status: string;
+  monitor: Record<string, unknown>;
+  memory: BrandMemory;
+};
+
 export type CharacterImage = {
   key: string;
   platform: string;

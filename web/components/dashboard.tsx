@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { api, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
@@ -14,6 +21,8 @@ import type {
   AgentTask,
   AuthUser,
   Brand,
+  BrandMemory,
+  BrandMemoryRefresh,
   CharacterImage,
   ContentProject,
   SceneProvider,
@@ -33,6 +42,8 @@ import {
 } from "@/components/ui";
 
 const BRAND_KEY = "vandad.brandId";
+
+type Phase = "select" | "ready" | "monitoring" | "needsSource" | "review" | "production";
 
 type ScenarioSceneView = {
   index?: number;
@@ -61,6 +72,35 @@ type ScenarioView = {
   caption?: string;
   hashtags?: string[];
   total_duration_seconds?: number;
+};
+
+type KnowledgeFactView = {
+  name?: string;
+  description?: string;
+  evidence?: string;
+  source_url?: string;
+  confidence?: number;
+};
+
+const KNOWLEDGE_GROUPS = [
+  { key: "products_and_services", label: "knowledgeProducts" },
+  { key: "capabilities", label: "knowledgeCapabilities" },
+  { key: "differentiators", label: "knowledgeDifferentiators" },
+  { key: "workflows", label: "knowledgeWorkflows" },
+  { key: "target_audiences", label: "knowledgeAudiences" },
+  { key: "content_opportunities", label: "knowledgeOpportunities" },
+] as const;
+
+type KnowledgeGroupView = {
+  key: string;
+  label: (typeof KNOWLEDGE_GROUPS)[number]["label"];
+  items: KnowledgeFactView[];
+};
+
+type KnowledgeView = {
+  summary: string;
+  groups: KnowledgeGroupView[];
+  unknowns: string[];
 };
 
 const HIDDEN_METADATA =
@@ -139,6 +179,34 @@ function readAnalysis(
   };
 }
 
+function readKnowledge(knowledge: Record<string, unknown> | null): KnowledgeView | null {
+  if (!knowledge) return null;
+  const groups = KNOWLEDGE_GROUPS.map(({ key, label }) => ({
+    key,
+    label,
+    items: (Array.isArray(knowledge[key]) ? knowledge[key] : [])
+      .map((item) =>
+        typeof item === "string" ? { description: item } : item,
+      )
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      .map((item) => ({
+        name: typeof item.name === "string" ? item.name : undefined,
+        description: typeof item.description === "string" ? item.description : undefined,
+        evidence: typeof item.evidence === "string" ? item.evidence : undefined,
+        source_url: typeof item.source_url === "string" ? item.source_url : undefined,
+        confidence: typeof item.confidence === "number" ? item.confidence : undefined,
+      })),
+  })).filter((group) => group.items.length > 0);
+  const unknowns = (Array.isArray(knowledge.unknowns) ? knowledge.unknowns : [])
+    .map((item) => (typeof item === "string" ? item : ""))
+    .filter(Boolean);
+  return {
+    summary: typeof knowledge.summary === "string" ? knowledge.summary : "",
+    groups,
+    unknowns,
+  };
+}
+
 function readQcStatus(task: AgentTask | null) {
   const value = task?.result_payload?.qc_status;
   return typeof value === "string" ? value : null;
@@ -151,13 +219,7 @@ function initials(value: string) {
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 }
 
-function TimelineStep({
-  step,
-  last,
-}: {
-  step: WorkflowStep;
-  last: boolean;
-}) {
+function TimelineStep({ step, last }: { step: WorkflowStep; last: boolean }) {
   const { t, stepStatus, nodeLabel, formatNumber } = useI18n();
   const duration =
     step.duration_ms != null
@@ -253,6 +315,127 @@ function StageRow({ stage, last }: { stage: StageEntry; last: boolean }) {
   );
 }
 
+function MemoryPanel({
+  memory,
+  compact,
+  reused,
+}: {
+  memory: BrandMemory;
+  compact?: boolean;
+  reused?: boolean;
+}) {
+  const { t, formatDateTime, formatNumber } = useI18n();
+  const knowledge = readKnowledge(memory.platforms[0]?.knowledge ?? null);
+
+  return (
+    <section className="glass card memory-card">
+      <header className="card-head">
+        <div>
+          <h2>{t("memoryTitle")}</h2>
+          <p>
+            {compact || reused ? t("memoryReusedNote") : t("memorySubtitle")}
+          </p>
+        </div>
+        <div className="memory-stats">
+          <span className="pill pill--info">
+            {t("memoryPlatforms")}: {formatNumber(memory.platform_count)}
+          </span>
+          <span className="pill pill--idle">
+            {t("memorySources")}: {formatNumber(memory.source_count)}
+          </span>
+        </div>
+      </header>
+
+      {!memory.has_knowledge ? (
+        <p className="empty-inline">{t("memoryEmpty")}</p>
+      ) : (
+        <>
+          {knowledge?.summary ? (
+            <div className="memory-summary">
+              <span>{t("memorySummary")}</span>
+              <p dir="auto">{knowledge.summary}</p>
+            </div>
+          ) : null}
+
+          {compact ? null : (
+            <div className="memory-platform-grid">
+              {memory.platforms.map((platform) => {
+                const platformKnowledge = readKnowledge(platform.knowledge);
+                return (
+                  <article className="memory-platform" key={platform.id}>
+                    <div className="memory-platform-head">
+                      <strong>{platform.name}</strong>
+                      <span className="memory-url" dir="ltr">
+                        {platform.base_url || "—"}
+                      </span>
+                    </div>
+                    <dl className="meta-grid">
+                      <div>
+                        <dt>{t("memoryLastUpdated")}</dt>
+                        <dd>{formatDateTime(platform.snapshot?.extracted_at)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("memorySnapshots")}</dt>
+                        <dd>{formatNumber(platform.history.length)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("memorySources")}</dt>
+                        <dd>
+                          {formatNumber(
+                            new Set(
+                              platformKnowledge?.groups.flatMap((group) =>
+                                group.items
+                                  .map((item) => item.source_url)
+                                  .filter((url): url is string => Boolean(url)),
+                              ) ?? [],
+                            ).size,
+                          )}
+                        </dd>
+                      </div>
+                    </dl>
+                    {platformKnowledge?.groups.map((group) => (
+                      <div className="memory-fact-group" key={group.key}>
+                        <h4>{t(group.label)}</h4>
+                        <ul>
+                          {group.items.map((fact, index) => (
+                            <li key={`${group.key}-${index}`}>
+                              <strong dir="auto">{fact.name || fact.description}</strong>
+                              {fact.description && fact.name ? (
+                                <span dir="auto">{fact.description}</span>
+                              ) : null}
+                              {fact.source_url ? (
+                                <a href={fact.source_url} target="_blank" rel="noreferrer" dir="ltr">
+                                  {fact.source_url}
+                                </a>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    {platformKnowledge?.unknowns.length ? (
+                      <div className="memory-fact-group">
+                        <h4>{t("memoryUnknowns")}</h4>
+                        <ul>
+                          {platformKnowledge.unknowns.map((item, index) => (
+                            <li key={index} dir="auto">
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Dashboard() {
   const {
     t,
@@ -297,8 +480,13 @@ export function Dashboard() {
   const [providers, setProviders] = useState<SceneProvider[]>([]);
   const [optionsLoading, setOptionsLoading] = useState(true);
 
-  const [topic, setTopic] = useState("");
+  const [phase, setPhase] = useState<Phase>("select");
+  const [memory, setMemory] = useState<BrandMemory | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
+  const [monitorStatus, setMonitorStatus] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
+  const [topic, setTopic] = useState("");
   const [duration, setDuration] = useState(20);
   const [providerId, setProviderId] = useState("");
   const [characterKey, setCharacterKey] = useState("");
@@ -328,10 +516,77 @@ export function Dashboard() {
     duration: number;
   } | null>(null);
 
-  const selectBrand = useCallback((id: string) => {
-    setSelectedBrandId(id);
-    window.localStorage.setItem(BRAND_KEY, id);
-  }, []);
+  const memoryLock = useRef(false);
+
+  const selectedBrand = useMemo(
+    () => brands.find((brand) => brand.id === selectedBrandId) ?? null,
+    [brands, selectedBrandId],
+  );
+  const projectBrand = useMemo(
+    () => (project ? brands.find((brand) => brand.id === project.brand_id) ?? null : null),
+    [brands, project],
+  );
+
+  const beginMonitoring = useCallback(
+    async (brandId: string, url?: string) => {
+      if (memoryLock.current) return;
+      memoryLock.current = true;
+      setMemoryBusy(true);
+      setMemoryError(null);
+      setNotice(null);
+      setPhase("monitoring");
+      try {
+        const result = await api<BrandMemoryRefresh>(
+          `/content/brands/${brandId}/memory/refresh`,
+          {
+            method: "POST",
+            body: JSON.stringify(url?.trim() ? { source_url: url.trim() } : {}),
+          },
+        );
+        setMemory(result.memory);
+        setMonitorStatus(result.status);
+        setTopic(result.memory.suggested_topic || "");
+        setPhase("review");
+        if (result.status === "completed") {
+          setNotice(t("monitoringDone"));
+        }
+      } catch (cause) {
+        const status = (cause as { status?: number }).status;
+        if (status === 409) {
+          setPhase("needsSource");
+          setMemoryError(t("memoryNoSourceHint"));
+        } else {
+          setPhase("select");
+          setMemoryError(errorMessage(cause));
+        }
+      } finally {
+        memoryLock.current = false;
+        setMemoryBusy(false);
+      }
+    },
+    [t],
+  );
+
+  const loadMemory = useCallback(
+    async (brandId: string) => {
+      const next = await api<BrandMemory>(`/content/brands/${brandId}/memory`);
+      setMemory(next);
+      setTopic((current) => current || next.suggested_topic || "");
+      setMonitorStatus(null);
+
+      // Selecting a platform always leads to knowledge on this page: reuse a
+      // recent snapshot, otherwise monitor the sources automatically.
+      const updatedAt = next.updated_at ? Date.parse(next.updated_at) : NaN;
+      const stale = Number.isNaN(updatedAt) || Date.now() - updatedAt > 12 * 3600 * 1000;
+      if (next.has_knowledge && !stale) {
+        setPhase("review");
+        return next;
+      }
+      void beginMonitoring(brandId);
+      return next;
+    },
+    [beginMonitoring],
+  );
 
   const loadBrands = useCallback(async () => {
     setBrandsLoading(true);
@@ -340,17 +595,41 @@ export function Dashboard() {
       const list = await api<Brand[]>("/content/brands");
       setBrands(list);
       const saved = window.localStorage.getItem(BRAND_KEY);
-      setSelectedBrandId((current) => {
-        if (current && list.some((brand) => brand.id === current)) return current;
-        if (saved && list.some((brand) => brand.id === saved)) return saved;
-        return list[0]?.id ?? null;
-      });
+      const initial =
+        saved && list.some((brand) => brand.id === saved)
+          ? saved
+          : (list[0]?.id ?? null);
+      setSelectedBrandId(initial);
+      if (initial) {
+        try {
+          await loadMemory(initial);
+        } catch {
+          // A restored view is optional; the operator can start monitoring.
+          setPhase("ready");
+        }
+      }
     } catch (cause) {
       setBrandsError(errorMessage(cause));
     } finally {
       setBrandsLoading(false);
     }
-  }, []);
+  }, [loadMemory]);
+
+  const selectBrand = useCallback(
+    (id: string) => {
+      setSelectedBrandId(id);
+      window.localStorage.setItem(BRAND_KEY, id);
+      setMemory(null);
+      setTopic("");
+      setMonitorStatus(null);
+      setMemoryError(null);
+      setFormError(null);
+      setSourceUrl("");
+      setPhase("select");
+      void loadMemory(id);
+    },
+    [loadMemory],
+  );
 
   useEffect(() => {
     void loadBrands();
@@ -406,15 +685,6 @@ export function Dashboard() {
       .catch(() => undefined);
   }, [user?.role]);
 
-  const selectedBrand = useMemo(
-    () => brands.find((brand) => brand.id === selectedBrandId) ?? null,
-    [brands, selectedBrandId],
-  );
-  const projectBrand = useMemo(
-    () => (project ? brands.find((brand) => brand.id === project.brand_id) ?? null : null),
-    [brands, project],
-  );
-
   const scenario = readScenario(project);
   const scenes = scenario?.scenes ?? [];
   const scenarioDuration =
@@ -454,19 +724,19 @@ export function Dashboard() {
     project?.scene_video_provider ??
     null;
 
-  const startProcess = async () => {
+  useEffect(() => {
+    if (task) setPhase("production");
+  }, [task]);
+
+  const continueToProduction = async () => {
     setFormError(null);
     setNotice(null);
     if (!selectedBrandId) {
       setFormError(t("noProfileSelected"));
       return;
     }
-    if (topic.trim().length > 0 && topic.trim().length < 3) {
+    if (topic.trim().length < 3) {
       setFormError(t("topicTooShort"));
-      return;
-    }
-    if (sourceUrl.trim() && !/^https?:\/\//i.test(sourceUrl.trim())) {
-      setFormError(t("sourceUrlHint"));
       return;
     }
     if (!Number.isFinite(duration) || duration < 5 || duration > 120) {
@@ -483,12 +753,13 @@ export function Dashboard() {
       await start({
         brandId: selectedBrandId,
         title: topic.trim() || `${t("productionTitle")} — ${brandName}`,
-        topic: topic.trim() || null,
-        sourceUrl: sourceUrl.trim() || null,
+        topic: topic.trim(),
+        sourceUrl: null,
         durationSeconds: duration,
         providerId: providerId || null,
         characterKey,
       });
+      setPhase("production");
       setNotice(t("autoApproveNote"));
     } catch (cause) {
       if (cause instanceof Error && cause.message === "duplicate-submission") {
@@ -497,6 +768,12 @@ export function Dashboard() {
         setFormError(errorMessage(cause));
       }
     }
+  };
+
+  const startNew = () => {
+    reset();
+    setPhase(memory?.has_knowledge ? "review" : "ready");
+    setFormError(null);
   };
 
   const createProfile = async (event: FormEvent<HTMLFormElement>) => {
@@ -601,6 +878,7 @@ export function Dashboard() {
     : [];
 
   const qcEntries = safeMetadata(project?.assembly_metadata);
+  const showBrands = phase === "select" || phase === "needsSource";
 
   return (
     <div className="app-shell">
@@ -664,7 +942,7 @@ export function Dashboard() {
           <div>
             <span className="eyebrow">{t("appTagline")}</span>
             <h1>
-              {t("dashboardGreeting")}، {user.full_name.split(" ")[0]}
+              {t("dashboardGreeting")}, {user.full_name.split(" ")[0]}
             </h1>
             <p>{t("dashboardSubtitle")}</p>
           </div>
@@ -676,492 +954,748 @@ export function Dashboard() {
           </div>
         </div>
 
+        <nav className="flow-nav" aria-label={t("productionTitle")}>
+          <span className={cx("flow-step", phase !== "select" && phase !== "needsSource" && "is-done")}>
+            <span className="flow-index">1</span>
+            {t("stepBrand")}
+          </span>
+          <span className="flow-connector" aria-hidden="true" />
+          <span className={cx("flow-step", phase === "review" && "is-active", (phase === "production") && "is-done")}>
+            <span className="flow-index">2</span>
+            {t("stepMemory")}
+          </span>
+          <span className="flow-connector" aria-hidden="true" />
+          <span className={cx("flow-step", phase === "production" && "is-active")}>
+            <span className="flow-index">3</span>
+            {t("stepProduction")}
+          </span>
+        </nav>
+
         {notice ? (
           <Alert tone="success" onClose={() => setNotice(null)}>
             {notice}
           </Alert>
         ) : null}
+        {memoryError ? (
+          <Alert tone="error" onClose={() => setMemoryError(null)}>
+            {memoryError}
+          </Alert>
+        ) : null}
+        {formError ? (
+          <Alert tone="error" onClose={() => setFormError(null)}>
+            {formError}
+          </Alert>
+        ) : null}
+        {phase === "review" && monitorStatus && monitorStatus !== "completed" ? (
+          <Alert tone="info">{t("monitoringPartial")}</Alert>
+        ) : null}
 
-        <section className="glass card">
-          <header className="card-head">
-            <div>
-              <h2>{t("profilesTitle")}</h2>
-              <p>{t("profilesSubtitle")}</p>
-            </div>
-            <button
-              type="button"
-              className="button button--ghost"
-              onClick={() => {
-                setCreateError(null);
-                setAddOpen(true);
-              }}
-            >
-              <span aria-hidden="true">＋</span> {t("addProfile")}
-            </button>
-          </header>
-
-          {brandsError ? (
-            <Alert
-              tone="error"
-              onClose={() => setBrandsError(null)}
-            >
-              {brandsError}
-            </Alert>
-          ) : null}
-
-          {brandsLoading ? (
-            <div className="skeleton-grid">
-              {[0, 1, 2].map((index) => (
-                <div className="skeleton-card" key={index} />
-              ))}
-            </div>
-          ) : brands.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-visual" aria-hidden="true">
-                ✦
-              </div>
-              <strong>{t("noProfiles")}</strong>
-              <p>{t("noProfilesHint")}</p>
-              <button
-                type="button"
-                className="button button--primary"
-                onClick={() => setAddOpen(true)}
-              >
-                {t("addProfile")}
-              </button>
-            </div>
-          ) : (
-            <div className="profile-grid">
-              {brands.map((brand) => {
-                const selected = brand.id === selectedBrandId;
-                return (
-                  <button
-                    type="button"
-                    key={brand.id}
-                    className={cx("profile-card", selected && "is-selected")}
-                    onClick={() => selectBrand(brand.id)}
-                    aria-pressed={selected}
-                  >
-                    <span className="profile-avatar">
-                      {initials(brand.display_name || brand.name)}
-                    </span>
-                    <span className="profile-info">
-                      <strong>{brand.display_name || brand.name}</strong>
-                      <span className="profile-key" dir="ltr">
-                        {brand.name}
-                      </span>
-                      <small>
-                        {[brand.industry, brand.domain]
-                          .filter(Boolean)
-                          .join(" · ") || t("unknown")}
-                      </small>
-                    </span>
-                    {selected ? (
-                      <span className="profile-check" aria-hidden="true">
-                        ✓
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {selectedBrand ? (
-            <div className="selected-profile">
+        {showBrands ? (
+          <section className="glass card">
+            <header className="card-head">
               <div>
-                <span>{t("brandDisplayName")}</span>
-                <strong>{selectedBrand.display_name || selectedBrand.name}</strong>
+                <h2>{t("profilesTitle")}</h2>
+                <p>{t("profilesSubtitle")}</p>
               </div>
-              <div>
-                <span>{t("brandLanguage")}</span>
-                <strong dir="ltr">{selectedBrand.language}</strong>
-              </div>
-              <div>
-                <span>{t("brandIndustry")}</span>
-                <strong>{selectedBrand.industry || "—"}</strong>
-              </div>
-              <div>
-                <span>{t("brandDomain")}</span>
-                <strong dir="ltr">{selectedBrand.domain || "—"}</strong>
-              </div>
-              <div>
-                <span>{t("brandTone")}</span>
-                <strong>{selectedBrand.tone || "—"}</strong>
-              </div>
-            </div>
-          ) : null}
-        </section>
-
-        <section className="glass card production-card">
-          <header className="card-head">
-            <div>
-              <h2>{t("productionTitle")}</h2>
-              <p>{t("productionSubtitle")}</p>
-            </div>
-            {selectedBrand ? (
-              <span className="pill pill--info">{selectedBrand.display_name || selectedBrand.name}</span>
-            ) : null}
-          </header>
-
-          {formError ? (
-            <Alert tone="error" onClose={() => setFormError(null)}>
-              {formError}
-            </Alert>
-          ) : null}
-
-          <div className="form-grid">
-            <Field
-              label={t("topicLabel")}
-              htmlFor="topic"
-              hint={t("topicOptionalHint")}
-            >
-              <textarea
-                id="topic"
-                name="topic"
-                dir="auto"
-                rows={3}
-                placeholder={t("topicPlaceholder")}
-                value={topic}
-                onChange={(event) => setTopic(event.target.value)}
-                disabled={productionBusy || !!project}
-              />
-            </Field>
-
-            <Field
-              label={t("sourceUrlLabel")}
-              htmlFor="source-url"
-              hint={t("sourceUrlHint")}
-            >
-              <input
-                id="source-url"
-                name="source-url"
-                type="url"
-                dir="ltr"
-                placeholder={t("sourceUrlPlaceholder")}
-                value={sourceUrl}
-                onChange={(event) => setSourceUrl(event.target.value)}
-                disabled={productionBusy || !!project}
-              />
-            </Field>
-
-            <div className="form-row">
-              <Field label={t("durationLabel")} htmlFor="duration">
-                <input
-                  id="duration"
-                  name="duration"
-                  type="number"
-                  min={5}
-                  max={120}
-                  step={1}
-                  value={duration}
-                  onChange={(event) => {
-                    const next = Number.parseInt(event.target.value, 10);
-                    setDuration(Number.isFinite(next) ? next : 5);
-                  }}
-                  disabled={productionBusy || !!project}
-                />
-              </Field>
-
-              <Field
-                label={t("characterLabel")}
-                htmlFor="character"
-                hint={t("characterHint")}
-              >
-                <select
-                  id="character"
-                  name="character"
-                  value={characterKey}
-                  onChange={(event) => setCharacterKey(event.target.value)}
-                  disabled={productionBusy || optionsLoading || !!project}
-                >
-                  <option value="">
-                    {optionsLoading ? t("loading") : `${t("select")}…`}
-                  </option>
-                  {characters.map((character) => (
-                    <option key={character.key} value={character.key}>
-                      {character.name} — {character.platform}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label={t("providerLabel")} htmlFor="provider">
-                <select
-                  id="provider"
-                  name="provider"
-                  value={providerId}
-                  onChange={(event) => setProviderId(event.target.value)}
-                  disabled={productionBusy || optionsLoading || !!project}
-                >
-                  <option value="">{t("providerAuto")}</option>
-                  {providers.map((provider) => (
-                    <option key={provider.provider_id} value={provider.provider_id}>
-                      {provider.display_name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-          </div>
-
-          {!optionsLoading && characters.length === 0 ? (
-            <p className="inline-note inline-note--warn">{t("noCharacters")}</p>
-          ) : null}
-
-          <div className="production-actions">
-            <button
-              type="button"
-              className="button button--primary button--start"
-              onClick={() => void startProcess()}
-              disabled={
-                productionBusy || restoring || !!task || characters.length === 0
-              }
-            >
-              {productionBusy ? (
-                <Spinner label={t("startingProcess")} />
-              ) : (
-                <>
-                  <span className="start-icon" aria-hidden="true">
-                    ▶
-                  </span>
-                  {t("startProcess")}
-                </>
-              )}
-            </button>
-            {task ? (
               <button
                 type="button"
                 className="button button--ghost"
-                onClick={reset}
+                onClick={() => {
+                  setCreateError(null);
+                  setAddOpen(true);
+                }}
               >
-                {t("newProcess")}
+                <span aria-hidden="true">＋</span> {t("addProfile")}
               </button>
-            ) : null}
-          </div>
-          <p className="auto-note">
-            <span aria-hidden="true">⚡</span> {t("autoApproveNote")}
-          </p>
-        </section>
+            </header>
 
-        {restoring ? (
-          <section className="glass card">
-            <Spinner label={t("loading")} />
+            {brandsError ? (
+              <Alert tone="error" onClose={() => setBrandsError(null)}>
+                {brandsError}
+              </Alert>
+            ) : null}
+
+            {brandsLoading ? (
+              <div className="skeleton-grid">
+                {[0, 1, 2].map((index) => (
+                  <div className="skeleton-card" key={index} />
+                ))}
+              </div>
+            ) : brands.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-visual" aria-hidden="true">
+                  ✦
+                </div>
+                <strong>{t("noProfiles")}</strong>
+                <p>{t("noProfilesHint")}</p>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => setAddOpen(true)}
+                >
+                  {t("addProfile")}
+                </button>
+              </div>
+            ) : (
+              <div className="profile-grid">
+                {brands.map((brand) => {
+                  const selected = brand.id === selectedBrandId;
+                  return (
+                    <button
+                      type="button"
+                      key={brand.id}
+                      className={cx("profile-card", selected && "is-selected")}
+                      onClick={() => selectBrand(brand.id)}
+                      disabled={memoryBusy}
+                      aria-pressed={selected}
+                    >
+                      <span className="profile-avatar">
+                        {initials(brand.display_name || brand.name)}
+                      </span>
+                      <span className="profile-info">
+                        <strong>{brand.display_name || brand.name}</strong>
+                        <span className="profile-key" dir="ltr">
+                          {brand.name}
+                        </span>
+                        <small>
+                          {[brand.industry, brand.domain]
+                            .filter(Boolean)
+                            .join(" · ") || t("unknown")}
+                        </small>
+                      </span>
+                      {selected ? (
+                        <span className="profile-check" aria-hidden="true">
+                          ✓
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {selectedBrand ? (
+              <div className="selected-profile">
+                <div>
+                  <span>{t("brandDisplayName")}</span>
+                  <strong>{selectedBrand.display_name || selectedBrand.name}</strong>
+                </div>
+                <div>
+                  <span>{t("brandLanguage")}</span>
+                  <strong dir="ltr">{selectedBrand.language}</strong>
+                </div>
+                <div>
+                  <span>{t("brandIndustry")}</span>
+                  <strong>{selectedBrand.industry || "—"}</strong>
+                </div>
+                <div>
+                  <span>{t("brandDomain")}</span>
+                  <strong dir="ltr">{selectedBrand.domain || "—"}</strong>
+                </div>
+                <div>
+                  <span>{t("brandTone")}</span>
+                  <strong>{selectedBrand.tone || "—"}</strong>
+                </div>
+              </div>
+            ) : null}
+
+            {phase === "needsSource" && selectedBrand ? (
+              <div className="source-link-panel">
+                <strong>{t("memoryNoSource")}</strong>
+                <p className="muted">{t("memoryNoSourceHint")}</p>
+                <div className="source-link-row">
+                  <Field label={t("sourceUrlLabel")} htmlFor="brand-source-url">
+                    <input
+                      id="brand-source-url"
+                      type="url"
+                      dir="ltr"
+                      placeholder={t("sourceUrlPlaceholder")}
+                      value={sourceUrl}
+                      onChange={(event) => setSourceUrl(event.target.value)}
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={() => void beginMonitoring(selectedBrand.id, sourceUrl)}
+                    disabled={memoryBusy || !/^https?:\/\//i.test(sourceUrl.trim())}
+                  >
+                    {memoryBusy ? <Spinner /> : t("memoryStartMonitoring")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
-        ) : task ? (
-          <section className="glass card process-card">
+        ) : null}
+
+        {phase === "ready" && selectedBrand ? (
+          <section className="glass card flow-action">
+            <div>
+              <h2>{selectedBrand.display_name || selectedBrand.name}</h2>
+              <p className="muted">{t("memorySubtitle")}</p>
+            </div>
+            <button
+              type="button"
+              className="button button--primary button--start"
+              onClick={() => void beginMonitoring(selectedBrand.id)}
+              disabled={memoryBusy}
+            >
+              <span aria-hidden="true">◎</span> {t("memoryStartMonitoring")}
+            </button>
+          </section>
+        ) : null}
+
+        {phase === "monitoring" ? (
+          <section className="glass card flow-action flow-action--wait">
+            <Spinner label={t("memoryMonitoring")} />
+            <p className="muted">{t("memoryMonitoring")}</p>
+          </section>
+        ) : null}
+
+        {memory && phase !== "select" && phase !== "needsSource" ? (
+          <MemoryPanel
+            memory={memory}
+            compact={phase === "production"}
+            reused={phase === "review" && !monitorStatus}
+          />
+        ) : null}
+
+        {phase === "review" ? (
+          <section className="glass card production-card">
             <header className="card-head">
               <div>
-                <h2>{t("activeProcess")}</h2>
-                <p>
-                  {t("taskId")}: <code dir="ltr">{task.id.slice(0, 8)}</code>
-                  {project ? (
-                    <>
-                      {" · "}
-                      {t("projectId")}:{" "}
-                      <code dir="ltr">{project.id.slice(0, 8)}</code>
-                    </>
-                  ) : null}
-                </p>
+                <h2>{t("productionTitle")}</h2>
+                <p>{t("productionSubtitle")}</p>
               </div>
-              <div className="process-head-actions">
-                <StatusPill
-                  status={task.status}
-                  label={taskStatus(task.status)}
-                />
-                {project ? (
-                  <StatusPill
-                    status={project.status}
-                    label={projectStatus(project.status)}
-                  />
-                ) : null}
-                {canRetry ? (
-                  <button
-                    type="button"
-                    className="button button--ghost button--tiny"
-                    onClick={() => void retry()}
-                    disabled={retrying}
-                    title={t("retryTask")}
-                  >
-                    {retrying ? <Spinner /> : t("retryTask")}
-                  </button>
-                ) : null}
-                {canCancel ? (
-                  <button
-                    type="button"
-                    className="button button--danger button--tiny"
-                    onClick={() => void cancel()}
-                    disabled={cancelling}
-                  >
-                    {cancelling ? <Spinner /> : t("cancelWorkflow")}
-                  </button>
+              <div className="review-actions">
+                {selectedBrand ? (
+                  <span className="pill pill--info">
+                    {selectedBrand.display_name || selectedBrand.name}
+                  </span>
                 ) : null}
                 <button
                   type="button"
-                  className="icon-button"
-                  onClick={() => void refresh()}
-                  title={t("refresh")}
-                  aria-label={t("refresh")}
+                  className="button button--ghost button--tiny"
+                  onClick={() => {
+                    if (selectedBrandId) void beginMonitoring(selectedBrandId);
+                  }}
+                  disabled={memoryBusy}
                 >
-                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none">
-                    <path
-                      d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  {memoryBusy ? <Spinner /> : t("memoryRefresh")}
+                </button>
+                <button
+                  type="button"
+                  className="button button--ghost button--tiny"
+                  onClick={() => setPhase("select")}
+                >
+                  {t("changeBrand")}
                 </button>
               </div>
             </header>
 
-            {productionError ? (
-              <Alert tone="error" onClose={() => setProductionError(null)}>
-                {productionError}
-              </Alert>
-            ) : null}
-            {task.error_message ? (
-              <Alert tone="error">{task.error_message}</Alert>
-            ) : null}
-
-            <div className="process-ids">
-              <CopyField label={t("taskId")} value={task.id} />
-              <CopyField label={t("projectId")} value={project?.id} />
-              <CopyField label={t("workflowId")} value={execution?.id} />
+            <div className="form-grid">
+              <Field
+                label={t("memoryTopicTitle")}
+                htmlFor="topic"
+                hint={t("memoryTopicHint")}
+              >
+                <textarea
+                  id="topic"
+                  name="topic"
+                  dir="auto"
+                  rows={3}
+                  placeholder={t("topicPlaceholder")}
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                />
+              </Field>
             </div>
 
-            <div className="execution-bar">
-              <div className="execution-summary">
-                <span className="muted small">{t("openWorkflow")}</span>
-                <strong dir="ltr">
-                  {execution?.workflow_name ?? t("noWorkflowYet")}
-                </strong>
-                {execution ? (
-                  <StatusPill
-                    status={execution.status}
-                    label={executionStatus(execution.status)}
+            <details className="advanced-settings">
+              <summary>{t("productionSettings")}</summary>
+              <div className="form-grid">
+                <Field label={t("durationLabel")} htmlFor="duration">
+                  <input
+                    id="duration"
+                    name="duration"
+                    type="number"
+                    min={5}
+                    max={120}
+                    step={1}
+                    value={duration}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      setDuration(Number.isFinite(next) ? next : 5);
+                    }}
                   />
-                ) : null}
-              </div>
-              <span className="muted small">
-                {t("taskAttempt")} {formatNumber(task.attempt_count)} /{" "}
-                {formatNumber(task.max_attempts)}
-              </span>
-            </div>
-
-            {execution?.error_message ? (
-              <Alert tone="error">{execution.error_message}</Alert>
-            ) : null}
-            {project?.error_message && !task.error_message ? (
-              <Alert tone="error">{project.error_message}</Alert>
-            ) : null}
-
-            <h3 className="section-subtitle">{t("agentStagesTitle")}</h3>
-            {stages.length === 0 ? (
-              <p className="empty-inline">{t("agentStagesEmpty")}</p>
-            ) : (
-              <ol className="timeline">
-                {stages.map((stage, index) => (
-                  <StageRow
-                    key={stage.id}
-                    stage={stage}
-                    last={index === stages.length - 1}
-                  />
-                ))}
-              </ol>
-            )}
-
-            {analysis ? (
-              <div className="analysis-block">
-                <h3 className="section-subtitle">{t("analysisTitle")}</h3>
-                <dl className="meta-grid">
-                  {analysis.selected_topic ? (
-                    <div>
-                      <dt>{t("analysisTopic")}</dt>
-                      <dd dir="auto">{analysis.selected_topic}</dd>
-                    </div>
-                  ) : null}
-                  {analysis.brand_fit != null ? (
-                    <div>
-                      <dt>{t("analysisFit")}</dt>
-                      <dd>
-                        {formatNumber(Math.round(analysis.brand_fit * 100))}%
-                      </dd>
-                    </div>
-                  ) : null}
-                  {analysis.candidate_count != null ? (
-                    <div>
-                      <dt>{t("analysisCandidates")}</dt>
-                      <dd>{formatNumber(analysis.candidate_count)}</dd>
-                    </div>
-                  ) : null}
-                  {analysis.duplicate_count != null ? (
-                    <div>
-                      <dt>{t("analysisDuplicates")}</dt>
-                      <dd>{formatNumber(analysis.duplicate_count)}</dd>
-                    </div>
-                  ) : null}
-                  {analysis.source_count != null ? (
-                    <div>
-                      <dt>{t("analysisSources")}</dt>
-                      <dd>{formatNumber(analysis.source_count)}</dd>
-                    </div>
-                  ) : null}
-                </dl>
-                {analysis.sources && analysis.sources.length > 0 ? (
-                  <ul className="source-list" dir="ltr">
-                    {analysis.sources.map((url) => (
-                      <li key={url}>
-                        <a href={url} target="_blank" rel="noreferrer">
-                          {url}
-                        </a>
-                      </li>
+                </Field>
+                <Field
+                  label={t("characterLabel")}
+                  htmlFor="character"
+                  hint={t("characterHint")}
+                >
+                  <select
+                    id="character"
+                    name="character"
+                    value={characterKey}
+                    onChange={(event) => setCharacterKey(event.target.value)}
+                    disabled={optionsLoading}
+                  >
+                    <option value="">
+                      {optionsLoading ? t("loading") : `${t("select")}…`}
+                    </option>
+                    {characters.map((character) => (
+                      <option key={character.key} value={character.key}>
+                        {character.name} — {character.platform}
+                      </option>
                     ))}
-                  </ul>
-                ) : null}
+                  </select>
+                </Field>
+                <Field label={t("providerLabel")} htmlFor="provider">
+                  <select
+                    id="provider"
+                    name="provider"
+                    value={providerId}
+                    onChange={(event) => setProviderId(event.target.value)}
+                    disabled={optionsLoading}
+                  >
+                    <option value="">{t("providerAuto")}</option>
+                    {providers.map((provider) => (
+                      <option key={provider.provider_id} value={provider.provider_id}>
+                        {provider.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
               </div>
-            ) : null}
+              {!optionsLoading && characters.length === 0 ? (
+                <p className="inline-note inline-note--warn">{t("noCharacters")}</p>
+              ) : null}
+            </details>
 
-            <h3 className="section-subtitle">{t("videoWorkflowTitle")}</h3>
-            {steps.length === 0 ? (
-              <p className="empty-inline">{t("videoWorkflowEmpty")}</p>
+            <div className="production-actions">
+              <button
+                type="button"
+                className="button button--primary button--start"
+                onClick={() => void continueToProduction()}
+                disabled={productionBusy || characters.length === 0}
+              >
+                {productionBusy ? (
+                  <Spinner label={t("continuing")} />
+                ) : (
+                  <>
+                    <span className="start-icon" aria-hidden="true">
+                      ▶
+                    </span>
+                    {t("continueToScenario")}
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="auto-note">
+              <span aria-hidden="true">⚡</span> {t("autoApproveNote")}
+            </p>
+          </section>
+        ) : null}
+
+        {phase === "production" ? (
+          <>
+            {restoring ? (
+              <section className="glass card">
+                <Spinner label={t("loading")} />
+              </section>
             ) : (
-              <ol className="timeline">
-                {steps.map((step, index) => (
-                  <TimelineStep
-                    key={step.id}
-                    step={step}
-                    last={index === steps.length - 1}
-                  />
-                ))}
-              </ol>
+              <section className="glass card process-card">
+                <header className="card-head">
+                  <div>
+                    <h2>{t("activeProcess")}</h2>
+                    <p>
+                      {t("taskId")}: <code dir="ltr">{task?.id.slice(0, 8) ?? "—"}</code>
+                      {project ? (
+                        <>
+                          {" · "}
+                          {t("projectId")}:{" "}
+                          <code dir="ltr">{project.id.slice(0, 8)}</code>
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                  <div className="process-head-actions">
+                    {task ? (
+                      <StatusPill status={task.status} label={taskStatus(task.status)} />
+                    ) : null}
+                    {project ? (
+                      <StatusPill
+                        status={project.status}
+                        label={projectStatus(project.status)}
+                      />
+                    ) : null}
+                    {canRetry ? (
+                      <button
+                        type="button"
+                        className="button button--ghost button--tiny"
+                        onClick={() => void retry()}
+                        disabled={retrying}
+                        title={t("retryTask")}
+                      >
+                        {retrying ? <Spinner /> : t("retryTask")}
+                      </button>
+                    ) : null}
+                    {canCancel ? (
+                      <button
+                        type="button"
+                        className="button button--danger button--tiny"
+                        onClick={() => void cancel()}
+                        disabled={cancelling}
+                      >
+                        {cancelling ? <Spinner /> : t("cancelWorkflow")}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => void refresh()}
+                      title={t("refresh")}
+                      aria-label={t("refresh")}
+                    >
+                      <svg viewBox="0 0 24 24" width="17" height="17" fill="none">
+                        <path
+                          d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="button button--ghost button--tiny"
+                      onClick={startNew}
+                    >
+                      {t("newProcess")}
+                    </button>
+                  </div>
+                </header>
+
+                {productionError ? (
+                  <Alert tone="error" onClose={() => setProductionError(null)}>
+                    {productionError}
+                  </Alert>
+                ) : null}
+                {task?.error_message ? (
+                  <Alert tone="error">{task.error_message}</Alert>
+                ) : null}
+
+                {task ? (
+                  <div className="process-ids">
+                    <CopyField label={t("taskId")} value={task.id} />
+                    <CopyField label={t("projectId")} value={project?.id} />
+                    <CopyField label={t("workflowId")} value={execution?.id} />
+                  </div>
+                ) : null}
+
+                <div className="execution-bar">
+                  <div className="execution-summary">
+                    <span className="muted small">{t("openWorkflow")}</span>
+                    <strong dir="ltr">
+                      {execution?.workflow_name ?? t("noWorkflowYet")}
+                    </strong>
+                    {execution ? (
+                      <StatusPill
+                        status={execution.status}
+                        label={executionStatus(execution.status)}
+                      />
+                    ) : null}
+                  </div>
+                  {task ? (
+                    <span className="muted small">
+                      {t("taskAttempt")} {formatNumber(task.attempt_count)} /{" "}
+                      {formatNumber(task.max_attempts)}
+                    </span>
+                  ) : null}
+                </div>
+
+                {execution?.error_message ? (
+                  <Alert tone="error">{execution.error_message}</Alert>
+                ) : null}
+                {project?.error_message && !task?.error_message ? (
+                  <Alert tone="error">{project.error_message}</Alert>
+                ) : null}
+
+                <h3 className="section-subtitle">{t("agentStagesTitle")}</h3>
+                {stages.length === 0 ? (
+                  <p className="empty-inline">{t("agentStagesEmpty")}</p>
+                ) : (
+                  <ol className="timeline">
+                    {stages.map((stage, index) => (
+                      <StageRow
+                        key={stage.id}
+                        stage={stage}
+                        last={index === stages.length - 1}
+                      />
+                    ))}
+                  </ol>
+                )}
+
+                {analysis ? (
+                  <div className="analysis-block">
+                    <h3 className="section-subtitle">{t("analysisTitle")}</h3>
+                    <dl className="meta-grid">
+                      {analysis.selected_topic ? (
+                        <div>
+                          <dt>{t("analysisTopic")}</dt>
+                          <dd dir="auto">{analysis.selected_topic}</dd>
+                        </div>
+                      ) : null}
+                      {analysis.brand_fit != null ? (
+                        <div>
+                          <dt>{t("analysisFit")}</dt>
+                          <dd>
+                            {formatNumber(Math.round(analysis.brand_fit * 100))}%
+                          </dd>
+                        </div>
+                      ) : null}
+                      {analysis.candidate_count != null ? (
+                        <div>
+                          <dt>{t("analysisCandidates")}</dt>
+                          <dd>{formatNumber(analysis.candidate_count)}</dd>
+                        </div>
+                      ) : null}
+                      {analysis.duplicate_count != null ? (
+                        <div>
+                          <dt>{t("analysisDuplicates")}</dt>
+                          <dd>{formatNumber(analysis.duplicate_count)}</dd>
+                        </div>
+                      ) : null}
+                      {analysis.source_count != null ? (
+                        <div>
+                          <dt>{t("analysisSources")}</dt>
+                          <dd>{formatNumber(analysis.source_count)}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    {analysis.sources && analysis.sources.length > 0 ? (
+                      <ul className="source-list" dir="ltr">
+                        {analysis.sources.map((url) => (
+                          <li key={url}>
+                            <a href={url} target="_blank" rel="noreferrer">
+                              {url}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <h3 className="section-subtitle">{t("videoWorkflowTitle")}</h3>
+                {steps.length === 0 ? (
+                  <p className="empty-inline">{t("videoWorkflowEmpty")}</p>
+                ) : (
+                  <ol className="timeline">
+                    {steps.map((step, index) => (
+                      <TimelineStep
+                        key={step.id}
+                        step={step}
+                        last={index === steps.length - 1}
+                      />
+                    ))}
+                  </ol>
+                )}
+
+                {isActive ? (
+                  <p className="live-note">
+                    <span className="live-dot" aria-hidden="true" />
+                    {t("refresh")} · 3s
+                  </p>
+                ) : null}
+              </section>
             )}
 
-            {isActive ? (
-              <p className="live-note">
-                <span className="live-dot" aria-hidden="true" />
-                {t("refresh")} · 3s
-              </p>
-            ) : null}
-          </section>
-        ) : (
-          <section className="glass card process-empty">
-            <div className="process-empty-visual" aria-hidden="true">
-              <span className="orbit orbit--one" />
-              <span className="orbit orbit--two" />
-              <span className="orbit-core">◎</span>
-            </div>
-            <h2>{t("productionTitle")}</h2>
-            <p>{t("timelineEmpty")}</p>
-          </section>
-        )}
+            <div className="dash-columns">
+              <section className="glass card">
+                <header className="card-head">
+                  <h2>{t("scenarioTitle")}</h2>
+                  {scenarioApproved ? (
+                    <StatusPill status="approved" label={t("scenarioApproved")} />
+                  ) : null}
+                </header>
 
-        <section className="glass card">
-          <header className="card-head">
-            <div>
-              <h2>{t("historyTitle")}</h2>
+                {!scenario ? (
+                  <p className="empty-inline">{t("scenarioEmpty")}</p>
+                ) : (
+                  <>
+                    <h3 className="scenario-title">{scenario.title}</h3>
+                    {scenario.opening_hook ? (
+                      <p className="scenario-hook">{scenario.opening_hook}</p>
+                    ) : null}
+
+                    <div className="scenario-stats">
+                      <div>
+                        <span>{t("scenesCount")}</span>
+                        <strong>{formatNumber(scenes.length)}</strong>
+                      </div>
+                      <div>
+                        <span>{t("metaDuration")}</span>
+                        <strong>
+                          {formatNumber(Math.round(scenarioDuration * 10) / 10)}{" "}
+                          {t("seconds")}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {scenes.length === 0 ? (
+                      <p className="empty-inline">{t("noScenes")}</p>
+                    ) : (
+                      <ol className="scene-list">
+                        {scenes.map((scene, index) => (
+                          <li className="scene-item" key={`${index}-${scene.scene_type ?? "scene"}`}>
+                            <div className="scene-item-head">
+                              <span className="scene-index">
+                                {formatNumber(index + 1)}
+                              </span>
+                              <span className="scene-type" dir="ltr">
+                                {scene.scene_type ?? "b_roll"}
+                              </span>
+                              <span className="scene-duration">
+                                {formatNumber(
+                                  Math.round((scene.duration_seconds ?? 0) * 10) / 10,
+                                )}{" "}
+                                {t("seconds")}
+                              </span>
+                            </div>
+                            <p className="scene-narration">{scene.narration}</p>
+                            {scene.on_screen_text ? (
+                              <p className="scene-on-screen">
+                                «{scene.on_screen_text}»
+                              </p>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+
+                    {scenario.cta ? (
+                      <div className="scenario-cta">
+                        <span>{t("metaCta")}</span>
+                        <strong>{scenario.cta}</strong>
+                      </div>
+                    ) : null}
+
+                    {scenario.hashtags && scenario.hashtags.length > 0 ? (
+                      <div className="hashtags">
+                        {scenario.hashtags.map((tag) => (
+                          <span key={tag} dir="rtl">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </section>
+
+              <section className="glass card">
+                <header className="card-head">
+                  <h2>{t("videoTitle")}</h2>
+                  {isCompleted ? (
+                    <StatusPill status="completed" label={t("statusCompleted")} />
+                  ) : null}
+                </header>
+
+                {!isCompleted ? (
+                  <div className="video-placeholder">
+                    <span className="video-placeholder-icon" aria-hidden="true">
+                      ▷
+                    </span>
+                    <p>{t("videoNotReady")}</p>
+                  </div>
+                ) : (
+                  <>
+                    {videoUrl ? (
+                      <video
+                        className="video-player"
+                        src={videoUrl}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        onLoadedMetadata={(event) => {
+                          const element = event.currentTarget;
+                          setVideoInfo({
+                            width: element.videoWidth,
+                            height: element.videoHeight,
+                            duration: Number.isFinite(element.duration)
+                              ? element.duration
+                              : 0,
+                          });
+                        }}
+                      />
+                    ) : project?.final_artifact_id ? (
+                      <div className="video-placeholder">
+                        <Spinner label={t("loading")} />
+                      </div>
+                    ) : (
+                      <div className="video-placeholder">
+                        <span className="video-placeholder-icon" aria-hidden="true">
+                          ▷
+                        </span>
+                        <p>{t("videoUnavailable")}</p>
+                      </div>
+                    )}
+
+                    <div className="video-actions">
+                      <button
+                        type="button"
+                        className="button button--primary"
+                        onClick={downloadVideo}
+                        disabled={!videoUrl}
+                      >
+                        <span aria-hidden="true">⤓</span> {t("downloadVideo")}
+                      </button>
+                    </div>
+
+                    {metadataItems.length > 0 ? (
+                      <div className="meta-block">
+                        <h3>{t("metadataTitle")}</h3>
+                        <dl className="meta-grid">
+                          {metadataItems.map((item) => (
+                            <div key={item.label}>
+                              <dt>{item.label}</dt>
+                              <dd>{item.value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    ) : (
+                      <p className="empty-inline">{t("videoMetaUnavailable")}</p>
+                    )}
+
+                    <div className="meta-block">
+                      <h3>{t("qcTitle")}</h3>
+                      {qcEntries.length === 0 ? (
+                        <p className="empty-inline">{t("qcEmpty")}</p>
+                      ) : (
+                        <dl className="meta-grid">
+                          {qcEntries.map(([key, value]) => (
+                            <div key={key}>
+                              <dt dir="ltr">{key.replaceAll("_", " ")}</dt>
+                              <dd dir="auto">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                    </div>
+                  </>
+                )}
+              </section>
             </div>
+          </>
+        ) : null}
+
+        <section className="glass card history-card">
+          <header className="card-head">
+            <h2>{t("historyTitle")}</h2>
             <button
               type="button"
               className="icon-button"
@@ -1224,184 +1758,6 @@ export function Dashboard() {
             </ul>
           )}
         </section>
-
-        <div className="dash-columns">
-          <section className="glass card">
-            <header className="card-head">
-              <h2>{t("scenarioTitle")}</h2>
-              {scenarioApproved ? (
-                <StatusPill status="approved" label={t("scenarioApproved")} />
-              ) : null}
-            </header>
-
-            {!scenario ? (
-              <p className="empty-inline">{t("scenarioEmpty")}</p>
-            ) : (
-              <>
-                <h3 className="scenario-title">{scenario.title}</h3>
-                {scenario.opening_hook ? (
-                  <p className="scenario-hook">{scenario.opening_hook}</p>
-                ) : null}
-
-                <div className="scenario-stats">
-                  <div>
-                    <span>{t("scenesCount")}</span>
-                    <strong>{formatNumber(scenes.length)}</strong>
-                  </div>
-                  <div>
-                    <span>{t("metaDuration")}</span>
-                    <strong>
-                      {formatNumber(Math.round(scenarioDuration * 10) / 10)}{" "}
-                      {t("seconds")}
-                    </strong>
-                  </div>
-                </div>
-
-                {scenes.length === 0 ? (
-                  <p className="empty-inline">{t("noScenes")}</p>
-                ) : (
-                  <ol className="scene-list">
-                    {scenes.map((scene, index) => (
-                      <li className="scene-item" key={`${index}-${scene.scene_type ?? "scene"}`}>
-                        <div className="scene-item-head">
-                          <span className="scene-index">
-                            {formatNumber(index + 1)}
-                          </span>
-                          <span className="scene-type" dir="ltr">
-                            {scene.scene_type ?? "b_roll"}
-                          </span>
-                          <span className="scene-duration">
-                            {formatNumber(
-                              Math.round((scene.duration_seconds ?? 0) * 10) / 10,
-                            )}{" "}
-                            {t("seconds")}
-                          </span>
-                        </div>
-                        <p className="scene-narration">{scene.narration}</p>
-                        {scene.on_screen_text ? (
-                          <p className="scene-on-screen">
-                            «{scene.on_screen_text}»
-                          </p>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ol>
-                )}
-
-                {scenario.cta ? (
-                  <div className="scenario-cta">
-                    <span>{t("metaCta")}</span>
-                    <strong>{scenario.cta}</strong>
-                  </div>
-                ) : null}
-
-                {scenario.hashtags && scenario.hashtags.length > 0 ? (
-                  <div className="hashtags">
-                    {scenario.hashtags.map((tag) => (
-                      <span key={tag} dir="rtl">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </>
-            )}
-          </section>
-
-          <section className="glass card">
-            <header className="card-head">
-              <h2>{t("videoTitle")}</h2>
-              {isCompleted ? (
-                <StatusPill status="completed" label={t("statusCompleted")} />
-              ) : null}
-            </header>
-
-            {!isCompleted ? (
-              <div className="video-placeholder">
-                <span className="video-placeholder-icon" aria-hidden="true">
-                  ▷
-                </span>
-                <p>{t("videoNotReady")}</p>
-              </div>
-            ) : (
-              <>
-                {videoUrl ? (
-                  <video
-                    className="video-player"
-                    src={videoUrl}
-                    controls
-                    playsInline
-                    preload="metadata"
-                    onLoadedMetadata={(event) => {
-                      const element = event.currentTarget;
-                      setVideoInfo({
-                        width: element.videoWidth,
-                        height: element.videoHeight,
-                        duration: Number.isFinite(element.duration)
-                          ? element.duration
-                          : 0,
-                      });
-                    }}
-                  />
-                ) : project?.final_artifact_id ? (
-                  <div className="video-placeholder">
-                    <Spinner label={t("loading")} />
-                  </div>
-                ) : (
-                  <div className="video-placeholder">
-                    <span className="video-placeholder-icon" aria-hidden="true">
-                      ▷
-                    </span>
-                    <p>{t("videoUnavailable")}</p>
-                  </div>
-                )}
-
-                <div className="video-actions">
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    onClick={downloadVideo}
-                    disabled={!videoUrl}
-                  >
-                    <span aria-hidden="true">⤓</span> {t("downloadVideo")}
-                  </button>
-                </div>
-
-                {metadataItems.length > 0 ? (
-                  <div className="meta-block">
-                    <h3>{t("metadataTitle")}</h3>
-                    <dl className="meta-grid">
-                      {metadataItems.map((item) => (
-                        <div key={item.label}>
-                          <dt>{item.label}</dt>
-                          <dd>{item.value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                ) : (
-                  <p className="empty-inline">{t("videoMetaUnavailable")}</p>
-                )}
-
-                <div className="meta-block">
-                  <h3>{t("qcTitle")}</h3>
-                  {qcEntries.length === 0 ? (
-                    <p className="empty-inline">{t("qcEmpty")}</p>
-                  ) : (
-                    <dl className="meta-grid">
-                      {qcEntries.map(([key, value]) => (
-                        <div key={key}>
-                          <dt dir="ltr">{key.replaceAll("_", " ")}</dt>
-                          <dd dir="auto">{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-        </div>
 
         <footer className="footer-note">{t("footerNote")}</footer>
       </main>
@@ -1541,28 +1897,27 @@ export function Dashboard() {
           <p className="empty-inline">{t("noPendingUsers")}</p>
         ) : (
           <ul className="admin-list">
-            {adminUsers.map((account) => (
-              <li key={account.id} className="admin-row">
-                <span className="avatar">{initials(account.full_name)}</span>
+            {adminUsers.map((candidate) => (
+              <li className="admin-row" key={candidate.id}>
                 <div className="admin-info">
-                  <strong>{account.full_name}</strong>
-                  <span dir="ltr">{account.email}</span>
-                  <small>{formatDateTime(account.created_at)}</small>
+                  <strong>{candidate.full_name}</strong>
+                  <span dir="ltr">{candidate.email}</span>
+                  <small>{formatDateTime(candidate.created_at)}</small>
                 </div>
                 <div className="admin-actions">
                   <button
                     type="button"
                     className="button button--success button--tiny"
-                    onClick={() => void decide(account.id, true)}
-                    disabled={decisionId === account.id}
+                    onClick={() => void decide(candidate.id, true)}
+                    disabled={decisionId === candidate.id}
                   >
-                    {decisionId === account.id ? <Spinner /> : t("approve")}
+                    {t("approve")}
                   </button>
                   <button
                     type="button"
                     className="button button--danger button--tiny"
-                    onClick={() => void decide(account.id, false)}
-                    disabled={decisionId === account.id}
+                    onClick={() => void decide(candidate.id, false)}
+                    disabled={decisionId === candidate.id}
                   >
                     {t("reject")}
                   </button>
