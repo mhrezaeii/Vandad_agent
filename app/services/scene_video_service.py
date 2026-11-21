@@ -107,22 +107,23 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
             "or alter the source image; preserve the same identity, face, hair, outfit, "
             "accessories and proportions in every generated frame."
         )
-    spoken_text = (scene.pronunciation_text or scene.narration).strip()
+    spoken_text = scene.narration.strip()
     if spoken_text:
         lines.append(
-            "AUDIO: calm, unhurried Iranian Persian (Farsi) voice-over, clearly "
-            "slower than normal speech with gentle pauses, says exactly this text "
-            "and follows its diacritics: "
-            f"{spoken_text} Do NOT paraphrase, shorten, add or omit words; do not "
-            "read the on-screen text aloud. Under the voice-over, add a soft modern "
-            "corporate background track and subtle UI sounds."
+            "AUDIO: calm Iranian Persian (Farsi) voice-over at a deliberately slow, "
+            "measured pace (about 90 words per minute), clearly slower than normal "
+            "speech with gentle pauses. Never rush or speed up for the cuts. Read ONLY "
+            "this text word for word, exactly as written, with no added, repeated, "
+            "shortened or paraphrased words; never read on-screen text aloud: "
+            f"{spoken_text} Under the voice-over, add a soft modern corporate "
+            "background track and subtle UI sounds."
         )
     return "\n".join(lines)
 
 
-def _scenario_pronunciation_text(scenario: Scenario) -> str:
+def _scenario_narration(scenario: Scenario) -> str:
     parts = [
-        (scene.pronunciation_text or scene.narration).strip()
+        (scene.narration).strip()
         for scene in sorted(scenario.scenes, key=lambda item: item.index)
     ]
     return " ".join(part for part in parts if part)
@@ -306,9 +307,8 @@ class SceneVideoService:
                     provider=provider.provider_id,
                     status=SceneVideoJobStatus.PENDING.value,
                     prompt=build_scene_provider_prompt(scene, scenario, has_reference_image=has_reference_image),
-                    narration=scene.pronunciation_text or scene.narration,
+                    narration=scene.narration,
                     on_screen_text=scene.on_screen_text,
-                    subtitle_text=scene.subtitle_text or scene.narration,
                     duration_seconds=scene.duration_seconds,
                     max_attempts=self.max_attempts,
                     submission_metadata={
@@ -334,14 +334,13 @@ class SceneVideoService:
                 # Keep the persisted prompt/narration in sync with an approved
                 # scenario without resetting provider state.
                 job.prompt = build_scene_provider_prompt(scene, scenario, has_reference_image=has_reference_image)
-                job.narration = scene.pronunciation_text or scene.narration
+                job.narration = scene.narration
                 job.submission_metadata = {
                     **(job.submission_metadata or {}),
                     "visual_signature": normalize_visual_signature(scene.visual_prompt),
                     "visual_fingerprint": visual_fingerprint(scene.visual_prompt),
                 }
                 job.on_screen_text = scene.on_screen_text
-                job.subtitle_text = scene.subtitle_text or scene.narration
                 job.duration_seconds = scene.duration_seconds
                 job.provider = provider.provider_id
             jobs.append(job)
@@ -399,12 +398,11 @@ class SceneVideoService:
                 provider=provider.provider_id,
                 status=SceneVideoJobStatus.PENDING.value,
                 prompt=prompt,
-                narration=_scenario_pronunciation_text(scenario),
+                narration=_scenario_narration(scenario),
                 on_screen_text="\n".join(
                     scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
                     if scene.on_screen_text
                 ) or None,
-                subtitle_text=scenario.narration,
                 duration_seconds=total_duration,
                 max_attempts=self.max_attempts,
                 submission_metadata={
@@ -433,12 +431,11 @@ class SceneVideoService:
             # Keep the persisted prompt in sync with an approved scenario
             # without resetting provider submission state.
             job.prompt = prompt
-            job.narration = _scenario_pronunciation_text(scenario)
+            job.narration = _scenario_narration(scenario)
             job.on_screen_text = "\n".join(
                 scene.on_screen_text for scene in sorted(scenario.scenes, key=lambda item: item.index)
                 if scene.on_screen_text
             ) or None
-            job.subtitle_text = scenario.narration
             job.duration_seconds = total_duration
             job.provider = provider.provider_id
             job.submission_metadata = {
@@ -1643,7 +1640,7 @@ class SceneVideoService:
         width: int,
         height: int,
     ) -> tuple[list[tuple[Path, float, float]], Path | None]:
-        """Plan real-UI screenshot overlays and the Persian subtitle file.
+        """Plan real-UI screenshot overlays for deterministic local stitching.
 
         Screenshots live under ``screenshots_root/<platform>/`` and are shown
         during their scene's time window (scene i -> screenshot i, cycling when
@@ -1651,7 +1648,6 @@ class SceneVideoService:
         only: the AI footage stays, the real product UI is drawn on top of it.
         """
         overlays: list[tuple[Path, float, float]] = []
-        subtitle_path: Path | None = None
 
         platform = (project.scene_options or {}).get("screenshots_platform")
         root = self._screenshots_root
@@ -1670,15 +1666,7 @@ class SceneVideoService:
                         overlays.append((images[index % len(images)], start, end))
                         start = end
 
-        narration = (project.script_text or "").strip()
-        if narration:
-            from app.services.subtitle_service import build_ass_for_script
-
-            total = sum(float(job.duration_seconds) for job in jobs)
-            ass = build_ass_for_script(narration, total_seconds=total, width=width, height=height)
-            subtitle_path = Path(tempfile.gettempdir()) / f"vandad-subs-{output_dir_hint}.ass"
-            subtitle_path.write_text(ass, encoding="utf-8")
-        return overlays, subtitle_path
+        return overlays, None
 
     async def _run_assembly_ffmpeg(self, command: tuple[str, ...]) -> None:
         """Run one assembly ffmpeg command; permanent failures carry detail."""

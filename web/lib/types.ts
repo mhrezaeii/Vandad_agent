@@ -90,7 +90,6 @@ export type BrandMemory = {
   platform_count: number;
   source_count: number;
   snapshot_count: number;
-  suggested_topic: string | null;
   analysis: BrandMemoryAnalysis | null;
   platforms: BrandMemoryPlatform[];
   updated_at: string | null;

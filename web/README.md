@@ -32,7 +32,7 @@ The dashboard is one page:
 
 1. Select or create a brand profile (Vandefence, NobatVakil, NobatMoshaver,
    Vandiar, …).
-2. Describe the topic, choose the duration, character reference and provider.
+2. Choose the duration, character reference and provider; the scenario is generated from platform knowledge.
 3. Press **شروع فرآیند**. The UI creates a real scene project, starts the real
    scenario workflow, approves the generated scenario and starts the real video
    workflow — no mock progress or simulated completion.

@@ -43,7 +43,6 @@ class ScenarioRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    topic: str = Field(min_length=3, max_length=2000)
     target_duration_seconds: int = Field(default=30, ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS)
     language: str = Field(default="fa-IR", min_length=2, max_length=20)
     brand_name: str | None = Field(default=None, max_length=150)
@@ -53,19 +52,10 @@ class ScenarioRequest(BaseModel):
     scene_count: int | None = Field(default=None, ge=MIN_SCENES, le=MAX_SCENES)
     product_context: str | None = Field(default=None, max_length=3000)
     platform_knowledge_context: str | None = Field(default=None, max_length=12000)
-    analysis_context: str | None = Field(default=None, max_length=4000)
     pronunciation_lexicon: dict[str, str] = Field(default_factory=dict, max_length=100)
     require_pronunciation_text: bool = False
     has_reference_image: bool = False
     reference_character_description: str | None = Field(default=None, max_length=1000)
-
-    @field_validator("topic")
-    @classmethod
-    def _strip_topic(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("Topic must not be blank.")
-        return stripped
 
     @field_validator("hashtags")
     @classmethod
@@ -125,7 +115,6 @@ class SceneSpec(BaseModel):
     )
     duration_seconds: float = Field(gt=0, description="Scene duration in seconds.")
     on_screen_text: str | None = Field(default=None, max_length=500, description="Persian on-screen text.")
-    subtitle_text: str | None = Field(default=None, max_length=2000, description="Persian subtitle text.")
     scene_type: Literal["problem", "product_demo", "b_roll", "motion_graphic", "cta"] = "b_roll"
     camera_direction: str | None = Field(default=None, max_length=1000)
     transition: Literal["cut", "dissolve", "whip", "match_cut", "fade"] = "cut"
@@ -138,7 +127,7 @@ class SceneSpec(BaseModel):
             raise ValueError("Field must not be blank.")
         return stripped
 
-    @field_validator("on_screen_text", "subtitle_text", "pronunciation_text")
+    @field_validator("on_screen_text", "pronunciation_text")
     @classmethod
     def _strip_optional(cls, value: str | None) -> str | None:
         if value is None:
@@ -308,7 +297,6 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
                 visual_prompt=visual_prompt,
                 duration_seconds=duration,
                 on_screen_text=item.get("on_screen_text") or item.get("display_text"),
-                subtitle_text=item.get("subtitle_text") or item.get("subtitle"),
                 scene_type=item.get("scene_type", "b_roll"),
                 camera_direction=item.get("camera_direction"),
                 transition=item.get("transition", "cut"),
@@ -334,7 +322,7 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
 
     title = raw.get("title")
     if not isinstance(title, str) or not title.strip():
-        title = request.topic[:200]
+        title = (request.brand_name or "نمای کلی پلتفرم")[:200]
 
     opening_hook = raw.get("opening_hook") or raw.get("hook")
     if not isinstance(opening_hook, str) or not opening_hook.strip():

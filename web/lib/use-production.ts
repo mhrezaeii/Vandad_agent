@@ -43,7 +43,6 @@ const TERMINAL_TASK_STATUSES = new Set<string>([
 export type StartInput = {
   brandId: string;
   title: string;
-  topic: string | null;
   sourceUrl: string | null;
   durationSeconds: number;
   providerId: string | null;
@@ -328,7 +327,6 @@ export function useProduction() {
           brand_id: input.brandId,
           target_duration_seconds: input.durationSeconds,
         };
-        if (input.topic?.trim()) inputPayload.topic = input.topic.trim();
         if (input.sourceUrl?.trim()) inputPayload.source_url = input.sourceUrl.trim();
         if (input.providerId) inputPayload.provider_id = input.providerId;
         if (input.characterKey) inputPayload.character_key = input.characterKey;

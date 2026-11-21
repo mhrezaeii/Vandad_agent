@@ -42,7 +42,6 @@ class ContentScenarioInput(_CapabilityInput):
 
 class ContentAnalysisInput(_CapabilityInput):
     brand_id: uuid.UUID
-    topic: str | None = Field(default=None, min_length=3, max_length=2000)
     limit: int = Field(default=10, ge=1, le=50)
 
 
@@ -50,7 +49,6 @@ class ContentProductionInput(_CapabilityInput):
     """One-click production: monitoring → analysis → scenario → video → QC."""
 
     brand_id: uuid.UUID
-    topic: str | None = Field(default=None, min_length=3, max_length=2000)
     source_url: str | None = Field(default=None, max_length=2048)
     target_duration_seconds: int = Field(
         default=30, ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS

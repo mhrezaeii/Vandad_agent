@@ -259,7 +259,6 @@ function StageRow({ stage, last }: { stage: StageEntry; last: boolean }) {
   const { stageLabel, stageStatusLabel, formatNumber } = useI18n();
   const details: Array<[string, string | number | boolean]> = [];
   for (const key of [
-    "topic",
     "title",
     "platform_count",
     "candidate_count",
@@ -486,7 +485,6 @@ export function Dashboard() {
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [monitorStatus, setMonitorStatus] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
-  const [topic, setTopic] = useState("");
   const [duration, setDuration] = useState(20);
   const [providerId, setProviderId] = useState("");
   const [characterKey, setCharacterKey] = useState("");
@@ -545,7 +543,6 @@ export function Dashboard() {
         );
         setMemory(result.memory);
         setMonitorStatus(result.status);
-        setTopic(result.memory.suggested_topic || "");
         setPhase("review");
         if (result.status === "completed") {
           setNotice(t("monitoringDone"));
@@ -571,7 +568,6 @@ export function Dashboard() {
     async (brandId: string) => {
       const next = await api<BrandMemory>(`/content/brands/${brandId}/memory`);
       setMemory(next);
-      setTopic((current) => current || next.suggested_topic || "");
       setMonitorStatus(null);
 
       // Selecting a platform always leads to knowledge on this page: reuse a
@@ -620,7 +616,6 @@ export function Dashboard() {
       setSelectedBrandId(id);
       window.localStorage.setItem(BRAND_KEY, id);
       setMemory(null);
-      setTopic("");
       setMonitorStatus(null);
       setMemoryError(null);
       setFormError(null);
@@ -735,10 +730,6 @@ export function Dashboard() {
       setFormError(t("noProfileSelected"));
       return;
     }
-    if (topic.trim().length < 3) {
-      setFormError(t("topicTooShort"));
-      return;
-    }
     if (!Number.isFinite(duration) || duration < 5 || duration > 120) {
       setFormError(t("durationRange"));
       return;
@@ -752,8 +743,7 @@ export function Dashboard() {
     try {
       await start({
         brandId: selectedBrandId,
-        title: topic.trim() || `${t("productionTitle")} — ${brandName}`,
-        topic: topic.trim(),
+        title: `${t("productionTitle")} — ${brandName}`,
         sourceUrl: null,
         durationSeconds: duration,
         providerId: providerId || null,
@@ -1193,24 +1183,6 @@ export function Dashboard() {
               </div>
             </header>
 
-            <div className="form-grid">
-              <Field
-                label={t("memoryTopicTitle")}
-                htmlFor="topic"
-                hint={t("memoryTopicHint")}
-              >
-                <textarea
-                  id="topic"
-                  name="topic"
-                  dir="auto"
-                  rows={3}
-                  placeholder={t("topicPlaceholder")}
-                  value={topic}
-                  onChange={(event) => setTopic(event.target.value)}
-                />
-              </Field>
-            </div>
-
             <details className="advanced-settings">
               <summary>{t("productionSettings")}</summary>
               <div className="form-grid">
@@ -1442,12 +1414,6 @@ export function Dashboard() {
                   <div className="analysis-block">
                     <h3 className="section-subtitle">{t("analysisTitle")}</h3>
                     <dl className="meta-grid">
-                      {analysis.selected_topic ? (
-                        <div>
-                          <dt>{t("analysisTopic")}</dt>
-                          <dd dir="auto">{analysis.selected_topic}</dd>
-                        </div>
-                      ) : null}
                       {analysis.brand_fit != null ? (
                         <div>
                           <dt>{t("analysisFit")}</dt>

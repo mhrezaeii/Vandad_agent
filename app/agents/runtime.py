@@ -273,14 +273,12 @@ class ContentAgentHandler:
             analysis = await ContentAnalysisService(session).select(
                 company_id=context.company_id,
                 brand_id=brand_id,
-                topic=context.payload.get("topic"),
                 limit=int(context.payload.get("limit") or 10),
             )
             await session.commit()
         await context.report_progress(
             "analysis.completed",
             stage_status="completed",
-            topic=analysis.get("selected_topic"),
             candidate_count=analysis.get("candidate_count"),
             duplicate_count=analysis.get("duplicate_count"),
             source_count=analysis.get("source_count"),
@@ -308,7 +306,6 @@ class ContentAgentHandler:
         except (KeyError, ValueError, TypeError) as exc:
             raise ValueError("Production tasks require a valid brand_id.") from exc
 
-        topic_hint = (payload.get("topic") or "").strip() or None
         source_url = (payload.get("source_url") or "").strip() or None
         connection_id: uuid.UUID | None = None
         if payload.get("connection_id"):
@@ -387,7 +384,6 @@ class ContentAgentHandler:
         # Phase B: real monitoring of the brand's linked sources. Recent
         # knowledge is reused so the production run does not re-crawl right
         # after the operator refreshed the same brand on the page.
-        analysis: dict[str, Any] | None = None
         if needs_scenario:
             from app.services.brand_memory_service import brand_knowledge_freshness
             from app.services.platform_monitor_service import PlatformMonitorService
@@ -436,40 +432,14 @@ class ContentAgentHandler:
                     ),
                 )
 
-            # Phase C: deterministic analysis over the new snapshots.
-            from app.services.content_analysis_service import ContentAnalysisService
-
-            await context.report_progress("analysis.started", stage_status="running")
-            async with context.session_factory() as session:
-                analysis = await ContentAnalysisService(session).select(
-                    company_id=company_id,
-                    brand_id=brand_id,
-                    topic=topic_hint,
-                    limit=10,
-                )
-                await session.commit()
-            await context.report_progress(
-                "analysis.completed",
-                stage_status="completed",
-                topic=analysis.get("selected_topic"),
-                candidate_count=analysis.get("candidate_count"),
-                duplicate_count=analysis.get("duplicate_count"),
-                source_count=analysis.get("source_count"),
-                brand_fit=analysis.get("brand_fit"),
-            )
-
         # Phase D: create the scene project once and persist the retry marker.
         async with context.session_factory() as session:
             service = self._content_service(session, context)
             project = await session.get(ContentProject, project_id) if project_id else None
             if project is None:
-                selected_topic = (analysis or {}).get("selected_topic") or topic_hint
-                if not selected_topic:
-                    raise ConflictError("No content topic could be selected from monitoring.")
                 project = await service.create_scene_project(
                     scope=self._scope(context),
                     brand_id=brand_id,
-                    topic=selected_topic,
                     target_duration_seconds=duration,
                     scene_count=scene_count,
                     provider_id=provider_id,
@@ -479,15 +449,12 @@ class ContentAgentHandler:
                 )
                 project_id = project.id
             options = dict(project.scene_options or {})
-            if analysis is not None:
-                options["analysis"] = analysis
             options["agent_task_id"] = str(task_id)
             project.scene_options = options
             await session.commit()
             project_status = project.status
             project_scenario = project.scenario
             project_options = dict(project.scene_options or {})
-            project_topic = project.topic
 
         await context.report_progress(
             "project.ready", stage_status="completed", project_id=str(project_id)
@@ -522,11 +489,6 @@ class ContentAgentHandler:
                             connection_id=connection_id,
                             timeout_seconds=180.0,
                             task_id=task_id,
-                            analysis=(
-                                project_options.get("analysis")
-                                if isinstance(project_options.get("analysis"), dict)
-                                else analysis
-                            ),
                         )
                         await session.commit()
                 except ScenarioGenerationError:
@@ -572,7 +534,6 @@ class ContentAgentHandler:
             await context.report_progress(
                 "scenario.completed",
                 stage_status="completed",
-                topic=project_topic,
                 title=(project_scenario or {}).get("title"),
                 scene_count=len((project_scenario or {}).get("scenes") or []),
                 duration_seconds=(project_scenario or {}).get("total_duration_seconds"),
@@ -746,11 +707,6 @@ class ContentAgentHandler:
             "total_duration_seconds": scenario.get("total_duration_seconds"),
             "qc_status": qc_status,
             "brand_name": brand_name,
-            "analysis": self._analysis_summary(
-                project_options.get("analysis")
-                if isinstance(project_options.get("analysis"), dict)
-                else analysis
-            ),
         }
 
     # ----------------------------------------------------------------- helpers
@@ -847,27 +803,6 @@ class ContentAgentHandler:
         if assembly.get("artifact_id"):
             return "assembled"
         return None
-
-    @staticmethod
-    def _analysis_summary(analysis: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not analysis:
-            return None
-        return {
-            "selected_topic": analysis.get("selected_topic"),
-            "selection_reason": analysis.get("selection_reason"),
-            "brand_fit": analysis.get("brand_fit"),
-            "candidate_count": analysis.get("candidate_count"),
-            "duplicate_count": analysis.get("duplicate_count"),
-            "source_count": analysis.get("source_count"),
-            "platform_count": analysis.get("platform_count"),
-            "sources": [
-                item.get("source_url")
-                for item in (analysis.get("sources") or [])[:5]
-                if isinstance(item, dict) and item.get("source_url")
-            ],
-        }
-
-
 
 
 class VideoProductionAgentHandler:

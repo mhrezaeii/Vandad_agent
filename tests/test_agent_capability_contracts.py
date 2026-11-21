@@ -40,7 +40,7 @@ def test_monitoring_discovery_rejects_unknown_fields():
 def test_content_scenario_requires_project_and_company_connection():
     with pytest.raises(ValueError, match="capability contract"):
         validate_capability_payload(
-            "content", "content.scenario.generate", {"topic": "launch"}
+            "content", "content.scenario.generate", {}
         )
 
 

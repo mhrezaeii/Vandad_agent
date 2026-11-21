@@ -56,10 +56,9 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     tone = request.brand_tone or "حرفه‌ای، روشن و قابل اعتماد؛ بدون اغراق و بدون ادعای اثبات‌نشده."
     brand = request.brand_name or "برند"
     product_context = request.product_context or (
-        "Only show product capabilities explicitly provided in the topic or brand context."
+        "Only show product capabilities explicitly provided in the verified platform knowledge or brand context."
     )
     platform_knowledge = request.platform_knowledge_context or "No verified platform knowledge snapshot is linked."
-    analysis_hint = request.analysis_context or "No additional analysis context."
     cta_hint = request.cta_text or "یک دعوت به اقدام کوتاه و روشن"
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
     pronunciation_lexicon = (
@@ -79,17 +78,15 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         )
         + "در صورت نیاز به انسان، فقط مطابق سیاست تصویر مرجع یا سوژه عمومی همان صحنه عمل کن. "
         "برای هر صحنه scene_type را از problem, product_demo, b_roll, motion_graphic, cta انتخاب کن. "
-        "روایت فارسی باید طبیعی، محاوره‌ایِ حرفه‌ای، خوش‌آهنگ و مناسب گویندگی باشد؛ "
-        "برای هر صحنه pronunciation_text را با اعراب فارسی تولید کن تا تلفظ روشن باشد؛ "
-        "pronunciation_text باید دقیقاً همان واژه‌ها و همان ترتیب narration را حفظ کند و فقط اعراب اضافه کند؛ "
+        "سناریو باید چکیدهای از کل پلتفرم باشد، نه معرفی یک قابلیت یا یک تکه از پلتفرم: "
+        "نمای کلی، مهمترین قابلیتهای مستند و دعوت به اقدام را در یک مسیر کوتاه بگنجان. "
         "هیچ واژه‌ای را اضافه، حذف، ترجمه، بازنویسی یا جابه‌جا نکن. "
-        "برای CTA نیز cta_pronunciation_text را با همان واژه‌ها و اعراب فارسی تولید کن. "
         "از ترجمه ماشینی، جمله‌های طولانی، اغراق و ادعای اثبات‌نشده دوری کن. "
         "صحنه‌های product_demo باید محصول را در حال استفاده نشان دهند: رابط کاربری، داشبورد، "
         "تعامل کاربر و جریان کار؛ از متن ناخوانا و رابط کاربری ساختگی با قابلیت‌های ادعایی پرهیز کن. "
         "visual_prompt را انگلیسی، سینمایی و دقیق بنویس؛ narration و on_screen_text فارسی باشند. "
-        "on_screen_text و subtitle_text حتی وقتی نام برند یا مخففهایی مثل SIEM/SOAR/EDR را نشان میدهند، "
-        "باید حداقل یک واژه فارسی هم داشته باشند؛ متن صرفاً لاتین ممنوع است. "
+        "on_screen_text حتی وقتی نام برند یا مخففهایی مثل SIEM/SOAR/EDR را نشان میدهند، "
+        "باید حداقل یک واژه فارسی هم داشته باشد؛ متن صرفاً لاتین ممنوع است. "
         "برای هر صحنه اندازه نما، حرکت دوربین، نور، ترکیب‌بندی و transition را مشخص کن. "
         "از متن رندرشده توسط مدل تصویر/ویدیو داخل قاب پرهیز کن؛ متن فارسی را فقط در صورت پشتیبانی "
         "واقعی و اعلام‌شده Provider از قابلیت‌های خودش درخواست کن. "
@@ -102,16 +99,16 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     )
     user = (
         f"برای برند «{brand}» یک ویدیوی تبلیغاتی عمودی {request.target_duration_seconds} ثانیه‌ای بساز.\n"
-        f"لحن برند: {tone}\nموضوع: {request.topic}\n"
+        f"لحن برند: {tone}\n"
         f"تعداد صحنه: دقیقاً {scene_count}\n"
         f"تصویر مرجع کاراکتر موجود است: {'بله' if request.has_reference_image else 'خیر'}\n"
         "توضیح کاراکتر مرجع: "
         f"{request.reference_character_description or 'فقط به تصویر مرجع تکیه کن و ظاهر جدید اختراع نکن.'}\n"
         f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\n"
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
-        f"تحلیل داخلی انتخاب موضوع (فقط مرجع؛ محدود به شواهد بالا): {analysis_hint}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
         f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
+        "آخرین صحنه نباید متن CTA را تکرار کند؛ CTA فقط یکبار در انتها گفته میشود. "
         "ساختار JSON الزامی:\n"
         "{\n"
         '  "title": "عنوان فارسی",\n'
@@ -122,17 +119,14 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         '      "index": 0,\n'
         '      "scene_type": "problem|product_demo|b_roll|motion_graphic|cta",\n'
         '      "narration": "متن اصلی گفتار فارسی بدون تغییر",\n'
-        '      "pronunciation_text": "همان گفتار با اعراب فارسی و بدون تغییر واژه‌ها",\n'
         '      "visual_prompt": "Detailed English cinematic visual prompt",\n'
         '      "camera_direction": "English camera framing and movement",\n'
         '      "transition": "cut|dissolve|whip|match_cut|fade",\n'
         '      "duration_seconds": 5,\n'
         '      "on_screen_text": "متن کوتاه فارسی یا null",\n'
-        '      "subtitle_text": "زیرنویس فارسی"\n'
         "    }\n"
         "  ],\n"
         '  "cta": "دعوت به اقدام فارسی",\n'
-        '  "cta_pronunciation_text": "همان CTA با اعراب فارسی و بدون تغییر واژه‌ها",\n'
         '  "caption": "کپشن فارسی",\n'
         '  "hashtags": ["#هشتگ"]\n'
         "}\n\n"
@@ -187,7 +181,7 @@ def sanitize_persian_written_surfaces(
     A common model slip for Persian brands is an acronym-only on-screen label
     such as ``SIEM · SOAR · EDR`` or a Latin-only CTA URL. Those values are not
     Persian copy and fail the deterministic quality gate even though the same
-    information is already present in the Persian narration and subtitle. The
+    information is already present in the Persian narration. The
     fields are optional, so the deterministic repair is to clear them instead
     of inventing copy or weakening the review. Required spoken surfaces and
     non-Persian scenarios are left untouched: the gate still fails closed on
@@ -202,8 +196,6 @@ def sanitize_persian_written_surfaces(
         update: dict[str, Any] = {}
         if scene.on_screen_text and not _PERSIAN_SCRIPT.search(scene.on_screen_text):
             update["on_screen_text"] = None
-        if scene.subtitle_text and not _PERSIAN_SCRIPT.search(scene.subtitle_text):
-            update["subtitle_text"] = None
         if update:
             changed = True
             scenes.append(scene.model_copy(update=update))

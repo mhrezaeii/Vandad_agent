@@ -120,16 +120,14 @@ class ClipAssemblyService:
                 width=width, height=height, with_audio=clips_with_audio,
             ))
 
-            # Stage 2: overlays + subtitles on the clips portion only.
             decorated = clips_full
             overlays = self._plan_overlays(project, clips, durations)
-            subtitle_path = self._plan_subtitles(project, scenes, durations, workdir, width, height)
             from app.services.video_assembly import build_finish_args  # noqa: PLC0415
 
             finish_args = build_finish_args(
                 ffmpeg=ffmpeg, source_path=clips_full, output_path=workdir / "decorated.mp4",
                 width=width, height=height, overlays=tuple(overlays),
-                subtitle_path=subtitle_path, with_audio=clips_with_audio,
+                with_audio=clips_with_audio,
             )
             if finish_args is not None:
                 await run_ffmpeg(finish_args)
@@ -266,27 +264,4 @@ class ClipAssemblyService:
             overlays.append((images[index % len(images)], start, start + seconds))
             start += seconds
         return overlays
-
-    @staticmethod
-    def _plan_subtitles(
-        project: ContentProject,
-        scenes: list[dict[str, Any]],
-        durations: list[float],
-        workdir: Path,
-        width: int,
-        height: int,
-    ):
-        narrations = [str(scene.get("narration") or "").strip() for scene in scenes]
-        lines = [n for n in narrations if n]
-        if not lines:
-            return None
-        from app.services.subtitle_service import build_ass_for_script  # noqa: PLC0415
-
-        script = " ".join(lines)
-        total = float(sum(durations))
-        ass = build_ass_for_script(script, total_seconds=max(1.0, total),
-                                   width=width, height=height)
-        path = workdir / "narration.ass"
-        path.write_text(ass, encoding="utf-8")
-        return path
 

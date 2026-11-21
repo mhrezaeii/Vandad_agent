@@ -105,7 +105,6 @@ async def test_project_flow_and_tenant_isolation(client, db_session, headers, co
         "/api/v1/content/projects",
         json={
             "brand_id": brand_id,
-            "topic": "چرا پایش متمرکز امنیتی برای سازمان‌ها اهمیت دارد؟",
         },
         headers=headers,
     )
@@ -157,7 +156,7 @@ async def test_generate_script_starts_workflow_execution(
     project = (
         await client.post(
             "/api/v1/content/projects",
-            json={"brand_id": brand_id, "topic": "پایش متمرکز امنیتی"},
+            json={"brand_id": brand_id},
             headers=headers,
         )
     ).json()
@@ -205,7 +204,7 @@ async def test_character_and_legacy_avatar_routes_are_not_exposed(client, header
 
     project = await client.post(
         "/api/v1/content/projects",
-        json={"brand_id": brand_id, "topic": "معرفی محصول"},
+        json={"brand_id": brand_id},
         headers=headers,
     )
     assert project.status_code == 201, project.text
@@ -234,7 +233,6 @@ async def test_reject_video_requires_a_completed_scene_project(client, headers):
         "/api/v1/content/scene-projects",
         json={
             "brand_id": brand_id,
-            "topic": "معرفی قابلیت پایش هوشمند",
             "target_duration_seconds": 30,
             "provider_id": "mock",
             "generation_mode": "multi_scene",
@@ -261,7 +259,6 @@ async def test_rejected_video_creates_immutable_new_revision(
         "/api/v1/content/scene-projects",
         json={
             "brand_id": brand_id,
-            "topic": "معرفی قابلیت پایش هوشمند",
             "target_duration_seconds": 30,
             "provider_id": "mock",
             "generation_mode": "multi_scene",

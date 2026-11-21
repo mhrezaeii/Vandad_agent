@@ -178,24 +178,7 @@ async def test_analysis_deduplicates_and_preserves_sources(
     assert 0 < analysis["brand_fit"] <= 1
 
 
-async def test_analysis_uses_requested_topic_and_keeps_supporting_evidence(
-    db_session, company_and_platform
-):
-    company, platform = company_and_platform
-    brand = await _seed_brand(db_session, company, platform)
-
-    analysis = await ContentAnalysisService(db_session).select(
-        company_id=company.id,
-        brand_id=brand.id,
-        topic="معرفی قابلیت پایش پلتفرم",
-    )
-
-    assert analysis["selected_topic"] == "معرفی قابلیت پایش پلتفرم"
-    assert analysis["supporting_points"]
-    assert analysis["sources"][0]["source_url"].startswith("https://")
-
-
-async def test_production_runs_monitoring_analysis_scenario_video_and_is_retry_safe(
+async def test_production_runs_monitoring_scenario_video_and_is_retry_safe(
     db_session, session_factory, company_and_platform, monkeypatch
 ):
     company, platform = company_and_platform
@@ -222,10 +205,8 @@ async def test_production_runs_monitoring_analysis_scenario_video_and_is_retry_s
         connection_id=None,
         timeout_seconds=180.0,
         task_id=None,
-        analysis=None,
     ):
         captured["scenario"] = int(captured["scenario"]) + 1
-        captured["analysis"] = analysis
         project = await self.session.get(ContentProject, project_id)
         assert project is not None
         scenario = _scenario_payload()
@@ -285,8 +266,7 @@ async def test_production_runs_monitoring_analysis_scenario_video_and_is_retry_s
         session_factory,
         {
             "brand_id": str(brand.id),
-            "topic": "معرفی قابلیت پایش پلتفرم",
-            "target_duration_seconds": 30,
+                        "target_duration_seconds": 30,
             "video_wait_seconds": 0,
         },
         stages,
@@ -299,15 +279,12 @@ async def test_production_runs_monitoring_analysis_scenario_video_and_is_retry_s
     assert result["final_video_ready"] is True
     assert result["qc_status"] == "passed"
     assert result["final_artifact_id"]
-    assert result["analysis"]["selected_topic"] == "معرفی قابلیت پایش پلتفرم"
     assert captured["monitor"] == 1
     assert captured["scenario"] == 1
     assert captured["video"] == 1
-    assert captured["analysis"]["candidate_count"] >= 2
 
     stage_names = [stage for stage, _details in stages]
     assert "monitoring.completed" in stage_names
-    assert "analysis.completed" in stage_names
     assert "scenario.completed" in stage_names
     assert "scenario.approved" in stage_names
     assert "video.dispatched" in stage_names
@@ -319,7 +296,6 @@ async def test_production_runs_monitoring_analysis_scenario_video_and_is_retry_s
     assert project is not None
     stored = project
     assert stored.scene_options["agent_task_id"] == str(task_id)
-    assert stored.scene_options["analysis"]["selected_topic"] == "معرفی قابلیت پایش پلتفرم"
 
     replay = await handler.execute("content.production.run", context)
     assert replay["project_status"] == "completed"
@@ -337,7 +313,7 @@ async def test_production_blocks_without_source_or_linked_platform(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول"},
+        {"brand_id": str(brand.id)},
     )
 
     with pytest.raises(ConflictError, match="No monitored source"):
@@ -362,7 +338,7 @@ async def test_production_fails_cleanly_when_monitoring_has_no_knowledge(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول"},
+        {"brand_id": str(brand.id)},
     )
 
     with pytest.raises(ConflictError, match="did not produce verified knowledge"):
@@ -402,7 +378,7 @@ async def test_production_review_failure_marks_project_script_failed(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول", "video_wait_seconds": 0},
+        {"brand_id": str(brand.id), "video_wait_seconds": 0},
     )
 
     with pytest.raises(ConflictError, match="quality review failed"):
@@ -474,7 +450,7 @@ async def test_production_regenerates_scenario_once_after_a_rejected_output(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول", "video_wait_seconds": 0},
+        {"brand_id": str(brand.id), "video_wait_seconds": 0},
     )
 
     result = await ContentAgentHandler().execute("content.production.run", context)
@@ -537,7 +513,7 @@ async def test_production_returns_in_progress_when_video_wait_is_bounded(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول", "video_wait_seconds": 0},
+        {"brand_id": str(brand.id), "video_wait_seconds": 0},
     )
 
     result = await ContentAgentHandler().execute("content.production.run", context)
@@ -577,7 +553,7 @@ async def test_single_shot_guard_blocks_reference_requiring_provider(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول"},
+        {"brand_id": str(brand.id)},
         scene_video_registry=registry,
     )
 
@@ -610,7 +586,7 @@ async def test_single_shot_guard_allows_provider_without_reference_requirement(
         company.id,
         uuid.uuid4(),
         session_factory,
-        {"brand_id": str(brand.id), "topic": "معرفی محصول"},
+        {"brand_id": str(brand.id)},
         scene_video_registry=registry,
     )
 
@@ -670,8 +646,7 @@ async def test_production_reuses_fresh_knowledge_without_monitoring(
         session_factory,
         {
             "brand_id": str(brand.id),
-            "topic": "معرفی قابلیت پایش پلتفرم",
-            "video_wait_seconds": 0,
+                        "video_wait_seconds": 0,
         },
         stages,
     )

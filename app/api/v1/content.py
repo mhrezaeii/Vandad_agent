@@ -278,7 +278,7 @@ async def create_project(
     service: Annotated[ContentService, Depends(get_content_service)],
 ) -> ContentProjectRead:
     project = await service.create_project(
-        scope=scope, brand_id=payload.brand_id, topic=payload.topic
+        scope=scope, brand_id=payload.brand_id
     )
     return ContentProjectRead.model_validate(project)
 
@@ -362,7 +362,6 @@ async def create_scene_project(
     project = await service.create_scene_project(
         scope=scope,
         brand_id=payload.brand_id,
-        topic=payload.topic,
         target_duration_seconds=payload.target_duration_seconds,
         scene_count=payload.scene_count,
         provider_id=payload.provider_id,

@@ -154,10 +154,11 @@ SCRIPT_WORKFLOW_GRAPH: dict[str, Any] = {
                         "ادعای اثبات‌نشده درباره محصول، عملکرد، مشتری یا تضمین امنیتی باشد؛ از "
                         'بازاریابی ترس‌محور و اغراق پرهیز کن.", '
                         '"user": "یک اسکریپت گفتاری طبیعی و روان فارسی برای ویدیوی عمودی ۳۰ ثانیه‌ای '
-                        "(حدود ۷۵ تا ۸۵ واژه) درباره موضوع زیر بنویس. ساختار: قلاب روشن در جمله اول، "
-                        "توضیح فنی درست و ملموس در بدنه، جمع‌بندی کوتاه و CTA در پایان. اگر قابلیت "
-                        "یا عدد مشخصی را نمی‌دانی، آن را ادعا نکن. موضوع: "
-                        '{{ trigger.topic }}"}'
+                        "(حدود ۶۰ تا ۷۰ واژه) چکیدهای از کل پلتفرم بنویس، نه معرفی یک تکه از آن. "
+                        "ساختار: قلاب روشن در جمله اول، نمای کلی و مهمترین قابلیتهای مستند در بدنه، "
+                        "جمع بندی کوتاه و CTA در پایان. جملهها کوتاه باشند تا گوینده آرام و بدون عجله "
+                        "بتواند آنها را ادا کند. اگر قابلیت یا عدد مشخصی را نمیدانی، آن را ادعا نکن. "
+                        ' برند: {{ trigger.brand_name }}"}'
                     )
                 }
             },
@@ -292,6 +293,11 @@ def _bind_connection(graph: dict[str, Any], placeholder: str, connection_id: uui
             node["configuration"] = configuration
     return bound
 
+
+def _platform_overview_topic(brand: ContentBrand) -> str:
+    """Internal label only; scenarios summarise the whole platform."""
+    name = (brand.display_name or brand.name or "پلتفرم").strip()
+    return f"{name} — نمای کلی پلتفرم"[:200]
 
 class ContentService:
     def __init__(
@@ -510,15 +516,16 @@ class ContentService:
         statement = statement.order_by(ContentBrand.name)
         return list((await self.session.execute(statement)).scalars().all())
 
+
     # ---------------------------------------------------------------- projects
     async def create_project(
-        self, *, scope: CompanyScope, brand_id: uuid.UUID, topic: str
+        self, *, scope: CompanyScope, brand_id: uuid.UUID
     ) -> ContentProject:
         brand = await self.get_brand(brand_id, company_id=scope.company_id)
         project = ContentProject(
             company_id=scope.company_id,
             brand_id=brand.id,
-            topic=topic,
+            topic=_platform_overview_topic(brand),
             status=ProjectStatus.DRAFT.value,
             video_mode="scene",
         )
@@ -530,7 +537,7 @@ class ContentService:
             company_id=scope.company_id,
             resource_type=PROJECT_RESOURCE,
             resource_id=project.id,
-            metadata={"brand": brand.name, "topic": topic[:200]},
+            metadata={"brand": brand.name, "topic": project.topic[:200]},
         )
         await self.session.flush()
         return project
@@ -584,12 +591,13 @@ class ContentService:
             connection_id=connection_id,
         )
         workflow = await self._require_published(SCRIPT_WORKFLOW_NAME, scope.company_id)
+        brand = await self.get_brand(project.brand_id, company_id=scope.company_id)
         execution, _created = await self._execution_service.execute_workflow(
             workflow.id,
             scope=scope,
             input_metadata={
                 "project_id": str(project.id),
-                "topic": project.topic,
+                "brand_name": brand.display_name or brand.name,
                 "agent_task_id": str(task_id) if task_id else None,
             },
             idempotency_key=f"script:{project.id}",
@@ -640,7 +648,6 @@ class ContentService:
         *,
         scope: CompanyScope,
         brand_id: uuid.UUID,
-        topic: str,
         target_duration_seconds: int = 30,
         scene_count: int | None = None,
         provider_id: str | None = None,
@@ -686,7 +693,7 @@ class ContentService:
         project = ContentProject(
             company_id=scope.company_id,
             brand_id=brand.id,
-            topic=topic,
+            topic=_platform_overview_topic(brand),
             status=ProjectStatus.DRAFT.value,
             video_mode="scene",
             scene_options={
@@ -711,7 +718,7 @@ class ContentService:
             resource_id=project.id,
             metadata={
                 "brand": brand.name,
-                "topic": topic[:200],
+                "topic": project.topic[:200],
                 "target_duration_seconds": target_duration_seconds,
                 "provider_id": provider_id,
                 "generation_mode": resolved_mode,
@@ -753,7 +760,6 @@ class ContentService:
             scope=scope,
             input_metadata={
                 "project_id": str(project.id),
-                "topic": project.topic,
                 "target_duration_seconds": options.get("target_duration_seconds", 30),
                 "scene_count": options.get("scene_count"),
                 "agent_task_id": str(task_id) if task_id else None,

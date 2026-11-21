@@ -22,7 +22,7 @@ const fa = {
 
   authHeroTitle: "تولید ویدیوی برند، از ایده تا انتشار",
   authHeroText:
-    "پروفایل برند را انتخاب کنید، موضوع را بنویسید و فرآیند تولید را با Agentهای ونداد اجرا کنید.",
+    "پروفایل برند را انتخاب کنید و فرآیند تولید را با Agentهای ونداد اجرا کنید؛ سناریو از دانش پلتفرم ساخته میشود.",
   authFeature1: "سناریوسازی فارسی با هوش مصنوعی",
   authFeature2: "پایش زنده مراحل Agent",
   authFeature3: "خروجی ویدیویی قابل بازبینی و دانلود",
@@ -100,11 +100,7 @@ const fa = {
 
   productionTitle: "اجرای فرآیند تولید",
   productionSubtitle:
-    "موضوع ویدیو را مشخص کنید؛ پایش، تحلیل، سناریو، تأیید و تولید ویدیو به‌صورت خودکار اجرا می‌شود.",
-  topicLabel: "موضوع ویدیو (اختیاری)",
-  topicPlaceholder: "مثلاً معرفی خدمات مشاوره حقوقی آنلاین",
-  topicOptionalHint:
-    "اگر خالی بماند، موضوع از نتیجه پایش منابع برند انتخاب می‌شود.",
+    "سناریو از دانش پایششده پلتفرم ساخته میشود؛ پایش، تحلیل، تأیید و تولید ویدیو بهصورت خودکار اجرا میشود.",
   sourceUrlLabel: "آدرس منبع پایش (اختیاری)",
   sourceUrlHint:
     "اگر برند هنوز به منبعی متصل نیست، آدرس عمومی سایت را وارد کنید.",
@@ -139,8 +135,6 @@ const fa = {
   memorySummary: "خلاصه دانش",
   memoryFacts: "حقایق استخراجشده",
   memoryUnknowns: "موارد نامشخص",
-  memoryTopicTitle: "موضوع پیشنهادی",
-  memoryTopicHint: "از دانش استخراجشده پر شده است؛ میتوانید آن را ویرایش کنید.",
   continueToScenario: "ادامه",
   continuing: "در حال آغاز تولید…",
   productionSettings: "تنظیمات تولید",
@@ -180,13 +174,12 @@ const fa = {
   historyCurrent: "جاری",
   taskAttempt: "تلاش",
 
-  analysisTitle: "تحلیل موضوع",
-  analysisTopic: "موضوع انتخاب‌شده",
+  analysisTitle: "تحلیل دانش پلتفرم",
   analysisFit: "تطابق با برند",
   analysisCandidates: "نامزدهای بررسی‌شده",
   analysisDuplicates: "موارد تکراری حذف‌شده",
   analysisSources: "منابع استناد",
-  analysisEmpty: "تحلیل موضوع برای این اجرا در دسترس نیست.",
+  analysisEmpty: "تحلیلی از دانش پلتفرم برای این اجرا در دسترس نیست.",
 
   qcStatus: "وضعیت بازبینی کیفیت",
   finalReady: "ویدیوی نهایی آماده است",
@@ -241,7 +234,6 @@ const fa = {
 
   noProfileSelected: "ابتدا یک پروفایل برند انتخاب کنید.",
   noCharacterSelected: "برای این سرویس‌دهنده، انتخاب تصویر شخصیت الزامی است.",
-  topicTooShort: "موضوع باید حداقل ۳ کاراکتر باشد.",
   durationRange: "مدت باید بین ۵ تا ۱۲۰ ثانیه باشد.",
 
   autoApproveNote:
@@ -328,8 +320,8 @@ const fa = {
   "stage.monitoring.started": "پایش منابع برند",
   "stage.monitoring.completed": "پایش منابع تکمیل شد",
   "stage.monitoring.reused": "استفاده از دانش پایششده اخیر",
-  "stage.analysis.started": "تحلیل و انتخاب موضوع",
-  "stage.analysis.completed": "تحلیل موضوع تکمیل شد",
+  "stage.analysis.started": "تحلیل دانش پلتفرم",
+  "stage.analysis.completed": "تحلیل دانش پلتفرم تکمیل شد",
   "stage.project.ready": "پروژه محتوا آماده شد",
   "stage.scenario.started": "تولید سناریو با GPT",
   "stage.scenario.completed": "سناریو تولید شد",
@@ -367,7 +359,7 @@ const en: Record<MessageKey, string> = {
 
   authHeroTitle: "Brand video production, from idea to delivery",
   authHeroText:
-    "Pick a brand profile, describe the topic, and let Vandad's agents run the production pipeline.",
+    "Pick a brand profile and let Vandad's agents build the scenario from verified platform knowledge.",
   authFeature1: "AI-generated Persian scenarios",
   authFeature2: "Live agent execution timeline",
   authFeature3: "Reviewable, downloadable video output",
@@ -447,11 +439,7 @@ const en: Record<MessageKey, string> = {
 
   productionTitle: "Run the production pipeline",
   productionSubtitle:
-    "Describe the video topic; monitoring, analysis, scenario generation, approval and rendering run automatically.",
-  topicLabel: "Video topic (optional)",
-  topicPlaceholder: "e.g. Introducing our online legal consultation service",
-  topicOptionalHint:
-    "Leave empty to let the pipeline select a topic from brand monitoring.",
+    "The scenario is built from verified platform knowledge; monitoring, analysis, approval and rendering run automatically.",
   sourceUrlLabel: "Monitoring source URL (optional)",
   sourceUrlHint:
     "If the brand has no linked source yet, enter its public website URL.",
@@ -486,8 +474,6 @@ const en: Record<MessageKey, string> = {
   memorySummary: "Knowledge summary",
   memoryFacts: "Extracted facts",
   memoryUnknowns: "Open questions",
-  memoryTopicTitle: "Suggested topic",
-  memoryTopicHint: "Prefilled from extracted knowledge; you may edit it.",
   continueToScenario: "Continue",
   continuing: "Starting production…",
   productionSettings: "Production settings",
@@ -531,7 +517,6 @@ const en: Record<MessageKey, string> = {
   taskAttempt: "Attempt",
 
   analysisTitle: "Topic analysis",
-  analysisTopic: "Selected topic",
   analysisFit: "Brand fit",
   analysisCandidates: "Candidates reviewed",
   analysisDuplicates: "Duplicates removed",
@@ -593,7 +578,6 @@ const en: Record<MessageKey, string> = {
   noProfileSelected: "Select a brand profile first.",
   noCharacterSelected:
     "This provider requires a character reference image.",
-  topicTooShort: "The topic must be at least 3 characters.",
   durationRange: "Duration must be between 5 and 120 seconds.",
 
   autoApproveNote:
@@ -680,8 +664,8 @@ const en: Record<MessageKey, string> = {
   "stage.monitoring.started": "Monitoring brand sources",
   "stage.monitoring.completed": "Monitoring completed",
   "stage.monitoring.reused": "Reused recently monitored knowledge",
-  "stage.analysis.started": "Analyzing and selecting a topic",
-  "stage.analysis.completed": "Topic analysis completed",
+  "stage.analysis.started": "Analyzing platform knowledge",
+  "stage.analysis.completed": "Platform knowledge analysis completed",
   "stage.project.ready": "Content project ready",
   "stage.scenario.started": "Generating scenario with GPT",
   "stage.scenario.completed": "Scenario generated",

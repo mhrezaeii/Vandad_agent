@@ -22,6 +22,8 @@ Composition rules:
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 
 from app.schemas.scenario import Scenario, SceneSpec
@@ -79,29 +81,30 @@ _CHARACTER_COMPACT = (
 )
 
 _SPEECH_FULL = (
-    "SPEECH (mandatory): Use a calm, unhurried Iranian Persian (Farsi) voice, "
-    "clearly slower than normal conversational speed, with gentle pauses between "
-    "sentences and steady intonation. Do NOT rush the narration to match the cuts; "
-    "hold the final frame if needed. Do NOT speak English except brand names or "
-    "acronyms that appear verbatim in the provided text. Do NOT translate, "
-    "paraphrase, shorten or omit the Persian pronunciation_text provided below; "
-    "obey its diacritics and speak each NARRATION and CTA line exactly as written, "
-    "in order, synchronised with the matching visual beat. Do NOT read the "
-    "ON-SCREEN TEXT lines aloud; add no words and repeat nothing."
+    "SPEECH (mandatory): Use a calm, unhurried Iranian Persian (Farsi) voice at a "
+    "deliberately slow, measured pace (about 90 words per minute), clearly slower "
+    "than normal conversational speed, with gentle pauses between sentences and "
+    "even intonation. Do NOT rush, speed up or compress the narration to match the "
+    "cuts; hold a frame or extend a beat instead. Do NOT speak English except brand "
+    "names or acronyms that appear verbatim in the provided text. Read ONLY the "
+    "NARRATION and ENDING CTA lines below, word for word, exactly as written and in "
+    "order, synchronised with the matching visual beat and with no added or repeated "
+    "words. Do NOT read the ON-SCREEN TEXT lines aloud; add no words and repeat "
+    "nothing. Do NOT translate, paraphrase, shorten or omit any spoken line, and do "
+    "not add any other speech."
 )
 _SPEECH_COMPACT = (
-    "SPEECH (mandatory): Calm, unhurried Iranian Persian (Farsi), clearly slower "
-    "than normal speech with gentle pauses. Do NOT rush for the cuts. Do NOT speak "
-    "English except words written verbatim below. Do NOT translate, paraphrase, "
-    "shorten or omit; obey diacritics. Speak each NARRATION/CTA line exactly as "
-    "written, in order, synchronised with its beat. Never read ON-SCREEN TEXT aloud; "
-    "add no words."
+    "SPEECH (mandatory): Calm Iranian Persian (Farsi), deliberately slow (about 90 "
+    "words per minute) with gentle pauses. Never rush or speed up for the cuts; "
+    "hold frames instead. Read ONLY the NARRATION/CTA lines below, word for word, "
+    "exactly as written and in order. Do NOT translate, paraphrase, shorten, omit "
+    "or repeat; never read ON-SCREEN TEXT aloud; add no other speech."
 )
 _SPEECH_MINIMAL = (
-    "SPEECH: Slow, calm Iranian Persian (Farsi). Do NOT speak English except text "
-    "written below. Do NOT translate, paraphrase, shorten or omit; speak each "
-    "NARRATION/CTA line exactly, in order, synchronised with its beat, obeying "
-    "diacritics. Do NOT read ON-SCREEN TEXT aloud; add no words."
+    "SPEECH: Slow, calm Iranian Persian (Farsi, about 90 words per minute). Never "
+    "rush for cuts. Read ONLY NARRATION/CTA lines below, word for word, exactly as "
+    "written and in order. Do NOT translate, paraphrase, shorten, omit or repeat; "
+    "never read ON-SCREEN TEXT aloud; add no other speech."
 )
 
 _ON_SCREEN_FULL = (
@@ -121,7 +124,8 @@ _ON_SCREEN_MINIMAL = (
 _TIMING_FULL = (
     "TIMING (mandatory): Every beat below has an explicit duration; pace the "
     "cuts so the beats play in order for the stated durations and the total "
-    "matches the requested video length."
+    "matches the requested video length. Slow, exact speech takes priority over "
+    "cut timing; hold frames rather than speeding up the voice."
 )
 _TIMING_COMPACT = (
     "TIMING (mandatory): Beats play in order at the stated durations; the total "
@@ -269,7 +273,7 @@ def _build_prompt(
         spoken = _spoken_text(scene)
         if spoken:
             label = "NARRATION:" if layout.compact_labels else (
-                "NARRATION (speak exactly, in Persian, obeying diacritics):"
+                "NARRATION (speak exactly, slowly, in Persian):"
             )
             lines.append(f"{label} {spoken}")
 
@@ -279,18 +283,41 @@ def _build_prompt(
 
     cta = _spoken_cta(scenario)
     if cta:
-        label = "CTA:" if layout.compact_labels else "ENDING CTA (speak exactly, in Persian, obeying diacritics):"
+        label = "CTA:" if layout.compact_labels else "ENDING CTA (speak exactly, slowly, in Persian):"
         lines.append(f"{label} {cta}")
 
     return "\n".join(lines)
 
 
+_DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+
+
 def _spoken_text(scene: SceneSpec) -> str:
-    return (scene.pronunciation_text or scene.narration).strip()
+    """Plain narration is authoritative for the video provider.
+
+    Diacritic-heavy ``pronunciation_text`` confused the video model and caused
+    misread or rushed speech, so only the exact Persian narration is spoken.
+    """
+    return scene.narration.strip()
+
+
+def _spoken_key(value: str) -> tuple[str, ...]:
+    normalized = unicodedata.normalize("NFKC", value or "").translate(
+        str.maketrans({"ي": "ی", "ك": "ک"})
+    )
+    return tuple(re.findall(r"[\w]+", _DIACRITICS_RE.sub("", normalized), flags=re.UNICODE))
 
 
 def _spoken_cta(scenario: Scenario) -> str:
-    return (scenario.cta_pronunciation_text or scenario.cta).strip()
+    """Return the closing CTA, unless the last beat already speaks it verbatim."""
+    cta = scenario.cta.strip()
+    if not cta or not scenario.scenes:
+        return ""
+    last_scene = max(scenario.scenes, key=lambda item: item.index)
+    cta_key = _spoken_key(cta)
+    if cta_key and cta_key == _spoken_key(last_scene.narration):
+        return ""
+    return cta
 
 
 def _format_seconds(seconds: float) -> str:

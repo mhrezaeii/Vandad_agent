@@ -41,7 +41,7 @@ async def _project_for_company(db_session, company_id, *, status="draft", video_
     project = ContentProject(
         company_id=company_id,
         brand_id=brand.id,
-        topic="Test video",
+        topic="Test — platform overview",
         status=status,
         video_mode=video_mode,
     )

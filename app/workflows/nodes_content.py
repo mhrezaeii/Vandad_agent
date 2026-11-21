@@ -329,7 +329,6 @@ async def _generate_scenario(
                 break
             compact_knowledge.pop()
     request = ScenarioRequest(
-        topic=project.topic,
         target_duration_seconds=int(
             params.get("target_duration_seconds")
             or options.get("target_duration_seconds")

@@ -89,7 +89,6 @@ async def test_script_generation_persists_llm_output(
     brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     project = await content_service.create_project(
         scope=_scope(company.id), brand_id=brand.id,
-        topic="چرا پایش متمرکز امنیتی برای سازمان‌ها اهمیت دارد؟",
     )
 
     script_json = json.dumps({
@@ -156,7 +155,7 @@ async def test_content_tenant_isolation(db_session, content_service, workflow_fa
     company, _platform = company_and_platform
     brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     project = await content_service.create_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="تست"
+        scope=_scope(company.id), brand_id=brand.id
     )
     stranger = Company(name="Content Sneak", slug="content-sneak")
     db_session.add(stranger)
@@ -221,7 +220,6 @@ async def test_scene_video_uses_first_healthy_ordered_provider_and_persists_rout
     project = await content_service.create_project(
         scope=_scope(company.id),
         brand_id=brand.id,
-        topic="Ordered scene provider routing",
     )
     project.video_mode = "scene"
     project.status = ProjectStatus.APPROVED.value
@@ -325,7 +323,6 @@ async def test_single_scene_project_allows_generation_only_provider(
     project = await content_service.create_project(
         scope=_scope(company.id),
         brand_id=brand.id,
-        topic="Single scene passthrough routing",
     )
     project.video_mode = "scene"
     project.status = ProjectStatus.APPROVED.value
@@ -398,7 +395,6 @@ async def test_multi_scene_project_accepts_generation_only_provider(
     project = await content_service.create_project(
         scope=_scope(company.id),
         brand_id=brand.id,
-        topic="Multi scene capability gate",
     )
     project.video_mode = "scene"
     project.status = ProjectStatus.APPROVED.value
@@ -464,7 +460,7 @@ async def test_script_failure_syncs_project_and_retry_creates_new_execution(
     await db_session.commit()
     brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     project = await content_service.create_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="تست شکست سناریو"
+        scope=_scope(company.id), brand_id=brand.id
     )
 
     def failing_handler(request: httpx.Request) -> httpx.Response:
@@ -520,18 +516,18 @@ async def test_reference_image_projects_choose_i2v_safe_generation_mode(
     company, _ = company_and_platform
     brand = await content_service.ensure_vandefence_brand(company_id=company.id)
     short_project = await content_service.create_scene_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="ویدیوی کاراکتر",
+        scope=_scope(company.id), brand_id=brand.id,
         target_duration_seconds=30, character_key="Vandiyar/Emerald Blazer",
     )
     assert short_project.scene_options["generation_mode"] == "single_shot"
     long_project = await content_service.create_scene_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="کمپین بلند کاراکتر",
+        scope=_scope(company.id), brand_id=brand.id,
         target_duration_seconds=60, character_key="Vandiyar/Emerald Blazer",
     )
     assert long_project.scene_options["generation_mode"] == "multi_scene"
     assert long_project.scene_options["scene_count"] == 6
     explicit_multi = await content_service.create_scene_project(
-        scope=_scope(company.id), brand_id=brand.id, topic="انتخاب صریح چندصحنه‌ای",
+        scope=_scope(company.id), brand_id=brand.id,
         target_duration_seconds=30, generation_mode="multi_scene",
         character_key="Vandiyar/Emerald Blazer",
     )
@@ -569,7 +565,6 @@ async def _approved_single_shot_project(
     project = await content_service.create_scene_project(
         scope=_scope(company.id),
         brand_id=brand.id,
-        topic="معرفی تک‌برداشت ویدیار",
         target_duration_seconds=target_duration,
         generation_mode="single_shot",
         character_key=character_key,

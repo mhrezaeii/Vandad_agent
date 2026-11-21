@@ -153,7 +153,6 @@ class BrandMemoryRead(BaseModel):
     platform_count: int
     source_count: int
     snapshot_count: int
-    suggested_topic: str | None = None
     analysis: BrandMemoryAnalysisRead | None = None
     platforms: list[BrandMemoryPlatformRead] = Field(default_factory=list)
     updated_at: datetime | None = None
@@ -180,7 +179,6 @@ class ContentProjectCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     brand_id: uuid.UUID
-    topic: str = Field(min_length=3, max_length=2000)
 
 
 class SceneProjectCreate(BaseModel):
@@ -189,7 +187,6 @@ class SceneProjectCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     brand_id: uuid.UUID
-    topic: str = Field(min_length=3, max_length=2000)
     target_duration_seconds: int = Field(default=30, ge=5, le=120)
     # A one-scene project is the supported single-clip passthrough mode.
     scene_count: int | None = Field(default=None, ge=1, le=12)

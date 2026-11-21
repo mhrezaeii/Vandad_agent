@@ -25,7 +25,6 @@ def _scenario(scene_count: int = 3, target: int = 20) -> Scenario:
                 ),
                 duration_seconds=per_scene,
                 on_screen_text=f"متن روی تصویر {index + 1}" if index == 0 else None,
-                subtitle_text=f"زیرنویس {index + 1}",
                 scene_type=kinds[index % len(kinds)],
                 camera_direction="Slow push-in" if index == 0 else None,
                 transition="cut",
@@ -54,15 +53,10 @@ def _long_compaction_scenario() -> Scenario:
             f"روایت صحنه {index + 1} را دقیقاً همانگونه که نوشته شده است "
             "با آهنگ آرام و بدون عجله بیان کن."
         )
-        pronunciation = (
-            f"روایتِ صحنهٔ {index + 1} را دقیقاً همانگونه که نوشته شده است "
-            "با آهنگِ آرام و بدون عجله بیان کن."
-        )
         scenes.append(
             SceneSpec(
                 index=index,
                 narration=narration,
-                pronunciation_text=pronunciation,
                 visual_prompt=(
                     "Vertical 9:16 cinematic enterprise technology shot with a restrained charcoal "
                     "and deep navy palette, subtle cyan accents and realistic office lighting. "
@@ -172,16 +166,14 @@ def test_long_valid_scenario_fits_after_dropping_only_optional_guidance():
     assert prompt.count("Beat ") == len(scenario.scenes)
     positions = []
     for scene in scenario.scenes:
-        spoken = (scene.pronunciation_text or scene.narration).strip()
-        assert spoken in prompt
+        assert scene.narration in prompt
+        assert prompt.count(scene.narration) == 1
         assert scene.on_screen_text in prompt
         assert scene.visual_prompt in prompt
-        assert scene.narration not in prompt  # spoken form is included once, not duplicated
-        positions.append(prompt.index(spoken))
+        positions.append(prompt.index(scene.narration))
     assert positions == sorted(positions)
-    cta = (scenario.cta_pronunciation_text or scenario.cta).strip()
-    assert cta in prompt
-    assert prompt.index(cta) > positions[-1]
+    assert scenario.cta in prompt
+    assert prompt.index(scenario.cta) > positions[-1]
     # Camera direction is optional guidance and is the first thing compaction removes.
     assert "CAMERA:" not in prompt
 

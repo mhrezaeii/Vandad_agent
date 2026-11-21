@@ -66,7 +66,6 @@ def _scenario(count: int = 3, duration: float = 5.0) -> Scenario:
                 visual_prompt=f"visual prompt {index}",
                 duration_seconds=duration,
                 on_screen_text=f"متن {index}",
-                subtitle_text=f"زیرنویس {index}",
             )
             for index in range(count)
         ],
@@ -88,7 +87,6 @@ async def _project(db_session, content_service, company_id) -> ContentProject:
     project = await content_service.create_scene_project(
         scope=scope,
         brand_id=brand.id,
-        topic="موضوع تست",
         target_duration_seconds=15,
     )
     await db_session.commit()
@@ -636,10 +634,11 @@ def test_scene_provider_prompt_contains_product_direction_without_character_depe
     assert "PRODUCT DEMO" in prompt
     assert "slow cinematic push-in" in prompt
     assert "match_cut" in prompt
-    assert "calm, unhurried Iranian Persian" in prompt
+    assert "calm Iranian Persian" in prompt
+    assert "about 90 words per minute" in prompt
     assert "clearly slower than normal speech" in prompt
-    assert "Do NOT paraphrase, shorten, add or omit words" in prompt
-    assert "do not read the on-screen text aloud" in prompt
+    assert "Read ONLY this text word for word" in prompt
+    assert "never read on-screen text aloud" in prompt
     assert "CHARACTER" not in prompt
     assert "PRESENTER" not in prompt
 
@@ -810,7 +809,7 @@ async def test_stale_kie_submit_fence_becomes_unknown_without_resubmit(
 
 
 def test_overlay_planner_maps_screenshots_to_scene_windows(tmp_path):
-    """Real-UI screenshots map to their scene windows; subtitles are planned."""
+    """Real-UI screenshots map to their scene windows; no subtitles are planned."""
     from types import SimpleNamespace
 
     from app.services.scene_video_service import SceneVideoService
@@ -840,8 +839,7 @@ def test_overlay_planner_maps_screenshots_to_scene_windows(tmp_path):
         (str(shots[0]), 0.0, 15.0),
         (str(shots[1]), 15.0, 30.0),
     ]
-    assert subtitle_path is not None and subtitle_path.exists()
-    assert "Dialogue" in subtitle_path.read_text(encoding="utf-8")
+    assert subtitle_path is None
 
 
 def test_overlay_planner_skips_without_platform_or_screenshots(tmp_path):

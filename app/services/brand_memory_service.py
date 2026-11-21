@@ -250,7 +250,6 @@ class BrandMemoryService:
             "platform_count": len(entries),
             "source_count": len(source_urls),
             "snapshot_count": snapshot_count,
-            "suggested_topic": (analysis or {}).get("selected_topic"),
             "analysis": analysis,
             "platforms": entries,
             "updated_at": latest_extracted_at,

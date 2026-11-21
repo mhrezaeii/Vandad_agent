@@ -41,7 +41,7 @@ async def test_content_agent_generates_scenario_from_latest_brand_knowledge_and_
     project = ContentProject(
         company_id=company.id,
         brand_id=brand.id,
-        topic="معرفی قابلیت‌های واقعی محصول",
+        topic="ونداد — نمای کلی پلتفرم",
         status=ProjectStatus.DRAFT.value,
         scene_options={"target_duration_seconds": 30, "scene_count": 5},
     )
@@ -188,7 +188,7 @@ async def test_content_agent_rejects_project_owned_by_another_company(
     project = ContentProject(
         company_id=foreign_company.id,
         brand_id=brand.id,
-        topic="Must remain private to its owner",
+        topic="Brand — platform overview",
         status=ProjectStatus.DRAFT.value,
     )
     db_session.add(project)

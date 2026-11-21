@@ -72,7 +72,6 @@ class ContentAnalysisService:
         *,
         company_id: uuid.UUID,
         brand_id: uuid.UUID,
-        topic: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         brand = await self.session.get(ContentBrand, brand_id)
@@ -134,17 +133,7 @@ class ContentAnalysisService:
         candidates.sort(key=lambda item: (-item["brand_fit"], item["topic"]))
         ranked = candidates[:limit]
 
-        requested_topic = _clean(topic, _MAX_TOPIC_CHARS)
-        if requested_topic and len(requested_topic) >= 3:
-            selected_topic = requested_topic
-            supporting = self._supporting_facts(ranked, requested_topic, brand_tokens)
-            brand_fit = self._topic_fit(requested_topic, supporting, brand_tokens)
-            selection_reason = (
-                "موضوع درخواستی کاربر با شواهد پشتیبان برند تطبیق داده شد."
-                if supporting
-                else "موضوع درخواستی کاربر پذیرفته شد؛ شاهد مستقیمی در دانش پایش‌شده یافت نشد."
-            )
-        elif ranked:
+        if ranked:
             selected = ranked[0]
             selected_topic = selected["topic"]
             supporting = self._supporting_facts(ranked, selected_topic, brand_tokens)

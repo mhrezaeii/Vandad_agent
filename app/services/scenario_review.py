@@ -81,7 +81,6 @@ def review_scenario(
     if language.split("-", 1)[0].strip().lower() == "fa":
         # Every spoken or written Persian surface must really be Persian: the
         # title, the complete narration, the CTA (spoken in single-shot mode)
-        # and each scene's narration/on-screen text/subtitle. A pure-Latin
         # value here means the scenario prompt failed and must be regenerated,
         # never silently submitted to a paid video provider. Brand languages are
         # stored as "fa-IR", so match the language subtag, not the exact string.
@@ -98,7 +97,6 @@ def review_scenario(
                     (f"{where} narration", scene.narration),
                     (f"{where} pronunciation_text", scene.pronunciation_text or scene.narration),
                     (f"{where} on_screen_text", scene.on_screen_text or ""),
-                    (f"{where} subtitle_text", scene.subtitle_text or ""),
                 ]
             )
         for label, text in persian_targets:

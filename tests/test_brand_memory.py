@@ -92,7 +92,7 @@ async def test_memory_reads_latest_knowledge_and_history(
     assert memory["platform_count"] == 1
     assert memory["snapshot_count"] == 2
     assert memory["source_count"] == 1
-    assert memory["suggested_topic"]
+    assert memory["analysis"]["selected_topic"]
     assert memory["analysis"]["sources"][0]["source_url"].startswith("https://")
     entry = memory["platforms"][0]
     assert entry["name"] == platform.name
@@ -112,7 +112,6 @@ async def test_memory_is_empty_without_snapshots(db_session, company_and_platfor
 
     assert memory["has_knowledge"] is False
     assert memory["snapshot_count"] == 0
-    assert memory["suggested_topic"] is None
     assert memory["analysis"] is None
 
 
