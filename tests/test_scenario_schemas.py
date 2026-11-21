@@ -15,7 +15,12 @@ from app.schemas.scenario import (
     expected_scene_count,
     normalize_scenario,
 )
-from app.services.scenario_service import ScenarioGenerationError, build_scenario_prompt, parse_scenario_content
+from app.services.scenario_service import (
+    ScenarioGenerationError,
+    build_scenario_prompt,
+    parse_scenario_content,
+    sanitize_persian_written_surfaces,
+)
 
 
 def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
@@ -278,3 +283,42 @@ def test_review_scenario_requires_every_spoken_and_written_surface_in_persian():
     assert any(issue.startswith("cta") for issue in persian_issues)
     assert any("scene 1 on_screen_text" in issue for issue in persian_issues)
     assert any("scene 2 subtitle_text" in issue for issue in persian_issues)
+
+
+def test_persian_written_surface_sanitizer_clears_acronym_only_labels():
+    """Acronym-only on-screen text is optional copy, not a review failure."""
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][0]["on_screen_text"] = "SIEM · SOAR · EDR"
+    raw["scenes"][1]["subtitle_text"] = "VISIT VANDEFENCE.IR"
+    raw["scenes"][1]["on_screen_text"] = "کنسول امنیت"
+
+    scenario = sanitize_persian_written_surfaces(normalize_scenario(raw, request), request)
+
+    assert scenario.scenes[0].on_screen_text is None
+    assert scenario.scenes[1].subtitle_text is None
+    assert scenario.scenes[1].on_screen_text == "کنسول امنیت"
+    remaining = review_scenario(scenario, target_duration_seconds=30, language="fa-IR")
+    assert not [issue for issue in remaining if "on_screen_text" in issue or "subtitle_text" in issue]
+
+
+def test_persian_written_surface_sanitizer_leaves_non_persian_and_spoken_text():
+    request = ScenarioRequest(topic="test topic", target_duration_seconds=30, language="en")
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][0]["on_screen_text"] = "BUY NOW"
+    scenario = normalize_scenario(raw, request)
+    assert sanitize_persian_written_surfaces(scenario, request) is scenario
+
+    fa_request = ScenarioRequest(topic="موضوع تست", target_duration_seconds=30)
+    spoken = normalize_scenario(_raw_scenario(count=2, duration=15.0), fa_request)
+    cleaned = sanitize_persian_written_surfaces(spoken, fa_request)
+    assert cleaned.scenes[0].narration == spoken.scenes[0].narration
+    assert cleaned.scenes[0].pronunciation_text == spoken.scenes[0].pronunciation_text
+    assert cleaned.cta == spoken.cta
+
+
+def test_persian_prompt_forbids_latin_only_on_screen_text():
+    system, _user = build_scenario_prompt(ScenarioRequest(topic="معرفی خدمات"))
+    assert "متن صرفاً لاتین ممنوع است" in system

@@ -25,12 +25,14 @@ from app.integrations.providers.base import ProviderError
 from app.schemas.scenario import (
     Scenario,
     ScenarioRequest,
+    SceneSpec,
     normalize_scenario,
 )
 from app.security.crypto import MasterKeyBox
 from app.services.llm_execution_service import LlmExecutionService
 
 _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+_PERSIAN_SCRIPT = re.compile(r"[\u0600-\u06FF]")
 
 
 class ScenarioGenerationError(Exception):
@@ -86,6 +88,8 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "صحنه‌های product_demo باید محصول را در حال استفاده نشان دهند: رابط کاربری، داشبورد، "
         "تعامل کاربر و جریان کار؛ از متن ناخوانا و رابط کاربری ساختگی با قابلیت‌های ادعایی پرهیز کن. "
         "visual_prompt را انگلیسی، سینمایی و دقیق بنویس؛ narration و on_screen_text فارسی باشند. "
+        "on_screen_text و subtitle_text حتی وقتی نام برند یا مخففهایی مثل SIEM/SOAR/EDR را نشان میدهند، "
+        "باید حداقل یک واژه فارسی هم داشته باشند؛ متن صرفاً لاتین ممنوع است. "
         "برای هر صحنه اندازه نما، حرکت دوربین، نور، ترکیب‌بندی و transition را مشخص کن. "
         "از متن رندرشده توسط مدل تصویر/ویدیو داخل قاب پرهیز کن؛ متن فارسی را فقط در صورت پشتیبانی "
         "واقعی و اعلام‌شده Provider از قابلیت‌های خودش درخواست کن. "
@@ -175,6 +179,41 @@ def parse_scenario_content(content: Any, request: ScenarioRequest) -> Scenario:
         ) from exc
 
 
+def sanitize_persian_written_surfaces(
+    scenario: Scenario, request: ScenarioRequest
+) -> Scenario:
+    """Drop optional written surfaces that the model emitted without Persian.
+
+    A common model slip for Persian brands is an acronym-only on-screen label
+    such as ``SIEM · SOAR · EDR`` or a Latin-only CTA URL. Those values are not
+    Persian copy and fail the deterministic quality gate even though the same
+    information is already present in the Persian narration and subtitle. The
+    fields are optional, so the deterministic repair is to clear them instead
+    of inventing copy or weakening the review. Required spoken surfaces and
+    non-Persian scenarios are left untouched: the gate still fails closed on
+    genuinely unusable output.
+    """
+    if request.language.split("-", 1)[0].strip().lower() != "fa":
+        return scenario
+
+    scenes: list[SceneSpec] = []
+    changed = False
+    for scene in scenario.scenes:
+        update: dict[str, Any] = {}
+        if scene.on_screen_text and not _PERSIAN_SCRIPT.search(scene.on_screen_text):
+            update["on_screen_text"] = None
+        if scene.subtitle_text and not _PERSIAN_SCRIPT.search(scene.subtitle_text):
+            update["subtitle_text"] = None
+        if update:
+            changed = True
+            scenes.append(scene.model_copy(update=update))
+        else:
+            scenes.append(scene)
+    if not changed:
+        return scenario
+    return scenario.model_copy(update={"scenes": scenes})
+
+
 class ScenarioService:
     """Generate a validated scenario through the configured text-generation API."""
 
@@ -217,7 +256,7 @@ class ScenarioService:
             task_id=task_id,
         )
         scenario = parse_scenario_content(metadata.get("content"), request)
-        return scenario, metadata
+        return sanitize_persian_written_surfaces(scenario, request), metadata
 
     async def _complete(
         self,
