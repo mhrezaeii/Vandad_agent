@@ -51,7 +51,7 @@ async def test_ensure_default_brands_is_idempotent(service, db_session, company)
     second = await service.ensure_default_brands(company_id=company.id)
     await db_session.commit()
     assert [brand.id for brand in second] == [brand.id for brand in first]
-    assert await _brand_count(db_session, company.id) == 5
+    assert await _brand_count(db_session, company.id) == 4
 
 
 async def test_ensure_vandefence_brand_is_compatible_with_seeding(
@@ -65,7 +65,7 @@ async def test_ensure_vandefence_brand_is_compatible_with_seeding(
     await db_session.commit()
     assert brand.id == vandefence.id
     assert brand.domain == "vandefence.ir"
-    assert await _brand_count(db_session, company.id) == 5
+    assert await _brand_count(db_session, company.id) == 4
 
 
 async def test_create_brand_rejects_case_insensitive_duplicate(
@@ -106,7 +106,7 @@ async def test_update_brand_archive_is_reflected_in_listing(
 ):
     seeded = await service.ensure_default_brands(company_id=company.id)
     await db_session.commit()
-    [target] = [brand for brand in seeded if brand.name == "VakilBin"]
+    [target] = [brand for brand in seeded if brand.name == "Vandiar"]
 
     updated = await service.update_brand(
         target.id, company_id=company.id, changes={"status": "archived"}
@@ -115,13 +115,13 @@ async def test_update_brand_archive_is_reflected_in_listing(
     assert updated.status == "archived"
 
     active = await service.list_brands(company_id=company.id)
-    assert "VakilBin" not in [brand.name for brand in active]
+    assert "Vandiar" not in [brand.name for brand in active]
 
     all_brands = await service.list_brands(
         company_id=company.id, include_archived=True
     )
-    assert "VakilBin" in [brand.name for brand in all_brands]
-    assert await _brand_count(db_session, company.id) == 5
+    assert "Vandiar" in [brand.name for brand in all_brands]
+    assert await _brand_count(db_session, company.id) == 4
 
 
 async def test_update_brand_rejects_null_language(service, db_session, company):

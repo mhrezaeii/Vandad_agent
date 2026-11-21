@@ -119,14 +119,6 @@ DEFAULT_BRANDS: tuple[dict[str, Any], ...] = (
     },
     VANDEFENCE_BRAND_SPEC,
     {
-        "name": "VakilBin",
-        "display_name": "VakilBin",
-        "language": "fa-IR",
-        "tone": None,
-        "description": None,
-        "cta_config": {},
-    },
-    {
         "name": "Vandiar",
         "display_name": "Vandiar",
         "language": "fa-IR",

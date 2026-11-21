@@ -75,6 +75,33 @@ def test_evidence_validation_tolerates_unicode_normalisation():
         validate_knowledge_evidence(paraphrased, [doc])
 
 
+def test_evidence_validation_grounds_compressed_excerpts_in_source_text():
+    """A model label is replaced by the verbatim sentence that supports it."""
+    from types import SimpleNamespace
+
+    from app.schemas.platform_knowledge import PlatformKnowledgeFact, PlatformKnowledgePayload
+    from app.services.platform_knowledge_service import validate_knowledge_evidence
+
+    source = "برای دریافت مشاوره حقوقی در زمینه خانواده به وبسایت مراجعه کنید و وقت رزرو نمایید."
+    doc = SimpleNamespace(url="https://nobatvakil.com/", content_text=source)
+    payload = PlatformKnowledgePayload(
+        summary="",
+        products_and_services=[
+            PlatformKnowledgeFact(
+                name="رزرو مشاوره حقوقی",
+                description="رزرو وقت مشاوره حقوقی",
+                evidence="رزرو مشاوره حقوقی",
+                source_url="https://nobatvakil.com/",
+                confidence=0.9,
+            )
+        ],
+    )
+    validate_knowledge_evidence(payload, [doc])
+    grounded = payload.products_and_services[0].evidence
+    assert " ".join(grounded.split()) in source
+    assert "مشاوره حقوقی" in grounded
+
+
 def test_evidence_validation_tolerates_trailing_slash_urls():
     """Models may cite the source URL without the trailing slash."""
     from types import SimpleNamespace

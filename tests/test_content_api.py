@@ -76,7 +76,6 @@ async def test_brand_bootstrap_returns_vandefence_identity(client, headers):
     assert [brand["name"] for brand in brands] == [
         "NobatMoshaver",
         "NobatVakil",
-        "VakilBin",
         "Vandefence",
         "Vandiar",
     ]
@@ -92,7 +91,7 @@ async def test_brand_bootstrap_returns_vandefence_identity(client, headers):
 
     # Idempotent bootstrap: a second call does not create duplicate brands.
     again = await client.get("/api/v1/content/brands", headers=headers)
-    assert len(again.json()) == 5
+    assert len(again.json()) == 4
     assert sorted(item["name"] for item in again.json()) == sorted(
         item["name"] for item in brands
     )

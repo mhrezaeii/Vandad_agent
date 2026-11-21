@@ -16,7 +16,6 @@ from app.models import Company
 DEFAULT_BRAND_NAMES = [
     "NobatMoshaver",
     "NobatVakil",
-    "VakilBin",
     "Vandefence",
     "Vandiar",
 ]
@@ -44,10 +43,10 @@ async def _brands(client, headers, **params) -> list[dict]:
     return response.json()
 
 
-async def test_list_seeds_five_default_brands_idempotently(client, headers, db_session):
+async def test_list_seeds_four_default_brands_idempotently(client, headers, db_session):
     first = await _brands(client, headers)
     assert [brand["name"] for brand in first] == DEFAULT_BRAND_NAMES
-    assert len({brand["id"] for brand in first}) == 5
+    assert len({brand["id"] for brand in first}) == 4
     assert all(brand["display_name"] for brand in first)
     assert all(brand["cta_config"] == {} for brand in first)
 
@@ -57,7 +56,7 @@ async def test_list_seeds_five_default_brands_idempotently(client, headers, db_s
     count = (
         await db_session.execute(text("SELECT count(*) FROM content_brands"))
     ).scalar_one()
-    assert count == 5
+    assert count == 4
 
 
 async def test_seeded_vandefence_profile_is_preserved(client, headers):

@@ -31,7 +31,7 @@ Open http://localhost:3000. The API defaults to `http://localhost:8000/api/v1`.
 The dashboard is one page:
 
 1. Select or create a brand profile (Vandefence, NobatVakil, NobatMoshaver,
-   VakilBin, Vandiar, …).
+   Vandiar, …).
 2. Describe the topic, choose the duration, character reference and provider.
 3. Press **شروع فرآیند**. The UI creates a real scene project, starts the real
    scenario workflow, approves the generated scenario and starts the real video

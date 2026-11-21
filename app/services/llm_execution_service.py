@@ -22,7 +22,7 @@ from app.integrations.providers.base import (
     ProviderResult,
 )
 from app.models import PlatformConnection
-from app.security.crypto import MasterKeyBox
+from app.security.crypto import MasterKeyBox, MasterKeyConfigurationError
 from app.services.credential_service import CredentialService
 from app.services.provider_budget_service import ProviderBudgetService
 
@@ -312,10 +312,15 @@ class LlmExecutionService:
                     ).resolve_credential(
                         connection.credential_reference_id, company_id=company_id
                     )
-                except (ConflictError, ForbiddenError, NotFoundError):
-                    # A broken credential makes only this candidate unusable;
-                    # the next explicitly configured tenant-owned candidate
-                    # may still be healthy.
+                except (
+                    ConflictError,
+                    ForbiddenError,
+                    NotFoundError,
+                    MasterKeyConfigurationError,
+                ):
+                    # A broken or undecryptable credential makes only this
+                    # candidate unusable; the next explicitly configured
+                    # tenant-owned candidate may still be healthy.
                     continue
                 credential = resolved.payload
                 credential_type = resolved.credential_type
