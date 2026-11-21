@@ -636,6 +636,10 @@ def test_scene_provider_prompt_contains_product_direction_without_character_depe
     assert "PRODUCT DEMO" in prompt
     assert "slow cinematic push-in" in prompt
     assert "match_cut" in prompt
+    assert "calm, unhurried Iranian Persian" in prompt
+    assert "clearly slower than normal speech" in prompt
+    assert "Do NOT paraphrase, shorten, add or omit words" in prompt
+    assert "do not read the on-screen text aloud" in prompt
     assert "CHARACTER" not in prompt
     assert "PRESENTER" not in prompt
 

@@ -45,6 +45,60 @@ def _scenario(scene_count: int = 3, target: int = 20) -> Scenario:
     )
 
 
+def _long_compaction_scenario() -> Scenario:
+    """A valid six-beat scenario whose full prompt exceeds 5000 characters."""
+    scenes = []
+    kinds = ["problem", "product_demo", "b_roll", "motion_graphic", "cta"]
+    for index in range(6):
+        narration = (
+            f"روایت صحنه {index + 1} را دقیقاً همانگونه که نوشته شده است "
+            "با آهنگ آرام و بدون عجله بیان کن."
+        )
+        pronunciation = (
+            f"روایتِ صحنهٔ {index + 1} را دقیقاً همانگونه که نوشته شده است "
+            "با آهنگِ آرام و بدون عجله بیان کن."
+        )
+        scenes.append(
+            SceneSpec(
+                index=index,
+                narration=narration,
+                pronunciation_text=pronunciation,
+                visual_prompt=(
+                    "Vertical 9:16 cinematic enterprise technology shot with a restrained charcoal "
+                    "and deep navy palette, subtle cyan accents and realistic office lighting. "
+                    f"Detailed beat {index + 1} composition with abstract, unreadable interface "
+                    "elements, consistent visual language, clean framing, no invented product "
+                    "claims, no extra people and no readable generated text."
+                ),
+                camera_direction=(
+                    "Slow controlled camera movement with careful framing, balanced practical "
+                    f"lighting and deliberate pacing for beat {index + 1}, preserving a calm "
+                    "corporate atmosphere throughout the shot."
+                ),
+                duration_seconds=5,
+                on_screen_text=f"متن فارسی روی تصویر {index + 1}",
+                scene_type=kinds[index % len(kinds)],
+                transition="dissolve",
+            )
+        )
+    return Scenario(
+        title="معرفی پلتفرم امنیتی",
+        opening_hook=scenes[0].narration,
+        scenes=scenes,
+        narration=" ".join(scene.narration for scene in scenes),
+        cta="برای آشنایی بیشتر با ما تماس بگیرید.",
+        caption="کپشن ویدیو",
+        hashtags=["#امنیت"],
+        target_duration_seconds=30,
+        visual_style=(
+            "Vertical 9:16 cinematic enterprise technology film, restrained charcoal and deep navy "
+            "palette with subtle cyan accents, realistic office lighting, polished but credible, "
+            "consistent visual language, clean compositions, no invented product claims."
+        ),
+        language="fa-IR",
+    )
+
+
 def test_multi_beat_scenario_becomes_one_prompt_preserving_order():
     scenario = _scenario(scene_count=4)
     prompt = compose_single_shot_prompt(scenario, max_characters=5000)
@@ -107,3 +161,35 @@ def test_scene_durations_are_stated_for_model_pacing():
     prompt = compose_single_shot_prompt(_scenario(scene_count=2, target=20), max_characters=5000)
     assert "Beat 1 (10s)" in prompt
     assert "Beat 2 (10s)" in prompt
+
+
+def test_long_valid_scenario_fits_after_dropping_only_optional_guidance():
+    scenario = _long_compaction_scenario()
+
+    prompt = compose_single_shot_prompt(scenario, has_reference_image=True, max_characters=5000)
+
+    assert len(prompt) <= 5000
+    assert prompt.count("Beat ") == len(scenario.scenes)
+    positions = []
+    for scene in scenario.scenes:
+        spoken = (scene.pronunciation_text or scene.narration).strip()
+        assert spoken in prompt
+        assert scene.on_screen_text in prompt
+        assert scene.visual_prompt in prompt
+        assert scene.narration not in prompt  # spoken form is included once, not duplicated
+        positions.append(prompt.index(spoken))
+    assert positions == sorted(positions)
+    cta = (scenario.cta_pronunciation_text or scenario.cta).strip()
+    assert cta in prompt
+    assert prompt.index(cta) > positions[-1]
+    # Camera direction is optional guidance and is the first thing compaction removes.
+    assert "CAMERA:" not in prompt
+
+
+def test_prompt_requires_slow_calm_narration_and_never_reads_on_screen_text():
+    prompt = compose_single_shot_prompt(_scenario(), max_characters=5000)
+
+    assert "calm, unhurried" in prompt
+    assert "clearly slower than normal conversational speed" in prompt
+    assert "Do NOT read the ON-SCREEN TEXT lines aloud" in prompt
+    assert "add no words and repeat nothing" in prompt

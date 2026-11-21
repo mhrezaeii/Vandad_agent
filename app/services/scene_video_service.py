@@ -110,10 +110,12 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
     spoken_text = (scene.pronunciation_text or scene.narration).strip()
     if spoken_text:
         lines.append(
-            "AUDIO: warm, professional Iranian Persian (Farsi) voice-over says "
-            "exactly this text and follows its diacritics: "
-            f"{spoken_text} Under the voice-over, add a soft modern corporate "
-            "background track and subtle UI sounds."
+            "AUDIO: calm, unhurried Iranian Persian (Farsi) voice-over, clearly "
+            "slower than normal speech with gentle pauses, says exactly this text "
+            "and follows its diacritics: "
+            f"{spoken_text} Do NOT paraphrase, shorten, add or omit words; do not "
+            "read the on-screen text aloud. Under the voice-over, add a soft modern "
+            "corporate background track and subtle UI sounds."
         )
     return "\n".join(lines)
 
