@@ -48,7 +48,8 @@ async def discover_platform(platform_id: uuid.UUID, payload: PlatformDiscoveryRe
                             "Browser credential must contain JSON username/password fields.") from exc
         try:
             result = await PlatformDiscoveryService(session).discover(platform, mode=payload.mode,
-                max_pages=payload.max_pages, connection=connection, credentials=credentials)
+                max_pages=payload.max_pages, connection=connection, credentials=credentials,
+                source_url=payload.source_url)
             await session.commit()
             return result
         except (ValueError, RuntimeError) as exc:

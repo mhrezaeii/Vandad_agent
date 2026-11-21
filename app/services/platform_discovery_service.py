@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.platform_discovery.browser import BrowserAutomationCrawler
 from app.integrations.platform_discovery.public_sources import PublicSourceCrawler
+from app.integrations.platform_discovery.types import DiscoveryResult
 from app.models import Platform, PlatformConnection, PlatformSourceDocument
 
 class PlatformDiscoveryService:
@@ -16,19 +17,44 @@ class PlatformDiscoveryService:
 
     async def discover(self, platform: Platform, *, mode="public", max_pages=25,
                        connection: PlatformConnection | None = None,
-                       credentials: dict[str, str] | None = None) -> dict[str, Any]:
-        if not platform.base_url:
-            raise ValueError("Platform base_url must be configured before discovery.")
+                       credentials: dict[str, str] | None = None,
+                       source_url: str | None = None) -> dict[str, Any]:
+        """Run one configured source adapter and persist its pages.
+
+        ``internal``, ``openapi`` and ``document`` are admin-configured sources:
+        the URL is supplied explicitly and never learned from page links.
+        """
+        configured = platform.configuration or {}
+        knowledge_sources = configured.get("knowledge_sources") or {}
+        if source_url is None and isinstance(knowledge_sources, dict):
+            key = {"internal": "internal_url", "openapi": "docs_url", "document": "docs_url"}.get(mode)
+            if key:
+                source_url = knowledge_sources.get(key)
+        target = source_url or platform.base_url
+        if not target:
+            raise ValueError("A source URL must be configured before discovery.")
         if mode == "public":
-            result = await PublicSourceCrawler().crawl(platform.base_url, max_pages=max_pages)
+            result = await PublicSourceCrawler().crawl(target, max_pages=max_pages)
+        elif mode == "internal":
+            from app.integrations.platform_discovery.documents import InternalSourceCrawler  # noqa: PLC0415
+
+            result = await InternalSourceCrawler().crawl(target, max_pages=max_pages)
+        elif mode in {"openapi", "document"}:
+            from app.integrations.platform_discovery.documents import StructuredDocumentLoader  # noqa: PLC0415
+
+            allow_private = bool((knowledge_sources or {}).get("allow_private_docs"))
+            page = await StructuredDocumentLoader().load(target, allow_private=allow_private)
+            result = DiscoveryResult(pages=[page], warnings=[])
         elif mode == "browser":
             if connection is None or connection.platform_id != platform.id or connection.company_id != platform.company_id:
                 raise ValueError("A connection belonging to this platform and company is required.")
             result = await BrowserAutomationCrawler().crawl(
-                platform.base_url, max_pages=min(max_pages, 25),
+                target, max_pages=min(max_pages, 25),
                 browser_config=connection.configuration.get("browser", {}), credentials=credentials)
         else:
-            raise ValueError("mode must be either 'public' or 'browser'.")
+            raise ValueError(
+                "mode must be 'public', 'browser', 'internal', 'openapi' or 'document'."
+            )
         now = datetime.now(UTC)
         created = changed = unchanged = 0
         for page in result.pages:

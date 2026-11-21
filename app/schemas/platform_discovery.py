@@ -7,9 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class PlatformDiscoveryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["public", "browser"] = "public"
+    mode: Literal["public", "browser", "internal", "openapi", "document"] = "public"
     max_pages: int = Field(default=25, ge=1, le=50)
     connection_id: uuid.UUID | None = None
+    source_url: str | None = Field(default=None, max_length=2048)
 
 class PlatformSourceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)

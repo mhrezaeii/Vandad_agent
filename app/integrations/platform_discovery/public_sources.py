@@ -13,24 +13,85 @@ from app.integrations.platform_discovery.types import DiscoveredPage, DiscoveryR
 USER_AGENT = "VandadAgentBot/0.1 (+authorized platform discovery)"
 KEYWORDS = ("docs", "document", "guide", "help", "support", "changelog", "release", "feature", "product", "faq")
 
+_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_SKIP_TAGS = {"script", "style", "noscript", "svg"}
+_TRACK_TAGS = _HEADING_TAGS | {"li", "dt", "dd", "label", "button", "a", "nav", "form"}
+
+
+def _signal_role(tag: str, ancestors: set[str]) -> str | None:
+    """Map a parsed HTML element to a deterministic extraction role."""
+    if tag in _HEADING_TAGS:
+        return "heading"
+    if tag == "li":
+        return "nav" if "nav" in ancestors else "list"
+    if tag in {"dt", "dd"}:
+        return "faq"
+    if tag in {"label", "button"}:
+        return "form" if "form" in ancestors else None
+    if tag == "a":
+        return "nav" if "nav" in ancestors else None
+    return None
+
+
 class PageParser(HTMLParser):
+    """Collect page text, links and structural signals for deterministic extraction."""
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.title_parts, self.text_parts, self.links = [], [], []
+        self.signals: list[dict] = []
+        self.meta_description = ""
         self.in_title, self.skip_depth = False, 0
+        self._frames: list[dict] = []
+
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
-        if tag == "title": self.in_title = True
-        if tag in {"script", "style", "noscript", "svg"}: self.skip_depth += 1
-        if tag == "a" and values.get("href"): self.links.append(values["href"])
+        if tag == "title":
+            self.in_title = True
+        if tag == "meta":
+            name = (values.get("name") or values.get("property") or "").lower()
+            if name in {"description", "og:description"} and values.get("content"):
+                self.meta_description = " ".join(values["content"].split())
+        if tag in _SKIP_TAGS:
+            self.skip_depth += 1
+            return
+        if tag == "a" and values.get("href"):
+            self.links.append(values["href"])
+        if tag in _TRACK_TAGS:
+            ancestors = {frame["tag"] for frame in self._frames}
+            if tag == "a" and "nav" not in ancestors:
+                return
+            self._frames.append({"tag": tag, "parts": []})
+
     def handle_endtag(self, tag):
-        if tag == "title": self.in_title = False
-        if tag in {"script", "style", "noscript", "svg"} and self.skip_depth: self.skip_depth -= 1
+        if tag == "title":
+            self.in_title = False
+        if tag in _SKIP_TAGS:
+            if self.skip_depth:
+                self.skip_depth -= 1
+            return
+        for index in range(len(self._frames) - 1, -1, -1):
+            frame = self._frames[index]
+            if frame["tag"] != tag:
+                continue
+            self._frames = self._frames[:index]
+            text = " ".join(frame["parts"])
+            if len(text) >= 3:
+                role = _signal_role(tag, {item["tag"] for item in self._frames})
+                if role:
+                    self.signals.append({"text": text[:1000], "role": role})
+            break
+
     def handle_data(self, data):
         value = " ".join(data.split())
-        if not value: return
-        if self.in_title: self.title_parts.append(value)
-        if not self.skip_depth: self.text_parts.append(value)
+        if not value:
+            return
+        if self.in_title:
+            self.title_parts.append(value)
+        if not self.skip_depth:
+            self.text_parts.append(value)
+        for frame in self._frames:
+            frame["parts"].append(value)
 
 def origin(url: str):
     parsed = urlparse(url)
@@ -63,9 +124,17 @@ def normalise_url(url: str) -> str:
 def parse_html(url: str, body: str, status: int):
     parser = PageParser()
     parser.feed(body)
+    text_parts = list(parser.text_parts)
+    if parser.meta_description:
+        text_parts.insert(0, parser.meta_description)
     page = DiscoveredPage(url=url, title=" ".join(parser.title_parts).strip() or None,
-        text=" ".join(parser.text_parts)[:100_000], source_type="website",
-        status_code=status, metadata={"content_type": "text/html"})
+        text=" ".join(text_parts)[:100_000], source_type="website",
+        status_code=status,
+        metadata={
+            "content_type": "text/html",
+            "signals": parser.signals,
+            "meta_description": parser.meta_description,
+        })
     return page, parser.links
 
 class PublicSourceCrawler:

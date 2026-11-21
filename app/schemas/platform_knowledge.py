@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class PlatformKnowledgeExtractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: uuid.UUID
+    connection_id: uuid.UUID | None = None
     max_documents: int = Field(default=20, ge=1, le=50)
 
 

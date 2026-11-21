@@ -1,10 +1,10 @@
 """Scheduled platform monitoring: crawl public pages, refresh knowledge.
 
-Runs periodically in the worker. It only *observes*: public pages are crawled,
-source documents are refreshed, and knowledge snapshots are re-extracted when
-documents changed. It never generates content — scenario and video production
-remain explicit, billable, operator-initiated requests. The only spend here is
-the small LLM cost of re-extracting knowledge after real content changes.
+Runs periodically in the worker. It only *observes*: public pages and any
+admin-configured internal/OpenAPI/document sources are crawled, source documents
+are refreshed, and knowledge snapshots are re-extracted when documents changed.
+Extraction is deterministic and makes no model call; scenario and video
+production remain explicit, billable, operator-initiated requests.
 """
 
 from __future__ import annotations
@@ -20,9 +20,23 @@ from app.integrations.providers import ProviderExecutor, ProviderRegistry
 from app.models import BrandPlatformLink, Platform, PlatformKnowledgeSnapshot
 from app.security.crypto import MasterKeyBox
 from app.services.platform_discovery_service import PlatformDiscoveryService
+from app.services.platform_knowledge_extractor import EXTRACTOR_VERSION
 from app.services.platform_knowledge_service import PlatformKnowledgeService
 
 logger = logging.getLogger("app.platform_monitor")
+
+
+def _merge_crawls(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    """Combine counters from several source adapters into one crawl report."""
+    return {
+        "platform_id": first.get("platform_id", second.get("platform_id")),
+        "mode": "combined",
+        "scanned": int(first.get("scanned") or 0) + int(second.get("scanned") or 0),
+        "created": int(first.get("created") or 0) + int(second.get("created") or 0),
+        "changed": int(first.get("changed") or 0) + int(second.get("changed") or 0),
+        "unchanged": int(first.get("unchanged") or 0) + int(second.get("unchanged") or 0),
+        "warnings": list(first.get("warnings") or []) + list(second.get("warnings") or []),
+    }
 
 
 class PlatformMonitorService:
@@ -38,10 +52,13 @@ class PlatformMonitorService:
         self.executor = executor
         self._keys = master_key_box
 
-    async def run_cycle(self) -> list[dict[str, Any]]:
+    async def run_cycle(self, *, company_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
         """Monitor every active platform once; one failure never stops the rest."""
+        query = select(Platform.id).where(Platform.status == "active")
+        if company_id is not None:
+            query = query.where(Platform.company_id == company_id)
         platform_ids = list((await self.session.scalars(
-            select(Platform.id).where(Platform.status == "active").order_by(Platform.created_at)
+            query.order_by(Platform.created_at)
         )).all())
         results: list[dict[str, Any]] = []
         for platform_id in platform_ids:
@@ -66,6 +83,32 @@ class PlatformMonitorService:
                 })
         return results
 
+    async def monitor_company(
+        self, company_id: uuid.UUID, *, connection_id: uuid.UUID | None = None
+    ) -> dict[str, Any]:
+        """Refresh every active platform of one company (automatic content sweep)."""
+        results = await self.run_cycle(company_id=company_id)
+        snapshots = [
+            item for item in results if item.get("status") == "ok"
+        ]
+        unchanged = [
+            item for item in results
+            if item.get("status") == "skipped" and item.get("detail") == "documents unchanged"
+        ]
+        if any(item.get("status") == "error" for item in results):
+            status = "partial_failure"
+        elif results:
+            status = "completed"
+        else:
+            status = "no_active_platforms"
+        return {
+            "company_id": str(company_id),
+            "status": status,
+            "platforms": results,
+            "refreshed_count": len(snapshots),
+            "unchanged_count": len(unchanged),
+        }
+
     async def monitor_platform(
         self, platform: Platform, *, connection_id: uuid.UUID | None = None
     ) -> dict[str, Any]:
@@ -74,29 +117,45 @@ class PlatformMonitorService:
             "platform_id": str(platform.id),
             "platform": platform.slug,
         }
-        if not platform.base_url:
-            return {**base, "status": "skipped", "detail": "no base_url configured"}
+        discovery = PlatformDiscoveryService(self.session)
+        sources = (platform.configuration or {}).get("knowledge_sources") or {}
+        if not isinstance(sources, dict):
+            sources = {}
 
-        crawl = await PlatformDiscoveryService(self.session).discover(platform, mode="public")
+        crawl: dict[str, Any] | None = None
+        if platform.base_url:
+            crawl = await discovery.discover(platform, mode="public")
+        else:
+            crawl = {
+                "scanned": 0, "created": 0, "changed": 0, "unchanged": 0, "warnings": []
+            }
 
-        has_snapshot = (await self.session.scalar(
-            select(PlatformKnowledgeSnapshot.id).where(
+        if sources.get("internal_url"):
+            internal = await discovery.discover(platform, mode="internal")
+            crawl = _merge_crawls(crawl, internal)
+        if sources.get("docs_url"):
+            mode = str(sources.get("docs_mode") or "openapi")
+            if mode not in {"openapi", "document"}:
+                mode = "openapi"
+            document = await discovery.discover(platform, mode=mode)
+            crawl = _merge_crawls(crawl, document)
+
+        latest_snapshot = (await self.session.execute(
+            select(PlatformKnowledgeSnapshot.id, PlatformKnowledgeSnapshot.model)
+            .where(
                 PlatformKnowledgeSnapshot.company_id == platform.company_id,
                 PlatformKnowledgeSnapshot.platform_id == platform.id,
-            ).limit(1)
-        )) is not None
-        if not has_snapshot or crawl["created"] or crawl["changed"]:
-            if connection_id is None:
-                from app.core.config import get_settings
-
-                secret = get_settings().openai_api_key
-                if not secret or not secret.get_secret_value().strip():
-                    return {
-                        **base,
-                        "status": "skipped",
-                        "detail": "OPENAI_API_KEY is not configured",
-                        "documents": crawl,
-                    }
+            )
+            .order_by(PlatformKnowledgeSnapshot.extracted_at.desc())
+            .limit(1)
+        )).first()
+        # A snapshot produced by the retired LLM extractor must be replaced on
+        # the next sweep, even when no source page changed. This migrates every
+        # platform to the deterministic producer without any model call.
+        legacy_snapshot = (
+            latest_snapshot is not None and latest_snapshot.model != EXTRACTOR_VERSION
+        )
+        if latest_snapshot is None or legacy_snapshot or crawl["created"] or crawl["changed"]:
             snapshot = await PlatformKnowledgeService(
                 self.session, self.registry, self.executor, self._keys
             ).extract(platform=platform, connection_id=connection_id)
@@ -105,6 +164,7 @@ class PlatformMonitorService:
                 "status": "ok",
                 "documents": crawl,
                 "snapshot_id": str(snapshot.id),
+                **({"detail": "legacy LLM snapshot migrated"} if legacy_snapshot else {}),
             }
         return {**base, "status": "skipped", "detail": "documents unchanged", "documents": crawl}
 

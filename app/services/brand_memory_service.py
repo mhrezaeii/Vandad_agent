@@ -265,13 +265,8 @@ class BrandMemoryService:
         source_url: str | None = None,
         connection_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
-        if (
-            self.content_service is None
-            or self.registry is None
-            or self.executor is None
-            or self.master_key_box is None
-        ):
-            raise RuntimeError("Brand memory refresh requires provider dependencies.")
+        if self.content_service is None:
+            raise RuntimeError("Brand memory refresh requires a content service.")
 
         brand = await self.content_service.get_brand(brand_id, company_id=company_id)
         if brand.status != "active":

@@ -6,9 +6,11 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 
 from app.integrations.platform_discovery import DiscoveredPage, DiscoveryResult
-from app.models import Platform
+from app.models import Platform, PlatformKnowledgeSnapshot
+from app.services.platform_knowledge_extractor import EXTRACTOR_VERSION
 from app.services.platform_monitor_service import PlatformMonitorService
 from tests.test_worker_hardening import _keybox
 
@@ -46,16 +48,12 @@ async def _make_platform(db_session, company_id) -> Platform:
     return platform
 
 
-async def test_monitor_skips_when_no_llm_connection(
+async def test_monitor_extracts_without_llm_connection(
     db_session, monitor, company_and_platform, monkeypatch
 ):
+    """Monitoring is fully deterministic and never needs an OpenAI key."""
     company, _platform_row = company_and_platform
     platform = await _make_platform(db_session, company.id)
-    from app.core.config import Settings
-
-    monkeypatch.setattr(
-        "app.core.config.get_settings", lambda: Settings(openai_api_key=None, _env_file=None)
-    )
 
     async def fake_crawl(self, base_url, *, max_pages=25):
         return DiscoveryResult(
@@ -69,8 +67,8 @@ async def test_monitor_skips_when_no_llm_connection(
     )
 
     result = await monitor.monitor_platform(platform)
-    assert result["status"] == "skipped"
-    assert result["detail"] == "OPENAI_API_KEY is not configured"
+    assert result["status"] == "ok"
+    assert result["snapshot_id"]
 
 
 async def test_monitor_skips_unchanged_documents(
@@ -78,11 +76,6 @@ async def test_monitor_skips_unchanged_documents(
 ):
     company, _platform_row = company_and_platform
     platform = await _make_platform(db_session, company.id)
-    from app.core.config import Settings
-
-    monkeypatch.setattr(
-        "app.core.config.get_settings", lambda: Settings(openai_api_key=None, _env_file=None)
-    )
 
     async def fake_crawl(self, base_url, *, max_pages=25):
         return DiscoveryResult(
@@ -95,10 +88,10 @@ async def test_monitor_skips_unchanged_documents(
         fake_crawl,
     )
 
-    # First pass discovers documents (no LLM connection → knowledge skipped,
-    # but the documents persist). Second pass sees no created/changed pages.
+    # First pass discovers documents and extracts a knowledge snapshot.
+    # Second pass sees no created/changed pages and skips re-extraction.
     first = await monitor.monitor_platform(platform)
-    assert first["status"] == "skipped"
+    assert first["status"] == "ok"
 
     from app.models import PlatformKnowledgeSnapshot
 
@@ -108,6 +101,7 @@ async def test_monitor_skips_unchanged_documents(
         source_document_ids=[],
         source_fingerprint="seed",
         knowledge_json={},
+        model=EXTRACTOR_VERSION,
         extracted_at=datetime.now(UTC),
     ))
     await db_session.commit()
@@ -115,3 +109,40 @@ async def test_monitor_skips_unchanged_documents(
     second = await monitor.monitor_platform(platform)
     assert second["status"] == "skipped"
     assert second["detail"] == "documents unchanged"
+
+
+async def test_legacy_llm_snapshot_is_migrated_without_source_changes(
+    db_session, monitor, company_and_platform, monkeypatch
+):
+    """The first sweep after deployment replaces retired LLM snapshots."""
+    company, _platform_row = company_and_platform
+    platform = await _make_platform(db_session, company.id)
+
+    async def fake_crawl(self, base_url, *, max_pages=25):
+        return DiscoveryResult(pages=[], warnings=[])
+
+    monkeypatch.setattr(
+        "app.integrations.platform_discovery.public_sources.PublicSourceCrawler.crawl",
+        fake_crawl,
+    )
+    db_session.add(PlatformKnowledgeSnapshot(
+        company_id=company.id,
+        platform_id=platform.id,
+        source_document_ids=[],
+        source_fingerprint="legacy",
+        knowledge_json={"summary": "old"},
+        model="gpt-6-luna",
+        extracted_at=datetime.now(UTC),
+    ))
+    await db_session.commit()
+
+    result = await monitor.monitor_platform(platform)
+
+    assert result["status"] == "ok"
+    assert result["detail"] == "legacy LLM snapshot migrated"
+    latest = (await db_session.scalars(
+        select(PlatformKnowledgeSnapshot)
+        .where(PlatformKnowledgeSnapshot.platform_id == platform.id)
+        .order_by(PlatformKnowledgeSnapshot.extracted_at.desc())
+    )).first()
+    assert latest.model == EXTRACTOR_VERSION

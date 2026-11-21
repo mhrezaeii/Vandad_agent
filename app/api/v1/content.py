@@ -242,6 +242,35 @@ async def refresh_brand_memory(
     return BrandMemoryRefreshRead.model_validate(result)
 
 
+@router.post("/companies/{company_id}/refresh")
+async def refresh_company_knowledge(
+    company_id: uuid.UUID,
+    request: Request,
+    scope: Annotated[CompanyScope, Depends(company_scope)],
+) -> dict:
+    """Refresh knowledge for every active platform of one company.
+
+    This is the automatic company-wide sweep: no LLM, no provider connection and
+    no per-brand action are required. Brand memory is composed from the refreshed
+    snapshots on the next read.
+    """
+    if company_id != scope.company_id:
+        raise NotFoundError("Company not found.")
+    async with request.app.state.session_factory() as session:
+        try:
+            result = await PlatformMonitorService(
+                session,
+                request.app.state.provider_registry,
+                request.app.state.provider_executor,
+                request.app.state.master_key_box,
+            ).monitor_company(scope.company_id)
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
 @router.post("/projects", response_model=ContentProjectRead, status_code=201)
 async def create_project(
     payload: ContentProjectCreate,

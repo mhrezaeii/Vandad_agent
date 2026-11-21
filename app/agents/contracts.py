@@ -25,12 +25,12 @@ class PlatformDiscoverInput(_CapabilityInput):
 
 class PlatformKnowledgeInput(_CapabilityInput):
     platform_id: uuid.UUID
-    connection_id: uuid.UUID
+    connection_id: uuid.UUID | None = None
     max_documents: int = Field(default=20, ge=1, le=20)
 
 
 class PlatformMonitorInput(PlatformDiscoverInput):
-    connection_id: uuid.UUID
+    connection_id: uuid.UUID | None = None
     max_documents: int = Field(default=20, ge=1, le=20)
 
 
