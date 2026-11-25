@@ -401,15 +401,28 @@ def test_review_scenario_flags_duplicate_scenes():
     assert any("duplicate" in issue for issue in issues)
 
 
-def test_review_scenario_requires_last_scene_to_introduce_the_platform():
+def test_review_scenario_requires_product_demo_finale():
     from app.services.scenario_review import review_scenario
 
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
     raw["scenes"][-1]["scene_type"] = "b_roll"
-    raw["scenes"][-1]["narration"] = "رِوایت فارِسی صَحنه 2"
     issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
     assert any("last scene" in issue for issue in issues)
+
+
+def test_review_scenario_accepts_natural_finale_without_fixed_noun_whitelist():
+    """Natural Persian wording must pass; no magic 'پلتفرم/سامانه' token is required."""
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][-1]["scene_type"] = "product_demo"
+    raw["scenes"][-1]["narration"] = (
+        "همه چیز در یک نگاه کنار هم قرار میگیرد و کارها سادهتر پیش میرود."
+    )
+    issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
+    assert not [issue for issue in issues if "last scene" in issue]
 
 
 def test_review_scenario_flags_unvowelized_hard_words_only():

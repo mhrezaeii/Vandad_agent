@@ -40,9 +40,6 @@ FORBIDDEN_CLAIM_PATTERNS: tuple[str, ...] = (
 
 _ARABIC_SCRIPT = re.compile(r"[\u0600-\u06FF]")
 _PERSIAN_WORD_RE = re.compile(r"[\u0600-\u06FF]+")
-_PLATFORM_INTRO_TOKENS = frozenset(
-    {"پلاتفرم", "پلتفرم", "سامانه", "سکو", "سیستم", "سیستمها"}
-)
 
 _DURATION_TOLERANCE_SECONDS = 1.0
 _DUPLICATE_NARRATION_THRESHOLD = 0.7
@@ -149,13 +146,11 @@ def review_scenario(
 
     if len(ordered_scenes) > 1:
         last = ordered_scenes[-1]
+        # The finale must be structured as a product demo, but its wording is not
+        # gated. A fixed whitelist of nouns ("پلتفرم"، "سامانه"، ...) rejected valid
+        # natural narrations in production. CTA repetition is still caught below.
         if last.scene_type != "product_demo":
             issues.append("last scene must introduce the platform with scene_type 'product_demo'.")
-        if not _token_set(last.narration).intersection(_PLATFORM_INTRO_TOKENS):
-            issues.append(
-                "last scene narration must introduce the platform instead of repeating the CTA "
-                "or focusing on one narrow feature."
-            )
 
     # One CTA, at the very end. Nothing may continue after the final beat.
     cta_key = tuple(_spoken_tokens(scenario.cta or ""))
