@@ -284,7 +284,6 @@ class SceneVideoJob(Base, TimestampMixin):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     narration: Mapped[str | None] = mapped_column(Text, nullable=True)
     on_screen_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    subtitle_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3, server_default="3")

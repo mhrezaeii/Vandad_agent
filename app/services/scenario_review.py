@@ -2,10 +2,11 @@
 
 Every generated scenario passes this review before it can reach
 ``script_ready``. The checks are cheap, deterministic, and encode product
-rules only: complete structure, duration sanity, Persian narration, and a
-no-overclaiming policy that mirrors the scenario system prompt. LLM output is
-stochastic, so a review failure must be retryable — the workflow node raises a
-transient error and the engine re-generates the scenario.
+rules only: complete structure, duration and speech budget, Persian narration,
+selective (hard-word-only) diacritics, distinct beats, and a single terminal
+CTA. LLM output is stochastic, so a review failure must be retryable — the
+workflow node raises a transient error and the engine re-generates the
+scenario.
 """
 
 from __future__ import annotations
@@ -14,11 +15,15 @@ import re
 
 from app.schemas.scenario import (
     _DIACRITICS_RE,
+    MAX_NARRATION_WORDS_PER_MINUTE,
     MAX_SCENE_DURATION_SECONDS,
     MIN_SCENE_DURATION_SECONDS,
     Scenario,
     _spoken_tokens,
+    hard_pronunciation_fixes,
+    max_spoken_words,
 )
+from app.services.scene_novelty import normalize_visual_signature
 
 # Unverifiable or absolute claims are forbidden by the scenario system prompt;
 # the review enforces the same policy on the produced text.
@@ -41,22 +46,13 @@ _PLATFORM_INTRO_TOKENS = frozenset(
 )
 
 _DURATION_TOLERANCE_SECONDS = 1.0
-_DUPLICATE_NARRATION_THRESHOLD = 0.8
-_DUPLICATE_VISUAL_THRESHOLD = 0.85
-_MIN_DIACRITIC_RATIO = 0.5
-
-
-def _diacritic_ratio(value: str) -> tuple[float, list[str]]:
-    """Return the vowelized share of multi-letter Persian words plus the missing ones."""
-    words = [
-        word
-        for word in _PERSIAN_WORD_RE.findall(value or "")
-        if len(word) >= 3
-    ]
-    if not words:
-        return 1.0, []
-    missing = [word for word in words if not _DIACRITICS_RE.search(word)]
-    return (len(words) - len(missing)) / len(words), missing
+_DUPLICATE_NARRATION_THRESHOLD = 0.7
+_DUPLICATE_VISUAL_THRESHOLD = 0.8
+_CTA_OVERLAP_THRESHOLD = 0.6
+_WORD_BUDGET_GRACE = 1
+# A short script leaves silent time that the video model fills with repeated
+# lines or improvised scenes. Require most of the measured per-second budget.
+_MIN_WORD_BUDGET_RATIO = 0.85
 
 
 def _token_set(value: str) -> set[str]:
@@ -70,8 +66,41 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(left | right)
 
 
+def _visual_key(value: str) -> set[str]:
+    return set(_spoken_tokens(normalize_visual_signature(value)))
+
+
+def _missing_hard_word_diacritics(value: str, fixes: dict[str, str]) -> list[str]:
+    """Hard words present in the text but still missing pronunciation marks."""
+    missing: set[str] = set()
+    for word in _PERSIAN_WORD_RE.findall(value or ""):
+        if _DIACRITICS_RE.search(word):
+            continue
+        for plain in fixes:
+            if word == plain or word.startswith(plain):
+                missing.add(plain)
+    return sorted(missing)
+
+
+def _mentions_cta(value: str, cta_key: tuple[str, ...]) -> bool:
+    """Detect a spoken CTA, including a partial overlap with the closing line."""
+    tokens = tuple(_spoken_tokens(value))
+    if not tokens or not cta_key:
+        return False
+    width = len(cta_key)
+    if width <= len(tokens):
+        for index in range(len(tokens) - width + 1):
+            if tokens[index : index + width] == cta_key:
+                return True
+    return _jaccard(set(tokens), set(cta_key)) >= _CTA_OVERLAP_THRESHOLD
+
+
 def review_scenario(
-    scenario: Scenario, *, target_duration_seconds: int, language: str = "fa"
+    scenario: Scenario,
+    *,
+    target_duration_seconds: int | float,
+    language: str = "fa",
+    pronunciation_lexicon: dict[str, str] | None = None,
 ) -> list[str]:
     """Return the review issues; an empty list means the scenario passes."""
     issues: list[str] = []
@@ -118,7 +147,7 @@ def review_scenario(
             if _jaccard(_token_set(first.narration), _token_set(second.narration)) >= _DUPLICATE_NARRATION_THRESHOLD:
                 issues.append(f"{pair}: duplicate or near-duplicate narration.")
             visual_overlap = _jaccard(
-                _token_set(first.visual_prompt), _token_set(second.visual_prompt)
+                _visual_key(first.visual_prompt), _visual_key(second.visual_prompt)
             )
             if visual_overlap >= _DUPLICATE_VISUAL_THRESHOLD:
                 issues.append(f"{pair}: duplicate or near-duplicate visual_prompt.")
@@ -133,12 +162,73 @@ def review_scenario(
                 "or focusing on one narrow feature."
             )
 
+    # Calm delivery: a beat must not contain more words than can be spoken at
+    # the approved pace. Otherwise the video model rushes and improvises a new
+    # line after the script ends.
+    if target_duration_seconds:
+        total_words = len(_spoken_tokens(scenario.narration))
+        total_limit = max_spoken_words(float(target_duration_seconds))
+        total_minimum = max(1, round(total_limit * _MIN_WORD_BUDGET_RATIO))
+        if total_words > total_limit + _WORD_BUDGET_GRACE:
+            issues.append(
+                f"narration has {total_words} words for {target_duration_seconds}s; "
+                f"maximum is {total_limit} at the measured "
+                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
+            )
+        elif total_words < total_minimum:
+            issues.append(
+                f"narration has only {total_words} words for {target_duration_seconds}s; "
+                f"at least {total_minimum} are needed at the measured "
+                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate, otherwise the model "
+                "fills the silence with repeated scenes."
+            )
+    for scene in ordered_scenes:
+        words = len(_spoken_tokens(scene.narration))
+        limit = max_spoken_words(scene.duration_seconds)
+        minimum = max(1, round(limit * _MIN_WORD_BUDGET_RATIO))
+        wpm = round(words / scene.duration_seconds * 60) if scene.duration_seconds else 0
+        if words > limit + _WORD_BUDGET_GRACE:
+            issues.append(
+                f"scene {scene.index + 1} narration is ~{wpm} wpm, above the "
+                f"measured {MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
+            )
+        elif words < minimum:
+            issues.append(
+                f"scene {scene.index + 1} narration has only {words} words for "
+                f"{scene.duration_seconds:g}s; at least {minimum} are needed to "
+                "prevent the model from improvising a repeated scene."
+            )
+
+    # One CTA, at the very end. Nothing may continue after the final beat.
+    cta_key = tuple(_spoken_tokens(scenario.cta or ""))
+    if len(ordered_scenes) > 1:
+        for scene in ordered_scenes:
+            if scene.scene_type == "cta":
+                issues.append(
+                    f"scene {scene.index + 1}: scene_type 'cta' is not allowed in a "
+                    "multi-scene storyboard; the CTA belongs only in the cta field."
+                )
+        for position, scene in enumerate(ordered_scenes):
+            if _mentions_cta(scene.narration, cta_key):
+                issues.append(
+                    f"scene {scene.index + 1} repeats the CTA; it must be spoken once at the end."
+                )
+                if position < len(ordered_scenes) - 1:
+                    issues.append("continuation after the final CTA beat is not allowed.")
+    if ordered_scenes:
+        joined = tuple(_spoken_tokens(" ".join(scene.narration for scene in ordered_scenes)))
+        full = tuple(_spoken_tokens(scenario.narration))
+        if full and joined and full != joined:
+            issues.append(
+                "scenario narration must contain exactly the ordered scene narrations; "
+                "no extra speech after the final beat."
+            )
+
     if language.split("-", 1)[0].strip().lower() == "fa":
-        # Every spoken or written Persian surface must really be Persian: the
-        # title, the complete narration, the CTA (spoken in single-shot mode)
-        # value here means the scenario prompt failed and must be regenerated,
-        # never silently submitted to a paid video provider. Brand languages are
-        # stored as "fa-IR", so match the language subtag, not the exact string.
+        # Every spoken or written Persian surface must really be Persian. A
+        # failure here means the scenario prompt failed and must be regenerated,
+        # never silently submitted to a paid video provider. Brand languages
+        # are stored as "fa-IR", so match the language subtag.
         persian_targets: list[tuple[str, str]] = [
             ("title", scenario.title),
             ("narration", scenario.narration),
@@ -158,19 +248,23 @@ def review_scenario(
             if text.strip() and not _ARABIC_SCRIPT.search(text):
                 issues.append(f"{label} must be Persian but has no Persian characters.")
 
+        # Diacritics are a pronunciation aid for hard/brand words only. Ordinary
+        # words must stay unvowelized, so the gate checks required marks rather
+        # than a global vowelized-word ratio.
+        fixes = hard_pronunciation_fixes(pronunciation_lexicon)
         diacritic_targets: list[tuple[str, str]] = [
             ("opening_hook", scenario.opening_hook),
+            ("narration", scenario.narration),
             ("cta", scenario.cta or ""),
         ]
         for scene in scenario.scenes:
             diacritic_targets.append((f"scene {scene.index + 1} narration", scene.narration))
         for label, text in diacritic_targets:
-            ratio, missing = _diacritic_ratio(text)
-            if ratio < _MIN_DIACRITIC_RATIO:
-                sample = "، ".join(missing[:6]) or "هیچ کلمه اعرابداری یافت نشد"
+            missing = _missing_hard_word_diacritics(text, fixes)
+            if missing:
                 issues.append(
-                    f"{label}: Persian words are insufficiently diacritized "
-                    f"({ratio:.0%}); examples: {sample}."
+                    f"{label}: hard-to-pronounce words need diacritics: "
+                    f"{', '.join(missing[:6])}."
                 )
 
     return issues

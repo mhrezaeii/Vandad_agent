@@ -30,6 +30,18 @@ MIN_SCENE_DURATION_SECONDS = 1.0
 MAX_SCENE_DURATION_SECONDS = 20.0
 MIN_TARGET_DURATION_SECONDS = 5
 MAX_TARGET_DURATION_SECONDS = 120
+# Measured from two live paid KIE image-to-video probes on 2026-11-25 with an
+# explicit 30-second duration: 132 and 99 spoken words, average ~116 per 30s
+# (232 wpm). A shorter script leaves the model silent time, which it fills by
+# repeating lines and improvising new scenes. The scenario writer must supply
+# words at this measured average, not at a slower "calm" rate of its own choosing.
+KIE_WORDS_PER_30_SECONDS = 116
+MAX_NARRATION_WORDS_PER_MINUTE = KIE_WORDS_PER_30_SECONDS * 2
+
+
+def max_spoken_words(seconds: float, *, wpm: int = MAX_NARRATION_WORDS_PER_MINUTE) -> int:
+    """Word budget for a beat at KIE's measured spoken-word rate."""
+    return max(1, round(float(seconds) * wpm / 60))
 
 
 def expected_scene_count(target_duration_seconds: float) -> int:
@@ -86,6 +98,34 @@ class ScenarioRequest(BaseModel):
 
 
 _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+
+# Only these hard-to-pronounce words receive diacritics. Ordinary Persian
+# words stay unvowelized; over-vowelized speech makes the video model stumble.
+HARD_PRONUNCIATION_FIXES: dict[str, str] = {
+    "وندیار": "وَندیار",
+    "ونداد": "وَنَداد",
+    "سیستم": "سیستِم",
+    "پروژه": "پِروژه",
+    "مدیریت": "مُدیریّت",
+    "معرفی": "مُعَرَّفی",
+    "گوناگون": "گُونَاگون",
+    "پایش": "پایِش",
+    "منابع": "مَنابِع",
+    "عاملی": "عامِلی",
+}
+
+
+def hard_pronunciation_fixes(
+    lexicon: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Merge the base hard-word map with the brand pronunciation lexicon."""
+    merged = dict(HARD_PRONUNCIATION_FIXES)
+    for key, spoken in (lexicon or {}).items():
+        base = _DIACRITICS_RE.sub("", str(key).strip())
+        value = str(spoken).strip()
+        if base and value:
+            merged[base] = value
+    return merged
 
 
 def _spoken_tokens(value: str) -> list[str]:

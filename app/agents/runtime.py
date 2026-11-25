@@ -355,6 +355,7 @@ class ContentAgentHandler:
         # Phase A: resolve the brand, detect a retry, and guarantee a source.
         brand_language = "fa-IR"
         brand_name = ""
+        brand_pronunciation_lexicon: dict[str, str] = {}
         project_id: uuid.UUID | None = None
         needs_scenario = True
         async with context.session_factory() as session:
@@ -364,6 +365,11 @@ class ContentAgentHandler:
                 raise ConflictError("The selected brand is not active.")
             brand_language = brand.language
             brand_name = brand.display_name or brand.name
+            raw_lexicon = (brand.visual_config or {}).get("pronunciation_lexicon")
+            if isinstance(raw_lexicon, dict):
+                brand_pronunciation_lexicon = {
+                    str(key): str(value) for key, value in raw_lexicon.items()
+                }
             existing = await self._find_project_for_task(session, company_id, task_id)
             if existing is not None:
                 project_id = existing.id
@@ -506,7 +512,9 @@ class ContentAgentHandler:
                     project = await session.get(ContentProject, project_id)
                     if project is None:
                         raise NotFoundError("Content project not found for this company.")
-                    issues = self._review_project(project, brand_language)
+                    issues = self._review_project(
+                        project, brand_language, brand_pronunciation_lexicon
+                    )
                     if not issues:
                         project_status = project.status
                         project_scenario = project.scenario
@@ -543,7 +551,9 @@ class ContentAgentHandler:
                 project = await session.get(ContentProject, project_id)
                 if project is None:
                     raise NotFoundError("Content project not found for this company.")
-                issues = self._review_project(project, brand_language)
+                issues = self._review_project(
+                    project, brand_language, brand_pronunciation_lexicon
+                )
                 if issues:
                     raise ConflictError(
                         "Scenario quality review failed: " + "; ".join(issues[:5])
@@ -763,7 +773,11 @@ class ContentAgentHandler:
         await ensure_brand_source(session, service, brand, source_url, company_id)
 
     @staticmethod
-    def _review_project(project, language: str) -> list[str]:  # noqa: ANN001
+    def _review_project(  # noqa: ANN001
+        project,
+        language: str,
+        pronunciation_lexicon: dict[str, str] | None = None,
+    ) -> list[str]:
         from app.schemas.scenario import Scenario
         from app.services.scenario_review import review_scenario
 
@@ -776,7 +790,10 @@ class ContentAgentHandler:
         options = project.scene_options or {}
         target = int(options.get("target_duration_seconds") or scenario.target_duration_seconds)
         return review_scenario(
-            scenario, target_duration_seconds=target, language=language
+            scenario,
+            target_duration_seconds=target,
+            language=language,
+            pronunciation_lexicon=pronunciation_lexicon,
         )
 
     @staticmethod

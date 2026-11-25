@@ -104,6 +104,7 @@ def test_kie_settings_documented_in_env_example_load_into_settings(monkeypatch):
     assert settings.scene_video_kie_model == "grok-imagine/image-to-video"
     assert settings.scene_video_kie_resolution == "480p"
     assert settings.scene_video_kie_mode == "normal"
+    assert settings.scene_video_kie_send_duration is True
     assert settings.scene_video_generation_mode == "single_shot"
     assert settings.platform_characters_root == "assets/Paltform_charactar"
     assert settings.scene_video_daily_quota is None
@@ -128,6 +129,16 @@ def test_kie_single_shot_settings_build_the_documented_provider():
     assert provider.supports_reference_image is True
     assert provider.min_duration_seconds == 6
     assert provider.max_duration_seconds == 30
+    assert provider.duration_is_model_controlled is False
+
+    explicit_duration = Settings(
+        scene_video_provider="kie",
+        scene_video_kie_api_key="test-key",
+        scene_video_kie_send_duration=True,
+        _env_file=None,
+    )
+    explicit_duration_provider = build_video_registry_from_settings(explicit_duration).get("kie")
+    assert explicit_duration_provider.duration_is_model_controlled is False
 
     legacy = Settings(
         scene_video_provider="kie",

@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     scene_video_kie_resolution: Literal["480p", "720p", "1080p"] = "480p"
     scene_video_kie_aspect_ratio: str = "9:16"
     scene_video_kie_mode: Literal["normal", "fun"] = "normal"
+    # Live paid probes showed that prompt-only timing is not honoured: a prompt
+    # asking for 30 seconds still produced a 6.04 s clip. Send the documented
+    # explicit duration/resolution/mode by default. Set false only to experiment
+    # with model-controlled timing; that path is known to ignore the prompt.
+    scene_video_kie_send_duration: bool = True
     scene_video_kie_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     scene_video_kie_price_per_credit_usd: float = Field(default=0.005, gt=0, le=1)
     scene_video_kie_download_allowed_hosts: str = ""

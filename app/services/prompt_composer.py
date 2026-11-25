@@ -8,14 +8,15 @@ the closing call to action.
 Composition rules:
 
 - Persian narration is embedded verbatim (never paraphrased, translated or
-  truncated) and the model is instructed to speak it slowly and exactly.
-- On-screen text and CTA stay verbatim; on-screen text is visual only and is
-  never read aloud by the voice-over.
+  truncated) and the model is instructed to speak it at the measured pace and
+  exactly once, without improvising extra lines.
+- The closing CTA stays verbatim and is appended only once, after the last beat.
+- No captions, subtitles or other text may be rendered anywhere in the video.
 - Visual/camera directions may remain English for better visual adherence.
 - Character-identity instructions keep one consistent character throughout.
 - If the full prompt does not fit, the composer deterministically removes only
   optional guidance (shorter rules, then camera directions, then visual text).
-  Narration, on-screen text and CTA are never shortened, reordered or omitted.
+  Narration and CTA are never shortened, reordered or omitted.
   It fails with :class:`PromptCompositionError` only when even that tightest
   prompt cannot fit.
 """
@@ -44,13 +45,18 @@ _GOAL_FULL = (
     "GOAL: Generate ONE continuous vertical brand film as a single video. "
     "The storyboard below describes the beginning, middle and ending; play "
     "all beats in order with coherent camera work, consistent lighting and "
-    "smooth transitions."
+    "smooth transitions. Stop immediately after the final beat and the single "
+    "ending CTA; do not add a new scene, sentence or repeated line afterwards."
 )
 _GOAL_COMPACT = (
     "GOAL: Generate ONE continuous vertical brand film. Play all storyboard "
-    "beats in order with coherent camera work, lighting and smooth transitions."
+    "beats in order with coherent camera work, lighting and smooth transitions. "
+    "Stop after the final beat; no continuation after the ending CTA."
 )
-_GOAL_MINIMAL = "GOAL: ONE continuous vertical brand film; all beats in order."
+_GOAL_MINIMAL = (
+    "GOAL: ONE continuous vertical brand film; all beats in order; stop after "
+    "the final beat, no continuation."
+)
 
 _REFERENCE_FULL = (
     "REFERENCE IMAGE (immutable source, mandatory): Use the exact attached "
@@ -81,55 +87,52 @@ _CHARACTER_COMPACT = (
 )
 
 _SPEECH_FULL = (
-    "SPEECH (mandatory): Use a calm, unhurried Iranian Persian (Farsi) voice at a "
-    "deliberately slow, measured pace (about 90 words per minute), clearly slower "
-    "than normal conversational speed, with gentle pauses between sentences and "
-    "even intonation. Do NOT rush, speed up or compress the narration to match the "
-    "cuts; hold a frame or extend a beat instead. Do NOT speak English except brand "
-    "names or acronyms that appear verbatim in the provided text. Read ONLY the "
-    "NARRATION and ENDING CTA lines below, word for word, exactly as written and in "
-    "order, synchronised with the matching visual beat and with no added or repeated "
-    "words. Do NOT read the ON-SCREEN TEXT lines aloud; add no words and repeat "
-    "nothing. Do NOT translate, paraphrase, shorten or omit any spoken line, and do "
-    "not add any other speech."
+    "SPEECH (mandatory): Use a natural Iranian Persian (Farsi) voice at the "
+    "provider's measured delivery pace (about 116 words per 30 seconds). The script "
+    "below is already sized to that rate: read ONLY the NARRATION and ENDING CTA "
+    "lines, word for word, exactly as written and in order, synchronised with the "
+    "matching visual beat and with no added or repeated words. Do NOT slow down "
+    "artificially, rush or compress the narration to match the cuts. If a line ends "
+    "early, hold the frame silently instead of speaking again. Do NOT speak English "
+    "except brand names or acronyms that appear verbatim in the provided text. "
+    "Stop speaking when the final line ends: add no words, no extra sentence and no "
+    "repeated CTA after it. Do NOT translate, paraphrase, shorten or omit any spoken "
+    "line, and do not add any other speech."
 )
 _SPEECH_COMPACT = (
-    "SPEECH (mandatory): Calm Iranian Persian (Farsi), deliberately slow (about 90 "
-    "words per minute) with gentle pauses. Never rush or speed up for the cuts; "
-    "hold frames instead. Read ONLY the NARRATION/CTA lines below, word for word, "
-    "exactly as written and in order. Do NOT translate, paraphrase, shorten, omit "
-    "or repeat; never read ON-SCREEN TEXT aloud; add no other speech."
+    "SPEECH (mandatory): Natural Iranian Persian (Farsi) at the measured pace "
+    "(about 116 words per 30 seconds); the script is sized to it. Read ONLY the "
+    "NARRATION/CTA lines below, word for word, exactly as written and in order. "
+    "Do NOT slow down, rush, translate, paraphrase, shorten, omit or repeat. If the "
+    "line ends early, hold the frame silently; add no other speech."
 )
 _SPEECH_MINIMAL = (
-    "SPEECH: Slow, calm Iranian Persian (Farsi, about 90 words per minute). Never "
-    "rush for cuts. Read ONLY NARRATION/CTA lines below, word for word, exactly as "
-    "written and in order. Do NOT translate, paraphrase, shorten, omit or repeat; "
-    "never read ON-SCREEN TEXT aloud; add no other speech."
+    "SPEECH: Natural Iranian Persian (Farsi), measured pace (~116 words/30s). "
+    "Read ONLY NARRATION/CTA lines below, word for word, exactly as written and in "
+    "order. No slowing, rushing, translating, paraphrasing, shortening, omitting or "
+    "repeating; hold the frame silently if early, add no extra speech."
 )
 
 _ON_SCREEN_FULL = (
-    "ON-SCREEN TEXT (mandatory): Render each provided Persian on-screen text "
-    "exactly as written, right-to-left, using a clean bold Persian font. "
-    "Do not add any other readable text, labels, captions or watermarks. "
-    "On-screen text is visual only and is never spoken."
+    "NO ON-SCREEN TEXT (mandatory): Do not render any text, caption, subtitle, "
+    "label, watermark, logo or generated lettering in any frame. Keep the frame "
+    "text-free even when the product UI is visible."
 )
 _ON_SCREEN_COMPACT = (
-    "ON-SCREEN TEXT: Render the Persian text exactly, right-to-left, in a clean "
-    "bold font. Add no other readable text or watermark; never speak it."
+    "NO ON-SCREEN TEXT: Render no text, captions, subtitles, labels, watermarks "
+    "or logos in any frame."
 )
-_ON_SCREEN_MINIMAL = (
-    "ON-SCREEN: Persian text exactly, right-to-left; no other readable text; never spoken."
-)
+_ON_SCREEN_MINIMAL = "NO TEXT: no captions, subtitles, labels, watermarks or logos."
 
 _TIMING_FULL = (
     "TIMING (mandatory): Every beat below has an explicit duration; pace the "
     "cuts so the beats play in order for the stated durations and the total "
-    "matches the requested video length. Slow, exact speech takes priority over "
-    "cut timing; hold frames rather than speeding up the voice."
+    "matches the requested video length. Complete, verbatim speech takes priority "
+    "over cut timing: hold a frame if needed, never speed up or add words."
 )
 _TIMING_COMPACT = (
     "TIMING (mandatory): Beats play in order at the stated durations; the total "
-    "matches the video length. Never shorten speech to fit the timing."
+    "matches the video length. Never shorten or extend speech to fit the timing."
 )
 _TIMING_MINIMAL = "TIMING: Beats in order at stated durations; total matches video length."
 
@@ -273,17 +276,17 @@ def _build_prompt(
         spoken = _spoken_text(scene)
         if spoken:
             label = "NARRATION:" if layout.compact_labels else (
-                "NARRATION (speak exactly, slowly, in Persian):"
+                "NARRATION (speak exactly, at the measured pace, in Persian):"
             )
             lines.append(f"{label} {spoken}")
 
-        if scene.on_screen_text:
-            label = "ON-SCREEN:" if layout.compact_labels else "ON-SCREEN TEXT (Persian, RTL):"
-            lines.append(f"{label} {scene.on_screen_text.strip()}")
-
     cta = _spoken_cta(scenario)
     if cta:
-        label = "CTA:" if layout.compact_labels else "ENDING CTA (speak exactly, slowly, in Persian):"
+        label = (
+            "CTA:"
+            if layout.compact_labels
+            else "ENDING CTA (speak exactly, at the measured pace, in Persian):"
+        )
         lines.append(f"{label} {cta}")
 
     return "\n".join(lines)
@@ -293,11 +296,10 @@ _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
 
 
 def _spoken_text(scene: SceneSpec) -> str:
-    """The fully diacritized narration is authoritative for the video provider.
+    """The selectively diacritized narration is authoritative for the provider.
 
-    The scenario prompt now writes every Persian spoken word with diacritics so
-    the video model reads the intended vowels instead of guessing them. The
-    optional ``pronunciation_text`` field is never sent to the provider.
+    Only hard-to-pronounce/brand words carry marks; ordinary Persian words stay
+    unvowelized. The optional ``pronunciation_text`` field is never sent.
     """
     return scene.narration.strip()
 
@@ -310,14 +312,23 @@ def _spoken_key(value: str) -> tuple[str, ...]:
 
 
 def _spoken_cta(scenario: Scenario) -> str:
-    """Return the closing CTA, unless the last beat already speaks it verbatim."""
+    """Append the CTA once, unless the last beat already speaks it."""
     cta = scenario.cta.strip()
     if not cta or not scenario.scenes:
         return ""
     last_scene = max(scenario.scenes, key=lambda item: item.index)
     cta_key = _spoken_key(cta)
-    if cta_key and cta_key == _spoken_key(last_scene.narration):
+    last_key = _spoken_key(last_scene.narration)
+    if not cta_key or not last_key:
+        return cta
+    if cta_key == last_key:
         return ""
+    # A partial CTA at the end would otherwise be spoken twice.
+    width = len(cta_key)
+    if width <= len(last_key):
+        for index in range(len(last_key) - width + 1):
+            if last_key[index : index + width] == cta_key:
+                return ""
     return cta
 
 

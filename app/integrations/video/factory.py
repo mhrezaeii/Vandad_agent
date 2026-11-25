@@ -39,6 +39,7 @@ def build_video_registry_from_settings(settings: Any) -> SceneVideoProviderRegis
         resolution=getattr(settings, "scene_video_kie_resolution", "480p"),
         aspect_ratio=getattr(settings, "scene_video_kie_aspect_ratio", "9:16"),
         mode=getattr(settings, "scene_video_kie_mode", "normal"),
+        send_duration=bool(getattr(settings, "scene_video_kie_send_duration", False)),
         timeout_seconds=getattr(settings, "scene_video_kie_timeout_seconds", 60.0),
         poll_interval_seconds=getattr(settings, "scene_video_poll_interval_seconds", 3.0),
         max_poll_attempts=getattr(settings, "scene_video_max_poll_attempts", 300),

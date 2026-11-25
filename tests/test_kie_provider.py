@@ -102,6 +102,40 @@ async def test_i2v_submits_documented_model_contract_with_reference_image():
     assert provider.max_reference_images == 1
 
 
+async def test_i2v_model_controlled_duration_omits_optional_payload_fields():
+    payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/character.png") and request.method == "GET":
+            return httpx.Response(200, content=_PNG_1PX, headers={"content-type": "image/png"})
+        if request.url.path.endswith("/chat/credit"):
+            return _credit_ok()
+        if request.url.path.endswith("/jobs/createTask"):
+            body = json.loads(request.content)
+            payloads.append(body)
+            assert set(body) == {"model", "input"}
+            assert body["model"] == I2V_MODEL_ID
+            assert set(body["input"]) == {"prompt", "image_urls"}
+            assert body["input"]["image_urls"] == ["https://assets.example.test/character.png"]
+            return httpx.Response(200, json={"code": 200, "data": {"taskId": "i2v-free-task"}})
+        return httpx.Response(404)
+
+    provider = _provider(handler, send_duration=False)
+    assert provider.duration_is_model_controlled is True
+
+    job_id = await provider.generate_video(
+        _request(20, reference_image_url="https://assets.example.test/character.png")
+    )
+
+    assert job_id == "kie:i2v-free-task"
+    assert len(payloads) == 1
+
+
+async def test_t2v_never_uses_model_controlled_duration():
+    provider = _provider(lambda request: httpx.Response(404), model=T2V_MODEL_ID, send_duration=False)
+    assert provider.duration_is_model_controlled is False
+
+
 async def test_i2v_rejects_missing_reference_image_before_any_paid_call():
     posts = 0
 

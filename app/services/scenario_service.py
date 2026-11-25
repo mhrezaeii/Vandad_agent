@@ -23,16 +23,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.providers import ProviderExecutor, ProviderRegistry
 from app.integrations.providers.base import ProviderError
 from app.schemas.scenario import (
+    _DIACRITICS_RE,
+    KIE_WORDS_PER_30_SECONDS,
+    MAX_NARRATION_WORDS_PER_MINUTE,
     Scenario,
     ScenarioRequest,
     SceneSpec,
+    hard_pronunciation_fixes,
+    max_spoken_words,
     normalize_scenario,
 )
 from app.security.crypto import MasterKeyBox
 from app.services.llm_execution_service import LlmExecutionService
 
 _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
-_PERSIAN_SCRIPT = re.compile(r"[\u0600-\u06FF]")
 
 
 class ScenarioGenerationError(Exception):
@@ -61,6 +65,8 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     platform_knowledge = request.platform_knowledge_context or "No verified platform knowledge snapshot is linked."
     cta_hint = request.cta_text or "یک دعوت به اقدام کوتاه و روشن"
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
+    total_word_budget = max_spoken_words(request.target_duration_seconds)
+    per_scene_word_budget = max_spoken_words(request.target_duration_seconds / scene_count)
     pronunciation_lexicon = (
         json.dumps(request.pronunciation_lexicon, ensure_ascii=False, sort_keys=True)
         if request.pronunciation_lexicon else "بدون واژه‌نامه اختصاصی"
@@ -80,22 +86,26 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "برای هر صحنه scene_type را از problem, product_demo, b_roll, motion_graphic, cta انتخاب کن. "
         "سناریو باید چکیدهای از کل پلتفرم باشد، نه معرفی یک قابلیت یا یک تکه از پلتفرم: "
         "نمای کلی، مهمترین قابلیتهای مستند و دعوت به اقدام را در یک مسیر کوتاه بگنجان. "
-        "تمام کلمات فارسی را با اعراب کامل بنویس تا مدل ویدیو تلفظ را اشتباه نخواند؛ "
-        "اعرابگذاری فقط علامت‌های تلفظ است و هیچ واژه‌ای را عوض نمی کند. "
+        "فقط واژههای دشوار تلفظ را اعرابگذاری کن: نام برند، واژههای عاریتی و تخصصی، "
+        "و مواردی که در واژهنامه تلفظ آمدهاند. کلمات عادی فارسی را بدون اعراب بنویس و "
+        "از اعرابگذاری همه کلمات پرهیز کن؛ اعراب فقط علامت تلفظ است و واژهای را عوض نمیکند. "
         "هیچ صحنه‌ای نباید تکرار یا نزدیک به تکرار صحنه دیگری باشد: "
         "هر صحنه معنی، تصویر و متن گفتار متفاوتی دارد و پیام قبل را بازنویسی نمی کند. "
         "وقتی بیش از یک صحنه وجود دارد، آخرین صحنه باید معرفی کلی پلتفرم باشد، "
-        "نه تکرار CTA و نه تمرکز روی یک قابلیت تکهای. "
+        "نه تکرار CTA و نه تمرکز روی یک قابلیت تکهای. آخرین صحنه آخرین لحظه ویدیو است؛ "
+        "بعد از آن هیچ جمله، صحنه یا تکراری نیاید و scene_type=cta ممنوع است. "
         "هیچ واژه‌ای را اضافه، حذف، ترجمه، بازنویسی یا جابه جا نکن. "
         "از ترجمه ماشینی، جمله‌های طولانی، اغراق و ادعای اثبات‌نشده دوری کن. "
+        f"نرخ گفتار مدل الزامی است: {KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه "
+        f"({MAX_NARRATION_WORDS_PER_MINUTE} واژه در دقیقه)، اندازهگیری شده از خروجی واقعی KIE. "
+        "متن سناریو را دقیقاً با همین نرخ بنویس؛ کمتر نوشتن باعث میشود مدل جای خالی را با "
+        "جمله تکراری یا صحنه جدید پر کند و بیشتر نوشتن باعث تندخوانی میشود. "
+        "جملهها کوتاه باشند، اما شمار واژهها را به نرخ بالا نزدیک نگه دار. "
         "صحنه‌های product_demo باید محصول را در حال استفاده نشان دهند: رابط کاربری، داشبورد، "
         "تعامل کاربر و جریان کار؛ از متن ناخوانا و رابط کاربری ساختگی با قابلیت‌های ادعایی پرهیز کن. "
-        "visual_prompt را انگلیسی، سینمایی و دقیق بنویس؛ narration و on_screen_text فارسی باشند. "
-        "on_screen_text حتی وقتی نام برند یا مخففهایی مثل SIEM/SOAR/EDR را نشان میدهند، "
-        "باید حداقل یک واژه فارسی هم داشته باشد؛ متن صرفاً لاتین ممنوع است. "
-        "برای هر صحنه اندازه نما، حرکت دوربین، نور، ترکیب‌بندی و transition را مشخص کن. "
-        "از متن رندرشده توسط مدل تصویر/ویدیو داخل قاب پرهیز کن؛ متن فارسی را فقط در صورت پشتیبانی "
-        "واقعی و اعلام‌شده Provider از قابلیت‌های خودش درخواست کن. "
+        "هیچ متنی روی تصویر رندر نشود؛ داخل قاب هیچ متن، کپشن، "
+        "زیرنویس، برچسب یا لوگوی رندرشده نخواه. "
+        "on_screen_text را خالی یا null بگذار و هیچ متنی را برای نمایش روی تصویر پیشنهاد نکن. "
         "ریتم تدوین پویا باشد اما کات‌ها بی‌دلیل و آزاردهنده نباشند. "
         "موسیقی را فقط به‌عنوان پیشنهاد سبک توصیف کن و هیچ موسیقی دارای حق نشر را درخواست نکن. "
 
@@ -114,30 +124,36 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
         f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
-        "اعرابگذاری الزامی: تمام کلمات فارسی در narration، cta و opening_hook با اعراب کامل "
-        "(مثلاً «پراکنده» را «پَراکَندَه») نوشته شوند تا تلفظ توسط مدل ویدیو درست خوانده شود. "
-        "واژه‌های واژهنامه را دقیقاً با همان اعراب به کار ببر. "
-        "هیچ صحنه‌ای تکراری یا نزدیک به تکراری نباشد؛ صحنه‌ها معنی، تصویر و گفتار متفاوت داشته باشند. "
-        "آخرین صحنه (وقتی بیش از یک صحنه است) باید معرفی کلی پلتفرم باشد و CTA را تکرار نکند؛ "
-        "CTA فقط یکبار در انتها گفته می شود. "
+        f"بودجه گفتار: حدود {total_word_budget} واژه در کل و {per_scene_word_budget} واژه در هر صحنه، "
+        f"برابر با نرخ اندازهگیری شده {KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه. "
+        "از این شمارش بهطور قابل توجهی کمتر ننویس، چون مدل جای خالی را با تکرار و صحنه اضافی پر میکند؛ "
+        "سرعت خواندن را هم تغییر نده. "
+        "اعرابگذاری فقط برای واژههای دشوار تلفظ، نام برند و موارد واژهنامه است؛ "
+        "کلمات عادی فارسی در narration، cta و opening_hook بدون اعراب بمانند. "
+        "واژههای واژهنامه را دقیقاً با همان اعراب به کار ببر و واژهای را جابهجا نکن. "
+        "هیچ صحنهای تکراری یا نزدیک به تکراری نباشد؛ صحنهها معنی، تصویر و گفتار متفاوت داشته باشند. "
+        "آخرین صحنه (وقتی بیش از یک صحنه است) معرفی کلی پلتفرم و آخرین لحظه ویدیو است؛ "
+        "بعد از CTA هیچ جمله، صحنه یا بخشی جدید نیاید و CTA فقط یکبار در انتها گفته شود. "
+        "scene_type=cta در سناریوهای چندصحنه ممنوع است. "
+        "هیچ متنی روی تصویر رندر نشود؛ on_screen_text را خالی یا null بگذار. "
         "ساختار JSON الزامی:\n"
         "{\n"
         '  "title": "عنوان فارسی",\n'
-        '  "opening_hook": "قلاب کوتاه فارسی با اعراب کامل",\n'
+        '  "opening_hook": "قلاب کوتاه فارسی، بدون اعراب مگر واژههای دشوار",\n'
         '  "visual_style": "consistent cinematic visual style in English",\n'
         '  "scenes": [\n'
         "    {\n"
         '      "index": 0,\n'
         '      "scene_type": "problem|product_demo|b_roll|motion_graphic|cta",\n'
-        '      "narration": "متن اصلی گفتار فارسی با اعراب کامل، بدون تغییر واژه‌ها",\n'
+        '      "narration": "متن اصلی گفتار فارسی، دقیقاً همان واژهها و همان ترتیب",\n'
         '      "visual_prompt": "Detailed English cinematic visual prompt",\n'
         '      "camera_direction": "English camera framing and movement",\n'
         '      "transition": "cut|dissolve|whip|match_cut|fade",\n'
         '      "duration_seconds": 5,\n'
-        '      "on_screen_text": "متن کوتاه فارسی یا null",\n'
+        '      "on_screen_text": null,\n'
         "    }\n"
         "  ],\n"
-        '  "cta": "دعوت به اقدام فارسی با اعراب کامل",\n'
+        '  "cta": "دعوت به اقدام کوتاه فارسی، بدون اعراب مگر واژههای دشوار",\n'
         '  "caption": "کپشن فارسی",\n'
         '  "hashtags": ["#هشتگ"]\n'
         "}\n\n"
@@ -189,123 +205,66 @@ def parse_scenario_content(content: Any, request: ScenarioRequest) -> Scenario:
 def sanitize_persian_written_surfaces(
     scenario: Scenario, request: ScenarioRequest
 ) -> Scenario:
-    """Drop optional written surfaces that the model emitted without Persian.
+    """Remove every optional on-screen text surface from a Persian scenario.
 
-    A common model slip for Persian brands is an acronym-only on-screen label
-    such as ``SIEM · SOAR · EDR`` or a Latin-only CTA URL. Those values are not
-    Persian copy and fail the deterministic quality gate even though the same
-    information is already present in the Persian narration. The
-    fields are optional, so the deterministic repair is to clear them instead
-    of inventing copy or weakening the review. Required spoken surfaces and
-    non-Persian scenarios are left untouched: the gate still fails closed on
-    genuinely unusable output.
+    Generated video must not contain burned-in captions: model-rendered Persian
+    text is unreliable and the video provider has no caption toggle. The field
+    is optional, so clearing it deterministically is safer than asking the
+    model to render it. Spoken surfaces and non-Persian scenarios are untouched.
     """
     if request.language.split("-", 1)[0].strip().lower() != "fa":
         return scenario
 
-    scenes: list[SceneSpec] = []
-    changed = False
-    for scene in scenario.scenes:
-        update: dict[str, Any] = {}
-        if scene.on_screen_text and not _PERSIAN_SCRIPT.search(scene.on_screen_text):
-            update["on_screen_text"] = None
-        if update:
-            changed = True
-            scenes.append(scene.model_copy(update=update))
-        else:
-            scenes.append(scene)
-    if not changed:
+    scenes = [
+        scene.model_copy(update={"on_screen_text": None})
+        if scene.on_screen_text
+        else scene
+        for scene in scenario.scenes
+    ]
+    if not any(scene.on_screen_text for scene in scenario.scenes):
         return scenario
     return scenario.model_copy(update={"scenes": scenes})
 
 
-# Common Persian words the model often leaves unvowelized even when the
-# scenario prompt asks for full diacritics. Filling them deterministically
-# keeps the pronunciation contract without changing words or their order.
-_COMMON_DIACRITIC_FIXES: dict[str, str] = {
-    "کارها": "کَارها",
-    "اند": "اَند",
-    "می": "مِی",
-    "شود": "شُود",
-    "شده": "شُده",
-    "تیم": "تِیم",
-    "گاهی": "گَاهِی",
-    "در": "دَر",
-    "گوناگون": "گُونَاگُون",
-    "است": "اَست",
-    "یک": "یَک",
-    "را": "رَا",
-    "با": "بَا",
-    "به": "بِه",
-    "از": "اَز",
-    "که": "کِه",
-    "هم": "هَم",
-    "همه": "هَمَه",
-    "ساده": "سادَه",
-    "شفاف": "شَفّاف",
-    "انجام": "اَنجام",
-    "دهید": "دَهید",
-    "بیشتر": "بیشتَر",
-    "شوید": "شُوید",
-    "محصولتان": "مَحصولتان",
-    "چقدر": "چِقدر",
-    "شناخته": "شِناخته",
-    "پایش": "پایِش",
-    "منابع": "مَنابِع",
-    "بهتر": "بِهتر",
-    "معرفی": "مُعَرَّفی",
-    "کنید": "کُنید",
-    "شروع": "شُروع",
-    "پراکنده": "پَراکَندَه",
-    "وقتی": "وَقتی",
-    "هماهنگی": "هَماهنگی",
-    "مدیریت": "مُدیریّت",
-    "پروژه": "پِروژه",
-    "وندیار": "وَندیار",
-    "ونداد": "وَنَداد",
-    "سیستم": "سیستِم",
-    "عاملی": "عامِلی",
-    "برای": "بَرای",
-    "کلی": "کُلّی",
-    "دشوار": "دُشوار",
-}
-
-
-def _apply_common_diacritics(value: str | None) -> str | None:
-    """Add diacritics to known unvowelized Persian words, preserving tokens."""
+def _normalize_spoken_diacritics(value: str | None, fixes: dict[str, str]) -> str | None:
+    """Keep diacritics only on hard words, preserving words and their order."""
     if value is None:
         return None
-    for plain, vowelized in _COMMON_DIACRITIC_FIXES.items():
-        left = "" if plain in {"شود", "شده", "اند"} else r"(?<![\u0600-\u06FF])"
-        right = "" if plain in {"می", "پراکنده"} else r"(?![\u0600-\u06FF])"
-        pattern = left + re.escape(plain) + right
-        value = re.sub(pattern, vowelized, value)
+    # The model often over-vowelizes ordinary Persian words. Strip every mark
+    # first, then restore only the curated hard-word/brand pronunciations.
+    value = _DIACRITICS_RE.sub("", value)
+    for plain, vowelized in sorted(fixes.items(), key=lambda item: -len(item[0])):
+        pattern = r"(?<![\u0600-\u06FF])" + re.escape(plain)
+        value = re.sub(pattern, lambda _match, spoken=vowelized: spoken, value)
     return value
 
 
 def ensure_spoken_diacritics(scenario: Scenario, request: ScenarioRequest) -> Scenario:
-    """Deterministically complete diacritics on all spoken Persian surfaces."""
+    """Normalize spoken Persian surfaces to hard-word-only diacritics."""
     if request.language.split("-", 1)[0].strip().lower() != "fa":
         return scenario
+
+    fixes = hard_pronunciation_fixes(request.pronunciation_lexicon)
+
+    def clean(value: str | None) -> str | None:
+        return _normalize_spoken_diacritics(value, fixes)
 
     scenes: list[SceneSpec] = []
     for scene in scenario.scenes:
         scenes.append(
             scene.model_copy(
                 update={
-                    "narration": _apply_common_diacritics(scene.narration),
-                    "pronunciation_text": _apply_common_diacritics(scene.pronunciation_text),
+                    "narration": clean(scene.narration),
+                    "pronunciation_text": clean(scene.pronunciation_text),
                 }
             )
         )
     return scenario.model_copy(
         update={
-            "narration": _apply_common_diacritics(scenario.narration),
-            "opening_hook": _apply_common_diacritics(scenario.opening_hook),
-            "cta": _apply_common_diacritics(scenario.cta),
-            "cta_pronunciation_text": _apply_common_diacritics(
-                scenario.cta_pronunciation_text
-            ),
+            "narration": clean(scenario.narration),
+            "opening_hook": clean(scenario.opening_hook),
+            "cta": clean(scenario.cta),
+            "cta_pronunciation_text": clean(scenario.cta_pronunciation_text),
             "scenes": scenes,
         }
     )

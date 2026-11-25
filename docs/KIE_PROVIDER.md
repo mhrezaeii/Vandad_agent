@@ -13,6 +13,7 @@ SCENE_VIDEO_KIE_MODEL=grok-imagine/image-to-video
 SCENE_VIDEO_KIE_RESOLUTION=480p
 SCENE_VIDEO_KIE_ASPECT_RATIO=9:16
 SCENE_VIDEO_KIE_MODE=normal
+SCENE_VIDEO_KIE_SEND_DURATION=true
 SCENE_VIDEO_KIE_TIMEOUT_SECONDS=60
 SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD=0.005
 SCENE_VIDEO_KIE_DOWNLOAD_ALLOWED_HOSTS=
@@ -41,6 +42,26 @@ Two models are supported by the adapter:
 |---|---|---|---|---|
 | `grok-imagine/image-to-video` (default) | image-to-video | 6..30 s, whole seconds, serialized as a string (`"20"`) | mandatory (exactly one) | 5000 chars |
 | `grok-imagine-video-1-5-preview` (legacy per-scene text-to-video) | text-to-video | 1..15 s (integer or fractional number) | optional | 4096 chars |
+
+`SCENE_VIDEO_KIE_SEND_DURATION=true` is the production default: the
+image-to-video payload sends the documented `duration`/`resolution`/`mode`
+fields. Two live paid probes on 2026-11-25 showed that prompt-only timing is not
+honoured: a prompt asking for 30 seconds still produced a 6.04 s clip, while an
+explicit `"30"` produced a 30.0 s clip. Set the flag to `false` only to
+experiment with model-controlled timing; that path is accepted by the API but
+does not follow the requested duration, and the adapter then validates the
+deliverable only against a broad 45 s safety bound because the provider status
+does not report a duration.
+
+### Measured spoken-word rate
+
+Two explicit 30 s probes with real character reference images produced 132 and
+99 spoken words (Whisper `fa` transcription), averaging ~116 words per 30
+seconds (232 wpm). The scenario writer is calibrated to this measured rate so
+the script fills the clip; a short script leaves silence that the model fills
+with repeated sentences or improvised scenes. Provider speech is synthesised
+live and is not word-perfect, so the review gate enforces a budget near the
+measured average rather than a slower manual pace.
 
 Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. The image-to-video model prices at 2.4 / 4.5 / 8 credits per second for
 480p / 720p / 1080p, so a 20-second 480p single-shot generation costs about
@@ -86,16 +107,15 @@ body field `generation_mode`):
 
 1. Platform monitoring/knowledge and GPT scenario generation run unchanged.
    Before it can reach `script_ready`, the deterministic scenario review
-   requires the title, full narration, CTA and every scene's
-   narration/on-screen text/subtitle to contain Persian text; a pure-English
-   surface is retried as a generation failure and can never reach a paid
-   provider.
+   requires the title, full narration, CTA and every scene's narration to
+   contain Persian text. Optional on-screen text is always cleared before the
+   paid request; no subtitle or caption surface is generated.
 2. After the operator approves the scenario, the complete multi-beat scenario
    is composed into ONE prompt (`app/services/prompt_composer.py`): the beats
    stay in order with their durations, the exact Persian narration is embedded
-   verbatim with explicit "speak exactly this in Iranian Persian" rules, the
-   Persian on-screen text is preserved right-to-left, and the selected
-   character's identity is kept consistent across the whole video.
+   verbatim with explicit "speak exactly this in Iranian Persian" rules,
+   on-screen text and subtitles are forbidden, and the selected character's
+   identity is kept consistent across the whole video.
 3. Exactly ONE `SceneVideoJob` (`scene_key="single-shot"`) is created for the
    total duration, and exactly ONE paid `createTask` is submitted. Single-shot
    mode never splits the video into multiple paid jobs and never falls back to
@@ -185,11 +205,12 @@ alongside the project's job status.
 
 ## Persian-language notes
 
-The composed prompt enforces Iranian Persian speech, exact narration
-reproduction and RTL on-screen text, but KIE/Grok does not contractually
-guarantee Persian speech quality. The Persian script remains testable in the
-database (`project.scenario`, the job's `prompt`/`narration`); the audible
-result of the first paid run must be accepted manually.
+The composed prompt enforces Iranian Persian speech and exact narration
+reproduction, and explicitly forbids rendered text or subtitles, but KIE/Grok
+does not contractually guarantee Persian speech quality. The Persian script
+remains testable in the database (`project.scenario`, the job's
+`prompt`/`narration`); the audible result of the first paid run must be accepted
+manually.
 
 
 ## Product decision: KIE-only video and provider-native audio

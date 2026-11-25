@@ -107,15 +107,17 @@ def test_multi_beat_scenario_becomes_one_prompt_preserving_order():
     assert scenario.cta in prompt
 
 
-def test_prompt_includes_persian_speech_and_onscreen_enforcement():
-    prompt = compose_single_shot_prompt(_scenario(), max_characters=5000)
+def test_prompt_includes_persian_speech_and_forbids_on_screen_text():
+    scenario = _scenario()
+    prompt = compose_single_shot_prompt(scenario, max_characters=5000)
 
     assert "Iranian Persian" in prompt
     assert "Do NOT speak English" in prompt
     assert "Do NOT translate, paraphrase, shorten or omit" in prompt
     assert "synchronised" in prompt
-    assert "right-to-left" in prompt
-    assert "متن روی تصویر 1" in prompt
+    assert "NO ON-SCREEN TEXT" in prompt
+    assert "متن روی تصویر 1" not in prompt
+    assert scenario.scenes[0].on_screen_text not in prompt
 
 
 def test_prompt_includes_character_consistency_instructions():
@@ -168,7 +170,7 @@ def test_long_valid_scenario_fits_after_dropping_only_optional_guidance():
     for scene in scenario.scenes:
         assert scene.narration in prompt
         assert prompt.count(scene.narration) == 1
-        assert scene.on_screen_text in prompt
+        assert scene.on_screen_text not in prompt
         assert scene.visual_prompt in prompt
         positions.append(prompt.index(scene.narration))
     assert positions == sorted(positions)
@@ -178,10 +180,12 @@ def test_long_valid_scenario_fits_after_dropping_only_optional_guidance():
     assert "CAMERA:" not in prompt
 
 
-def test_prompt_requires_slow_calm_narration_and_never_reads_on_screen_text():
+def test_prompt_requires_measured_narration_rate_and_no_rendered_text():
     prompt = compose_single_shot_prompt(_scenario(), max_characters=5000)
 
-    assert "calm, unhurried" in prompt
-    assert "clearly slower than normal conversational speed" in prompt
-    assert "Do NOT read the ON-SCREEN TEXT lines aloud" in prompt
-    assert "add no words and repeat nothing" in prompt
+    assert "natural Iranian Persian" in prompt
+    assert "about 116 words per 30 seconds" in prompt
+    assert "hold the frame silently" in prompt
+    assert "Stop speaking when the final line ends" in prompt
+    assert "NO ON-SCREEN TEXT" in prompt
+    assert "subtitle" in prompt

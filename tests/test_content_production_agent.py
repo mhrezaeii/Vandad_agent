@@ -60,19 +60,45 @@ def _context(
     )
 
 
+_SCENE_FILLER = (
+    (
+        "محصولات خدمات ویژگیها قابلیتها کیفیتها جزئیات تصاویر رابطها "
+        "تجربهها کاربران مشتریان بازخوردها پیشنهادها بهبودها تغییرها "
+        "سرعتها دقتها سادگیها شفافیتها اعتمادها ارزشها نتیجهها گامها "
+        "فرایندها جریانها مراحل ابزارها امکانات طراحیها نمایها"
+    ),
+    (
+        "داشبوردها نمودارها ارقام شاخصها هشدارها رویدادها الگوها روندها "
+        "پیامها گزارشها اسناد آرشیوها سوابق فهرستها جدولها ستونها ردیفها "
+        "فیلترها جستجوها خلاصهها تحلیلها ارزیابیها مقایسهها برآوردها "
+        "پیشبینیها سناریوها گزینهها انتخابها تصمیمها توصیهها راهکارها"
+    ),
+)
+
+
+def _long_narration(prefix: str, bank_index: int, target_words: int = 58) -> str:
+    bank = _SCENE_FILLER[bank_index].split()
+    words = prefix.split()
+    position = 0
+    while len(words) < target_words:
+        words.append(bank[position % len(bank)])
+        position += 1
+    return " ".join(words[:target_words])
+
+
 def _scenario_payload(*, title="مُعَرَّفی وَنداد"):
     scenes = [
         {
             "index": 0,
-            "narration": "مَحصولتان رَا بِهتر مُعَرَّفی کُنید.",
+            "narration": _long_narration("مَحصولتان رَا بِهتر مُعَرَّفی کُنید.", 0),
             "visual_prompt": "A clean cinematic product interface shot",
             "duration_seconds": 15.0,
             "scene_type": "product_demo",
         },
         {
             "index": 1,
-            "narration": (
-                "مُعَرَّفی پِلاتفُرم: پایِش مَنابِع رَا سادَه و شَفّاف اَنجام دَهید."
+            "narration": _long_narration(
+                "مُعَرَّفی پِلاتفُرم: پایِش مَنابِع رَا سادَه و شَفّاف اَنجام دَهید.", 1
             ),
             "visual_prompt": "A calm dashboard shot with charts",
             "duration_seconds": 15.0,

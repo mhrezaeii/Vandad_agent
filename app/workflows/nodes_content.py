@@ -273,6 +273,13 @@ async def _generate_scenario(
     brand = await _brand_for(engine, execution, project)
 
     cta_config = brand.cta_config or {}
+    visual_config = brand.visual_config if isinstance(brand.visual_config, dict) else {}
+    raw_lexicon = visual_config.get("pronunciation_lexicon")
+    pronunciation_lexicon = (
+        {str(key): str(value) for key, value in raw_lexicon.items()}
+        if isinstance(raw_lexicon, dict)
+        else {}
+    )
     options = project.scene_options or {}
     linked_platform_ids = list((await engine.session.scalars(
         select(BrandPlatformLink.platform_id).where(
@@ -353,6 +360,7 @@ async def _generate_scenario(
         hashtags=list(cta_config.get("hashtags") or []),
         language=brand.language,
         platform_knowledge_context=platform_knowledge_context,
+        pronunciation_lexicon=pronunciation_lexicon,
     )
 
     service = ScenarioService(
@@ -392,6 +400,7 @@ async def _generate_scenario(
         scenario,
         target_duration_seconds=request.target_duration_seconds,
         language=brand.language or "fa",
+        pronunciation_lexicon=pronunciation_lexicon,
     )
     if review_issues:
         raise ProviderTransientError(

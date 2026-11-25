@@ -22,6 +22,60 @@ from app.services.scenario_service import (
     sanitize_persian_written_surfaces,
 )
 
+_SCENE_WORD_BANKS = tuple(
+    words.split()
+    for words in (
+        (
+            "سازمانها هشدارها رویدادها فوریتها خطرها ریسکها ناهنجاریها الگوها "
+            "نشانهها شواهد زمینهها جزئیات پیامها فرایندها جریانها ترافیکها "
+            "سابقهها تغییرها تفاوتها ارتباطها بررسیها کشفها تشخیصها پیگیریها"
+        ),
+        (
+            "دادهها اطلاعات منبعها ورودیها خروجیها پروندهها فهرستها جدولها "
+            "نمودارها شاخصها اندازهها مقادیرها دستهها برچسبها کدها شناسهها "
+            "زمانها تاریخها مکانها کاربران نقشها سطوح دسترسیها ذخیرهها"
+        ),
+        (
+            "تیمها اعضا همکاران وظیفهها ترتیبها اولویتها تصمیمها واکنشها "
+            "اقدامها فرمانها هماهنگیها جلسهها یادداشتها توضیحها بازخوردها "
+            "مهلتها سرعتها دقتها کیفیتها سادگیها روشها گامها نتیجهها تجربهها"
+        ),
+        (
+            "داشبوردها نماها صفحات پنلها جستجوها فیلترها ترتیبها ستونها "
+            "ردیفها خلاصهها تصاویر نقشهها مسیرها وضعیتها سلامت عملکرد "
+            "ظرفیت مصرف بار پاسخ تاخیر خطاها"
+        ),
+        (
+            "گزارشها اسناد آرشیوها نمونهها مدارک پیوستها محتواها متنها "
+            "شرحها تحلیلها ارزیابیها مقایسهها برآوردها پیشبینیها سناریوها "
+            "گزینهها انتخابها توصیهها راهکارها خروجیها سوابقها"
+        ),
+        (
+            "پلاتفرم سکو سامانه محیط یکپارچگی همگرایی پیوندها اتصالها "
+            "قابلیتها امکانات ویژگیها ابزارها رابطها لایهها موتورها خدماتها "
+            "بخشها ساختارها چارچوبها معماریها طراحیها نمایها"
+        ),
+    )
+)
+
+
+def _filler(bank_index: int, size: int) -> str:
+    bank = _SCENE_WORD_BANKS[bank_index]
+    return " ".join(bank[position % len(bank)] for position in range(size))
+
+
+def _scene_narration(index: int, count: int, duration: float) -> str:
+    """Fixture narration sized to KIE's measured 116-words-per-30s budget."""
+    target = max(4, round(duration * 232 / 60))
+    bank = _SCENE_WORD_BANKS[index % len(_SCENE_WORD_BANKS)]
+    words = ["رِوایت", "فارِسی", "صَحنه", str(index + 1)]
+    while len(words) < target:
+        words.extend(bank)
+    words = words[:target]
+    if count > 1 and index == count - 1:
+        words = [*words[:-2], "مُعَرَّفی", "پِلاتفُرم"]
+    return " ".join(words) + "."
+
 
 def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
     return {
@@ -31,10 +85,7 @@ def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
         "scenes": [
             {
                 "index": index,
-                "narration": (
-                    f"رِوایت فارِسی صَحنه {index + 1}"
-                    + ("، مُعَرَّفی پِلاتفُرم" if index == count - 1 else "")
-                ),
+                "narration": _scene_narration(index, count, duration),
                 "visual_prompt": f"English visual prompt {index + 1}",
                 "duration_seconds": duration,
                 "on_screen_text": f"مَتن {index + 1}",
@@ -118,9 +169,10 @@ def test_normalize_rejects_scene_without_visual_prompt():
 def test_pronunciation_text_preserves_words_and_rejects_rewrites():
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
-    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارِسی صَحنه 1"
+    pronunciation = raw["scenes"][0]["narration"]
+    raw["scenes"][0]["pronunciation_text"] = pronunciation
     scenario = normalize_scenario(raw, request)
-    assert scenario.scenes[0].pronunciation_text == "رِوایت فارِسی صَحنه 1"
+    assert scenario.scenes[0].pronunciation_text == pronunciation
     raw["scenes"][0]["pronunciation_text"] = "درود فارسی"
     with pytest.raises(ValueError, match="exact narration words"):
         normalize_scenario(raw, request)
@@ -131,11 +183,13 @@ def test_production_fa_scenario_requires_vowelized_pronunciation_text():
     raw = _raw_scenario(count=2, duration=15.0)
     with pytest.raises(ValueError, match="pronunciation_text with diacritics"):
         normalize_scenario(raw, request)
-    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارِسی صَحنه 1"
-    raw["scenes"][1]["pronunciation_text"] = "رِوایت فارِسی صَحنه 2، مُعَرَّفی پِلاتفُرم"
+    first_pronunciation = raw["scenes"][0]["narration"]
+    second_pronunciation = raw["scenes"][1]["narration"]
+    raw["scenes"][0]["pronunciation_text"] = first_pronunciation
+    raw["scenes"][1]["pronunciation_text"] = second_pronunciation
     raw["cta_pronunciation_text"] = "هَمین لَحظه شُروع کُنید"
     scenario = normalize_scenario(raw, request)
-    assert scenario.scenes[0].pronunciation_text == "رِوایت فارِسی صَحنه 1"
+    assert scenario.scenes[0].pronunciation_text == first_pronunciation
 
 
 def test_storyboard_prompt_uses_brand_lexicon_without_pronunciation_fields():
@@ -146,7 +200,7 @@ def test_storyboard_prompt_uses_brand_lexicon_without_pronunciation_fields():
     system, user = build_scenario_prompt(request)
     assert "pronunciation_text" not in user
     assert "اعراب" in system
-    assert "تمام کلمات فارسی" in system
+    assert "کلمات عادی فارسی" in system
     assert "وَندیار" in user
 
 
@@ -287,20 +341,18 @@ def test_review_scenario_requires_every_spoken_and_written_surface_in_persian():
     assert any("scene 2 on_screen_text" in issue for issue in persian_issues)
 
 
-def test_persian_written_surface_sanitizer_clears_acronym_only_labels():
-    """Acronym-only on-screen text is optional copy, not a review failure."""
+def test_persian_written_surface_sanitizer_clears_every_on_screen_label():
+    """No on-screen text survives, Persian or Latin, because captions are unreliable."""
     from app.services.scenario_review import review_scenario
 
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
     raw["scenes"][0]["on_screen_text"] = "SIEM · SOAR · EDR"
-    raw["scenes"][1]["on_screen_text"] = "VISIT VANDEFENCE.IR"
     raw["scenes"][1]["on_screen_text"] = "کنسول امنیت"
 
     scenario = sanitize_persian_written_surfaces(normalize_scenario(raw, request), request)
 
-    assert scenario.scenes[0].on_screen_text is None
-    assert scenario.scenes[1].on_screen_text == "کنسول امنیت"
+    assert all(scene.on_screen_text is None for scene in scenario.scenes)
     remaining = review_scenario(scenario, target_duration_seconds=30, language="fa-IR")
     assert not [issue for issue in remaining if "on_screen_text" in issue]
 
@@ -320,19 +372,22 @@ def test_persian_written_surface_sanitizer_leaves_non_persian_and_spoken_text():
     assert cleaned.cta == spoken.cta
 
 
-def test_persian_prompt_forbids_latin_only_on_screen_text():
-    system, _user = build_scenario_prompt(ScenarioRequest())
-    assert "متن صرفاً لاتین ممنوع است" in system
+def test_persian_prompt_forbids_all_on_screen_text():
+    system, user = build_scenario_prompt(ScenarioRequest())
+    assert "هیچ متنی روی تصویر رندر نشود" in system
+    assert "on_screen_text" in user
 
 
 def test_storyboard_prompt_requires_diacritics_unique_scenes_and_platform_finale():
     system, user = build_scenario_prompt(ScenarioRequest(target_duration_seconds=30))
     assert "اعراب" in system
-    assert "تمام کلمات فارسی" in user
+    assert "کلمات عادی فارسی" in user
     assert "تکرار" in system
     assert "نزدیک به تکرار" in user
     assert "آخرین صحنه" in user
     assert "معرفی کلی پلتفرم" in user
+    assert "بعد از CTA هیچ جمله" in user
+    assert "scene_type=cta" in user
 
 
 def test_review_scenario_flags_duplicate_scenes():
@@ -357,17 +412,20 @@ def test_review_scenario_requires_last_scene_to_introduce_the_platform():
     assert any("last scene" in issue for issue in issues)
 
 
-def test_review_scenario_flags_persian_words_without_diacritics():
+def test_review_scenario_flags_unvowelized_hard_words_only():
     from app.services.scenario_review import review_scenario
 
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
-    raw["scenes"][0]["narration"] = "روایت فارسی صحنه 1"
+    raw["scenes"][0]["narration"] = "سیستم پایش پروژه بدون اعراب"
     issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
-    assert any("insufficiently diacritized" in issue for issue in issues)
+    diacritic_issues = [issue for issue in issues if "hard-to-pronounce" in issue]
+    assert any("سیستم" in issue for issue in diacritic_issues)
+    assert any("پایش" in issue for issue in diacritic_issues)
+    assert any("پروژه" in issue for issue in diacritic_issues)
 
 
-def test_spoken_diacritics_fixer_completes_common_words_and_review_passes():
+def test_spoken_diacritics_fixer_marks_only_hard_words_and_review_passes():
     from app.services.scenario_review import review_scenario
 
     request = ScenarioRequest(target_duration_seconds=30)
@@ -375,15 +433,23 @@ def test_spoken_diacritics_fixer_completes_common_words_and_review_passes():
     raw["opening_hook"] = "وقتی کارها پراکندهاند، دید کلی دشوار میشود."
     raw["cta"] = "همین حالا شروع کنید"
     raw["scenes"][0]["narration"] = (
-        "کارها و هماهنگی تیم، گاهی در جاهای گوناگون پراکنده میشوند."
+        "کارها و هماهنگی تیم، گاهی در جاهای گوناگون پراکنده میشوند. "
+        + " " + _filler(2, 49)
     )
     raw["scenes"][1]["narration"] = (
-        "وندیار، سیستم عاملی برای مدیریت پروژه و تیم است."
+        "وندیار، سیستم عاملی برای مدیریت پروژه و تیم است. "
+        + " " + _filler(0, 49)
     )
 
     scenario = ensure_spoken_diacritics(normalize_scenario(raw, request), request)
 
-    assert "کَارها" in scenario.scenes[0].narration
-    assert "پَراکَندَه" in scenario.scenes[0].narration
-    assert "مِی" in scenario.scenes[0].narration
+    # Ordinary Persian words stay unvowelized.
+    assert "کارها و هماهنگی تیم" in scenario.scenes[0].narration
+    assert "پراکنده میشوند" in scenario.scenes[0].narration
+    # Only hard/brand words receive pronunciation marks.
+    assert "وَندیار" in scenario.scenes[1].narration
+    assert "سیستِم" in scenario.scenes[1].narration
+    assert "عامِلی" in scenario.scenes[1].narration
+    assert "مُدیریّت" in scenario.scenes[1].narration
+    assert "پِروژه" in scenario.scenes[1].narration
     assert review_scenario(scenario, target_duration_seconds=30) == []

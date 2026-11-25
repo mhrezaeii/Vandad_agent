@@ -4,7 +4,7 @@ Multi-scene projects whose provider cannot compose a final storyboard video
 are assembled locally: the validated scene clips are concatenated into the
 final vertical deliverable. Audio-capable providers keep their native
 soundtrack; real platform screenshots are overlaid during their scene window
-so the deliverable shows the actual product UI, and a Persian ASS subtitle is
+so the deliverable shows the actual product UI. No subtitle or caption is ever
 burned in. This is deterministic media stitching — no creative generation.
 """
 
@@ -165,15 +165,15 @@ def build_finish_args(
     width: int,
     height: int,
     overlays: tuple[tuple[Path, float, float], ...],
-    subtitle_path: Path | None,
     with_audio: bool,
 ) -> tuple[str, ...] | None:
-    """Build the stage-2 command (screenshot overlays + burned subtitles).
+    """Build the stage-2 command for deterministic screenshot overlays.
 
-    Returns None when there is nothing to apply; the caller then keeps the
-    stage-1 output as the final deliverable.
+    Subtitles are deliberately not supported: the provider audio is already
+    synchronized and burned-in captions are unreliable. Returns None when there
+    are no overlays to apply; the caller then keeps stage-1 output as final.
     """
-    if not overlays and subtitle_path is None:
+    if not overlays:
         return None
     overlay_scale_width = int(width * _MAX_OVERLAY_WIDTH_RATIO)
     overlay_scale_height = int(height * _MAX_OVERLAY_HEIGHT_RATIO)
@@ -191,10 +191,6 @@ def build_finish_args(
             f"enable='between(t,{start:.3f},{end:.3f})'[{next_chain}]"
         )
         chain = f"[{next_chain}]"
-    if subtitle_path is not None:
-        escaped = str(subtitle_path).replace("\\", "/").replace(":", r"\:").replace("'", "\'")
-        filters.append(f"{chain}subtitles='{escaped}'[subbed]")
-        chain = "[subbed]"
     command: list[str] = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(source_path),
@@ -222,7 +218,6 @@ async def concat_scene_clips(
     width: int,
     height: int,
     overlays: tuple[tuple[Path, float, float], ...] = (),
-    subtitle_path: Path | None = None,
 ) -> int:
     """Assemble scene clips into one MP4; returns the output size in bytes.
 
@@ -263,8 +258,7 @@ async def concat_scene_clips(
         )
         finish_args = build_finish_args(
             ffmpeg=ffmpeg, source_path=temp_full, output_path=output_path,
-            width=width, height=height, overlays=overlays, subtitle_path=subtitle_path,
-            with_audio=with_audio,
+            width=width, height=height, overlays=overlays, with_audio=with_audio,
         )
         if finish_args is None:
             temp_full.replace(output_path)

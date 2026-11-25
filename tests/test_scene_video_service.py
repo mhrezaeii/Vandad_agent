@@ -634,11 +634,12 @@ def test_scene_provider_prompt_contains_product_direction_without_character_depe
     assert "PRODUCT DEMO" in prompt
     assert "slow cinematic push-in" in prompt
     assert "match_cut" in prompt
-    assert "calm Iranian Persian" in prompt
-    assert "about 90 words per minute" in prompt
-    assert "clearly slower than normal speech" in prompt
+    assert "natural Iranian Persian" in prompt
+    assert "about 116 words per 30 seconds" in prompt
+    assert "hold the frame silently" in prompt
     assert "Read ONLY this text word for word" in prompt
-    assert "never read on-screen text aloud" in prompt
+    assert "if the line ends early hold the frame silently" in prompt
+    assert "NO ON-SCREEN TEXT" in prompt
     assert "CHARACTER" not in prompt
     assert "PRESENTER" not in prompt
 
@@ -832,14 +833,13 @@ def test_overlay_planner_maps_screenshots_to_scene_windows(tmp_path):
         SimpleNamespace(scene_index=0, duration_seconds=15.0),
         SimpleNamespace(scene_index=1, duration_seconds=15.0),
     ]
-    overlays, subtitle_path = service._plan_real_product_overlays(
+    overlays = service._plan_real_product_overlays(
         project, jobs, output_dir_hint=__import__("uuid").uuid4(), width=1080, height=1920,
     )
     assert [(str(o[0]), round(o[1], 3), round(o[2], 3)) for o in overlays] == [
         (str(shots[0]), 0.0, 15.0),
         (str(shots[1]), 15.0, 30.0),
     ]
-    assert subtitle_path is None
 
 
 def test_overlay_planner_skips_without_platform_or_screenshots(tmp_path):
@@ -851,10 +851,10 @@ def test_overlay_planner_skips_without_platform_or_screenshots(tmp_path):
     service._screenshots_root = tmp_path
     project = SimpleNamespace(scene_options={"screenshots_platform": "unknown"}, script_text="")
     jobs = [SimpleNamespace(scene_index=0, duration_seconds=15.0)]
-    overlays, subtitle_path = service._plan_real_product_overlays(
+    overlays = service._plan_real_product_overlays(
         project, jobs, output_dir_hint=__import__("uuid").uuid4(), width=1080, height=1920,
     )
-    assert overlays == [] and subtitle_path is None
+    assert overlays == []
 
 
 def test_narration_fit_and_mux_arg_builders():
@@ -875,5 +875,36 @@ def test_narration_fit_and_mux_arg_builders():
     assert "anullsrc" in " ".join(silence) and "15.000" in " ".join(silence)
     concat = build_audio_concat_args(ffmpeg="ffmpeg", concat_list=Path("l.txt"), output_path=Path("n.wav"))
     assert "-f" in concat and "concat" in concat
+
+
+def test_kie_delivery_verification_accepts_model_chosen_duration_within_bound(monkeypatch, tmp_path):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    probe = {
+        "has_video": True,
+        "video_codec": "h264",
+        "has_audio": True,
+        "width": 1080,
+        "height": 1920,
+        "duration_seconds": 43.0,
+    }
+    monkeypatch.setattr(
+        "app.services.scene_video_service.probe_video_streams", lambda _path: probe
+    )
+    service = SceneVideoService.__new__(SceneVideoService)
+    service.storage = SimpleNamespace(local_path=lambda _key: Path("deliverable.mp4"))
+    service.registry = SimpleNamespace(
+        get=lambda _provider_id: SimpleNamespace(duration_is_model_controlled=True)
+    )
+    job = SimpleNamespace(provider="kie", duration_seconds=15.0)
+    artifact = SimpleNamespace(storage_key="deliverable.mp4")
+
+    assert service._verify_kie_delivery(job, artifact) == probe
+
+    probe["duration_seconds"] = 46.0
+    with pytest.raises(SceneVideoPermanentError) as error:
+        service._verify_kie_delivery(job, artifact)
+    assert error.value.code == "invalid_video"
 
 

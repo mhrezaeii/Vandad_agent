@@ -108,6 +108,10 @@ class KIEConfig:
     # Grok Imagine image-to-video mode ("normal" or "fun"; "spicy" is not
     # available for external image inputs and is rejected by this adapter).
     mode: str = "normal"
+    # Documented image-to-video inputs duration/resolution/mode are optional.
+    # When disabled, the payload carries only model + prompt + image_urls so KIE
+    # chooses the timing from the prompt; internal duration is kept for preflight.
+    send_duration: bool = True
     # File-upload host. KIE documents https://kieai.redpandaai.co for uploads,
     # which is a different origin than the jobs API; unset/blank falls back to
     # that documented host instead of the jobs base URL.
@@ -196,6 +200,11 @@ class KIESceneVideoProvider(SceneVideoProvider):
     @property
     def requires_reference_image(self) -> bool:
         return bool(self._rules["requires_reference_image"])
+
+    @property
+    def duration_is_model_controlled(self) -> bool:
+        """True when the paid payload intentionally omits the duration field."""
+        return self.is_image_to_video and not self.config.send_duration
 
     async def check_health(self) -> SceneVideoHealthResult:
         started = time.perf_counter()
@@ -307,18 +316,22 @@ class KIESceneVideoProvider(SceneVideoProvider):
                 code="provider_insufficient_credits",
             )
 
-        input_data = {
-            "prompt": prompt,
-            "resolution": self.config.resolution,
-            "duration": api_duration,
-        }
+        if self.duration_is_model_controlled:
+            # Documented minimal image-to-video contract: model + prompt + image.
+            input_data = {"prompt": prompt}
+        else:
+            input_data = {
+                "prompt": prompt,
+                "resolution": self.config.resolution,
+                "duration": api_duration,
+            }
         if reference_image_url:
             # KIE derives output geometry from a single reference image; its
             # playground marks aspect_ratio invalid for this input mode.
             input_data["image_urls"] = [reference_image_url]
         else:
             input_data["aspect_ratio"] = self.config.aspect_ratio
-        if rules["send_mode"]:
+        if rules["send_mode"] and not self.duration_is_model_controlled:
             input_data["mode"] = self.config.mode
         body = {"model": self.config.model, "input": input_data}
         try:

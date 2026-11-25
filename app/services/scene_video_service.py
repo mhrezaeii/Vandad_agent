@@ -85,6 +85,8 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
     lines = [
         f"SCENE TYPE: {scene.scene_type}",
         f"VISUAL STYLE: {scenario.visual_style or 'consistent premium brand film'}",
+        "NO ON-SCREEN TEXT: render no captions, subtitles, labels, watermarks, "
+        "logos or generated lettering in any frame.",
     ]
     if scene.scene_type == "product_demo":
         lines.append(
@@ -110,11 +112,12 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
     spoken_text = scene.narration.strip()
     if spoken_text:
         lines.append(
-            "AUDIO: calm Iranian Persian (Farsi) voice-over at a deliberately slow, "
-            "measured pace (about 90 words per minute), clearly slower than normal "
-            "speech with gentle pauses. Never rush or speed up for the cuts. Read ONLY "
-            "this text word for word, exactly as written, with no added, repeated, "
-            "shortened or paraphrased words; never read on-screen text aloud: "
+            "AUDIO: natural Iranian Persian (Farsi) voice-over at the provider's "
+            "measured pace (about 116 words per 30 seconds); this line is already "
+            "sized to that rate. Do not slow down artificially, rush or speed up for "
+            "the cuts. Read ONLY this text word for word, exactly as written, with no "
+            "added, repeated, shortened or paraphrased words; if the line ends early "
+            "hold the frame silently and add no new sentence or CTA after it: "
             f"{spoken_text} Under the voice-over, add a soft modern corporate "
             "background track and subtle UI sounds."
         )
@@ -1488,15 +1491,11 @@ class SceneVideoService:
                 code="native_audio_missing",
             )
 
-        overlays, subtitle_path = self._plan_real_product_overlays(
+        overlays = self._plan_real_product_overlays(
             project, jobs, output_dir_hint=project.id, width=width, height=height,
         )
         output_dir = Path(tempfile.mkdtemp(prefix="vandad-assembly-"))
         try:
-            if subtitle_path is not None:
-                moved = output_dir / subtitle_path.name
-                shutil.move(str(subtitle_path), str(moved))
-                subtitle_path = moved
             for index, (image, _start, _end) in enumerate(list(overlays)):
                 moved = output_dir / f"overlay-{index}{image.suffix.lower()}"
                 shutil.copy(str(image), str(moved))
@@ -1504,7 +1503,7 @@ class SceneVideoService:
             output_path = output_dir / f"vandad-final-{project.id}.mp4"
             await concat_scene_clips(
                 tuple(clip_paths), output_path=output_path, width=width, height=height,
-                overlays=tuple(overlays), subtitle_path=subtitle_path,
+                overlays=tuple(overlays),
             )
             preview = bytearray()
 
@@ -1621,14 +1620,28 @@ class SceneVideoService:
                 "The KIE deliverable reported an invalid duration.",
                 code="invalid_video",
             )
-        requested = float(job.duration_seconds)
-        tolerance = max(2.0, requested * 0.15)
-        if abs(duration - requested) > tolerance:
-            raise SceneVideoPermanentError(
-                f"The KIE deliverable is {duration:.1f}s but {requested:.1f}s was requested; "
-                "the generated video does not match the paid single-shot contract.",
-                code="invalid_video",
-            )
+        provider_id = getattr(job, "provider", None)
+        registry = getattr(self, "registry", None)
+        provider = registry.get(provider_id) if provider_id and registry is not None else None
+        model_controlled = bool(getattr(provider, "duration_is_model_controlled", False))
+        if model_controlled:
+            # The duration field was intentionally omitted: KIE chooses it from
+            # the prompt, so only a broad safety bound can be verified here.
+            if duration > 45.0:
+                raise SceneVideoPermanentError(
+                    f"The KIE deliverable is {duration:.1f}s, outside the "
+                    "model-controlled duration safety bound.",
+                    code="invalid_video",
+                )
+        else:
+            requested = float(job.duration_seconds)
+            tolerance = max(2.0, requested * 0.15)
+            if abs(duration - requested) > tolerance:
+                raise SceneVideoPermanentError(
+                    f"The KIE deliverable is {duration:.1f}s but {requested:.1f}s was requested; "
+                    "the generated video does not match the paid single-shot contract.",
+                    code="invalid_video",
+                )
         return probe
 
     def _plan_real_product_overlays(
@@ -1639,7 +1652,7 @@ class SceneVideoService:
         output_dir_hint: uuid.UUID,
         width: int,
         height: int,
-    ) -> tuple[list[tuple[Path, float, float]], Path | None]:
+    ) -> list[tuple[Path, float, float]]:
         """Plan real-UI screenshot overlays for deterministic local stitching.
 
         Screenshots live under ``screenshots_root/<platform>/`` and are shown
@@ -1666,7 +1679,7 @@ class SceneVideoService:
                         overlays.append((images[index % len(images)], start, end))
                         start = end
 
-        return overlays, None
+        return overlays
 
     async def _run_assembly_ffmpeg(self, command: tuple[str, ...]) -> None:
         """Run one assembly ffmpeg command; permanent failures carry detail."""
