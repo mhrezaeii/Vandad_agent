@@ -17,6 +17,7 @@ from app.schemas.scenario import (
 from app.services.scenario_service import (
     ScenarioGenerationError,
     build_scenario_prompt,
+    ensure_spoken_diacritics,
     parse_scenario_content,
     sanitize_persian_written_surfaces,
 )
@@ -363,4 +364,26 @@ def test_review_scenario_flags_persian_words_without_diacritics():
     raw = _raw_scenario(count=2, duration=15.0)
     raw["scenes"][0]["narration"] = "روایت فارسی صحنه 1"
     issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
-    assert any("without diacritics" in issue for issue in issues)
+    assert any("insufficiently diacritized" in issue for issue in issues)
+
+
+def test_spoken_diacritics_fixer_completes_common_words_and_review_passes():
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["opening_hook"] = "وقتی کارها پراکندهاند، دید کلی دشوار میشود."
+    raw["cta"] = "همین حالا شروع کنید"
+    raw["scenes"][0]["narration"] = (
+        "کارها و هماهنگی تیم، گاهی در جاهای گوناگون پراکنده میشوند."
+    )
+    raw["scenes"][1]["narration"] = (
+        "وندیار، سیستم عاملی برای مدیریت پروژه و تیم است."
+    )
+
+    scenario = ensure_spoken_diacritics(normalize_scenario(raw, request), request)
+
+    assert "کَارها" in scenario.scenes[0].narration
+    assert "پَراکَندَه" in scenario.scenes[0].narration
+    assert "مِی" in scenario.scenes[0].narration
+    assert review_scenario(scenario, target_duration_seconds=30) == []

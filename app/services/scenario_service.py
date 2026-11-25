@@ -219,6 +219,98 @@ def sanitize_persian_written_surfaces(
     return scenario.model_copy(update={"scenes": scenes})
 
 
+# Common Persian words the model often leaves unvowelized even when the
+# scenario prompt asks for full diacritics. Filling them deterministically
+# keeps the pronunciation contract without changing words or their order.
+_COMMON_DIACRITIC_FIXES: dict[str, str] = {
+    "کارها": "کَارها",
+    "اند": "اَند",
+    "می": "مِی",
+    "شود": "شُود",
+    "شده": "شُده",
+    "تیم": "تِیم",
+    "گاهی": "گَاهِی",
+    "در": "دَر",
+    "گوناگون": "گُونَاگُون",
+    "است": "اَست",
+    "یک": "یَک",
+    "را": "رَا",
+    "با": "بَا",
+    "به": "بِه",
+    "از": "اَز",
+    "که": "کِه",
+    "هم": "هَم",
+    "همه": "هَمَه",
+    "ساده": "سادَه",
+    "شفاف": "شَفّاف",
+    "انجام": "اَنجام",
+    "دهید": "دَهید",
+    "بیشتر": "بیشتَر",
+    "شوید": "شُوید",
+    "محصولتان": "مَحصولتان",
+    "چقدر": "چِقدر",
+    "شناخته": "شِناخته",
+    "پایش": "پایِش",
+    "منابع": "مَنابِع",
+    "بهتر": "بِهتر",
+    "معرفی": "مُعَرَّفی",
+    "کنید": "کُنید",
+    "شروع": "شُروع",
+    "پراکنده": "پَراکَندَه",
+    "وقتی": "وَقتی",
+    "هماهنگی": "هَماهنگی",
+    "مدیریت": "مُدیریّت",
+    "پروژه": "پِروژه",
+    "وندیار": "وَندیار",
+    "ونداد": "وَنَداد",
+    "سیستم": "سیستِم",
+    "عاملی": "عامِلی",
+    "برای": "بَرای",
+    "کلی": "کُلّی",
+    "دشوار": "دُشوار",
+}
+
+
+def _apply_common_diacritics(value: str | None) -> str | None:
+    """Add diacritics to known unvowelized Persian words, preserving tokens."""
+    if value is None:
+        return None
+    for plain, vowelized in _COMMON_DIACRITIC_FIXES.items():
+        left = "" if plain in {"شود", "شده", "اند"} else r"(?<![\u0600-\u06FF])"
+        right = "" if plain in {"می", "پراکنده"} else r"(?![\u0600-\u06FF])"
+        pattern = left + re.escape(plain) + right
+        value = re.sub(pattern, vowelized, value)
+    return value
+
+
+def ensure_spoken_diacritics(scenario: Scenario, request: ScenarioRequest) -> Scenario:
+    """Deterministically complete diacritics on all spoken Persian surfaces."""
+    if request.language.split("-", 1)[0].strip().lower() != "fa":
+        return scenario
+
+    scenes: list[SceneSpec] = []
+    for scene in scenario.scenes:
+        scenes.append(
+            scene.model_copy(
+                update={
+                    "narration": _apply_common_diacritics(scene.narration),
+                    "pronunciation_text": _apply_common_diacritics(scene.pronunciation_text),
+                }
+            )
+        )
+    return scenario.model_copy(
+        update={
+            "narration": _apply_common_diacritics(scenario.narration),
+            "opening_hook": _apply_common_diacritics(scenario.opening_hook),
+            "cta": _apply_common_diacritics(scenario.cta),
+            "cta_pronunciation_text": _apply_common_diacritics(
+                scenario.cta_pronunciation_text
+            ),
+            "scenes": scenes,
+        }
+    )
+
+
 class ScenarioService:
     """Generate a validated scenario through the configured text-generation API."""
 
@@ -261,7 +353,8 @@ class ScenarioService:
             task_id=task_id,
         )
         scenario = parse_scenario_content(metadata.get("content"), request)
-        return sanitize_persian_written_surfaces(scenario, request), metadata
+        scenario = sanitize_persian_written_surfaces(scenario, request)
+        return ensure_spoken_diacritics(scenario, request), metadata
 
     async def _complete(
         self,

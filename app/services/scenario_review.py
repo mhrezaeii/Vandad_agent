@@ -36,20 +36,27 @@ FORBIDDEN_CLAIM_PATTERNS: tuple[str, ...] = (
 
 _ARABIC_SCRIPT = re.compile(r"[\u0600-\u06FF]")
 _PERSIAN_WORD_RE = re.compile(r"[\u0600-\u06FF]+")
-_PLATFORM_INTRO_TOKENS = frozenset({"پلاتفرم", "پلتفرم", "سامانه", "سکو"})
+_PLATFORM_INTRO_TOKENS = frozenset(
+    {"پلاتفرم", "پلتفرم", "سامانه", "سکو", "سیستم", "سیستمها"}
+)
 
 _DURATION_TOLERANCE_SECONDS = 1.0
 _DUPLICATE_NARRATION_THRESHOLD = 0.8
 _DUPLICATE_VISUAL_THRESHOLD = 0.85
+_MIN_DIACRITIC_RATIO = 0.5
 
 
-def _persian_words_without_diacritics(value: str) -> list[str]:
-    """Return multi-letter Persian words that have no pronunciation marks."""
-    return [
+def _diacritic_ratio(value: str) -> tuple[float, list[str]]:
+    """Return the vowelized share of multi-letter Persian words plus the missing ones."""
+    words = [
         word
         for word in _PERSIAN_WORD_RE.findall(value or "")
-        if len(word) > 1 and not _DIACRITICS_RE.search(word)
+        if len(word) >= 3
     ]
+    if not words:
+        return 1.0, []
+    missing = [word for word in words if not _DIACRITICS_RE.search(word)]
+    return (len(words) - len(missing)) / len(words), missing
 
 
 def _token_set(value: str) -> set[str]:
@@ -158,9 +165,12 @@ def review_scenario(
         for scene in scenario.scenes:
             diacritic_targets.append((f"scene {scene.index + 1} narration", scene.narration))
         for label, text in diacritic_targets:
-            missing = _persian_words_without_diacritics(text)
-            if missing:
-                sample = "، ".join(missing[:6])
-                issues.append(f"{label}: Persian words without diacritics: {sample}.")
+            ratio, missing = _diacritic_ratio(text)
+            if ratio < _MIN_DIACRITIC_RATIO:
+                sample = "، ".join(missing[:6]) or "هیچ کلمه اعرابداری یافت نشد"
+                issues.append(
+                    f"{label}: Persian words are insufficiently diacritized "
+                    f"({ratio:.0%}); examples: {sample}."
+                )
 
     return issues
