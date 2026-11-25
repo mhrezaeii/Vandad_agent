@@ -53,22 +53,19 @@ does not follow the requested duration, and the adapter then validates the
 deliverable only against a broad 45 s safety bound because the provider status
 does not report a duration.
 
-### Measured spoken-word rate
+### Scenario length and speech
 
-Two explicit 30 s probes with real character reference images produced 132 and
-99 spoken words (Whisper `fa` transcription), averaging ~116 words per 30
-seconds (232 wpm). The scenario writer is calibrated to this measured rate so
-the script fills the clip; a short script leaves silence that the model fills
-with repeated sentences or improvised scenes. Provider speech is synthesised
-live and is not word-perfect, so the review gate enforces a budget near the
-measured average rather than a slower manual pace. The scenario writer uses the
-same budget helper as the gate and performs up to two counted corrective
-regenerations if a draft is over or under budget, before the workflow-level
-retry.
+The scenario writer is asked for a complete, natural Persian storyboard for
+roughly a one-minute promotional video. There is no word-count target, no word
+budget, and no word-rate gate: GPT writes the whole scenario in its own words
+and the validated scenario is sent directly to the video model. Provider speech
+is synthesised live and is not word-perfect. The quality gate still checks
+structure, scene timing, single terminal CTA, no burned-in text, and
+hard-word-only diacritics; word count is deliberately not a quality rule.
 
 Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. The image-to-video model prices at 2.4 / 4.5 / 8 credits per second for
-480p / 720p / 1080p, so a 20-second 480p single-shot generation costs about
-48 credits. These rates do not describe the separate Grok Imagine Video 1.5
+480p / 720p / 1080p, so a 60-second 480p single-shot generation costs about
+144 credits. These rates do not describe the separate Grok Imagine Video 1.5
 Preview text-to-video model. Verify current
 pricing on kie.ai before relying on the estimate; the adapter's preflight
 checks the live credit balance against the same per-second rates, and the

@@ -87,30 +87,27 @@ _CHARACTER_COMPACT = (
 )
 
 _SPEECH_FULL = (
-    "SPEECH (mandatory): Use a natural Iranian Persian (Farsi) voice at the "
-    "provider's measured delivery pace (about 116 words per 30 seconds). The script "
-    "below is already sized to that rate: read ONLY the NARRATION and ENDING CTA "
-    "lines, word for word, exactly as written and in order, synchronised with the "
-    "matching visual beat and with no added or repeated words. Do NOT slow down "
-    "artificially, rush or compress the narration to match the cuts. If a line ends "
-    "early, hold the frame silently instead of speaking again. Do NOT speak English "
-    "except brand names or acronyms that appear verbatim in the provided text. "
-    "Stop speaking when the final line ends: add no words, no extra sentence and no "
-    "repeated CTA after it. Do NOT translate, paraphrase, shorten or omit any spoken "
-    "line, and do not add any other speech."
+    "SPEECH (mandatory): Use a natural Iranian Persian (Farsi) voice. Read ONLY the "
+    "NARRATION and ENDING CTA lines, word for word, exactly as written and in order, "
+    "synchronised with the matching visual beat and with no added or repeated words. "
+    "Do NOT slow down artificially, rush or compress the narration to match the cuts. "
+    "If a line ends early, hold the frame silently instead of speaking again. Do NOT "
+    "speak English except brand names or acronyms that appear verbatim in the "
+    "provided text. Stop speaking when the final line ends: add no words, no extra "
+    "sentence and no repeated CTA after it. Do NOT translate, paraphrase, shorten or "
+    "omit any spoken line, and do not add any other speech."
 )
 _SPEECH_COMPACT = (
-    "SPEECH (mandatory): Natural Iranian Persian (Farsi) at the measured pace "
-    "(about 116 words per 30 seconds); the script is sized to it. Read ONLY the "
-    "NARRATION/CTA lines below, word for word, exactly as written and in order. "
-    "Do NOT slow down, rush, translate, paraphrase, shorten, omit or repeat. If the "
-    "line ends early, hold the frame silently; add no other speech."
+    "SPEECH (mandatory): Natural Iranian Persian (Farsi). Read ONLY the NARRATION/CTA "
+    "lines below, word for word, exactly as written and in order. Do NOT slow down, "
+    "rush, translate, paraphrase, shorten, omit or repeat. If the line ends early, "
+    "hold the frame silently; add no other speech."
 )
 _SPEECH_MINIMAL = (
-    "SPEECH: Natural Iranian Persian (Farsi), measured pace (~116 words/30s). "
-    "Read ONLY NARRATION/CTA lines below, word for word, exactly as written and in "
-    "order. No slowing, rushing, translating, paraphrasing, shortening, omitting or "
-    "repeating; hold the frame silently if early, add no extra speech."
+    "SPEECH: Natural Iranian Persian (Farsi). Read ONLY NARRATION/CTA lines below, "
+    "word for word, exactly as written and in order. No slowing, rushing, "
+    "translating, paraphrasing, shortening, omitting or repeating; hold the frame "
+    "silently if early, add no extra speech."
 )
 
 _ON_SCREEN_FULL = (

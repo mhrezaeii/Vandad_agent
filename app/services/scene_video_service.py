@@ -112,11 +112,10 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
     spoken_text = scene.narration.strip()
     if spoken_text:
         lines.append(
-            "AUDIO: natural Iranian Persian (Farsi) voice-over at the provider's "
-            "measured pace (about 116 words per 30 seconds); this line is already "
-            "sized to that rate. Do not slow down artificially, rush or speed up for "
-            "the cuts. Read ONLY this text word for word, exactly as written, with no "
-            "added, repeated, shortened or paraphrased words; if the line ends early "
+            "AUDIO: natural Iranian Persian (Farsi) voice-over. Do not slow down "
+            "artificially, rush or speed up for the cuts. Read ONLY this text word "
+            "for word, exactly as written, with no added, repeated, shortened or "
+            "paraphrased words; if the line ends early "
             "hold the frame silently and add no new sentence or CTA after it: "
             f"{spoken_text} Under the voice-over, add a soft modern corporate "
             "background track and subtle UI sounds."

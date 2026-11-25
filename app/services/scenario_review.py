@@ -2,11 +2,12 @@
 
 Every generated scenario passes this review before it can reach
 ``script_ready``. The checks are cheap, deterministic, and encode product
-rules only: complete structure, duration and speech budget, Persian narration,
-selective (hard-word-only) diacritics, distinct beats, and a single terminal
-CTA. LLM output is stochastic, so a review failure must be retryable — the
-workflow node raises a transient error and the engine re-generates the
-scenario.
+rules only: complete structure, scene duration, Persian narration, selective
+(hard-word-only) diacritics, distinct beats, and a single terminal CTA. Word
+count is intentionally not gated: GPT writes a complete, natural ~60-second
+scenario and it is sent directly to the video model. LLM output is stochastic,
+so a review failure must be retryable — the workflow node raises a transient
+error and the engine re-generates the scenario.
 """
 
 from __future__ import annotations
@@ -15,14 +16,11 @@ import re
 
 from app.schemas.scenario import (
     _DIACRITICS_RE,
-    MAX_NARRATION_WORDS_PER_MINUTE,
     MAX_SCENE_DURATION_SECONDS,
     MIN_SCENE_DURATION_SECONDS,
     Scenario,
     _spoken_tokens,
     hard_pronunciation_fixes,
-    max_spoken_words,
-    min_spoken_words,
 )
 from app.services.scene_novelty import normalize_visual_signature
 
@@ -50,7 +48,6 @@ _DURATION_TOLERANCE_SECONDS = 1.0
 _DUPLICATE_NARRATION_THRESHOLD = 0.7
 _DUPLICATE_VISUAL_THRESHOLD = 0.8
 _CTA_OVERLAP_THRESHOLD = 0.6
-_WORD_BUDGET_GRACE = 1
 
 
 def _token_set(value: str) -> set[str]:
@@ -91,49 +88,6 @@ def _mentions_cta(value: str, cta_key: tuple[str, ...]) -> bool:
             if tokens[index : index + width] == cta_key:
                 return True
     return _jaccard(set(tokens), set(cta_key)) >= _CTA_OVERLAP_THRESHOLD
-
-
-def word_budget_issues(
-    scenario: Scenario,
-    *,
-    target_duration_seconds: int | float,
-) -> list[str]:
-    """Return word-budget issues; generation reuses these exact thresholds."""
-    issues: list[str] = []
-    if target_duration_seconds:
-        total_words = len(_spoken_tokens(scenario.narration))
-        total_limit = max_spoken_words(float(target_duration_seconds))
-        total_minimum = min_spoken_words(float(target_duration_seconds))
-        if total_words > total_limit + _WORD_BUDGET_GRACE:
-            issues.append(
-                f"narration has {total_words} words for {target_duration_seconds}s; "
-                f"maximum is {total_limit} at the measured "
-                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
-            )
-        elif total_words < total_minimum:
-            issues.append(
-                f"narration has only {total_words} words for {target_duration_seconds}s; "
-                f"at least {total_minimum} are needed at the measured "
-                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate, otherwise the model "
-                "fills the silence with repeated scenes."
-            )
-    for scene in sorted(scenario.scenes, key=lambda item: item.index):
-        words = len(_spoken_tokens(scene.narration))
-        limit = max_spoken_words(scene.duration_seconds)
-        minimum = min_spoken_words(scene.duration_seconds)
-        wpm = round(words / scene.duration_seconds * 60) if scene.duration_seconds else 0
-        if words > limit + _WORD_BUDGET_GRACE:
-            issues.append(
-                f"scene {scene.index + 1} narration is ~{wpm} wpm, above the "
-                f"measured {MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
-            )
-        elif words < minimum:
-            issues.append(
-                f"scene {scene.index + 1} narration has only {words} words for "
-                f"{scene.duration_seconds:g}s; at least {minimum} are needed to "
-                "prevent the model from improvising a repeated scene."
-            )
-    return issues
 
 
 def review_scenario(
@@ -202,14 +156,6 @@ def review_scenario(
                 "last scene narration must introduce the platform instead of repeating the CTA "
                 "or focusing on one narrow feature."
             )
-
-    # Calm delivery: a beat must not contain more words than can be spoken at
-    # the approved pace. Otherwise the video model rushes and improvises a new
-    # line after the script ends. The same helper drives the writer's repair
-    # retry, so generation cannot pass a script the review would reject.
-    issues.extend(
-        word_budget_issues(scenario, target_duration_seconds=target_duration_seconds)
-    )
 
     # One CTA, at the very end. Nothing may continue after the final beat.
     cta_key = tuple(_spoken_tokens(scenario.cta or ""))

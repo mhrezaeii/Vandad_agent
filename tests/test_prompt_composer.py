@@ -180,11 +180,12 @@ def test_long_valid_scenario_fits_after_dropping_only_optional_guidance():
     assert "CAMERA:" not in prompt
 
 
-def test_prompt_requires_measured_narration_rate_and_no_rendered_text():
+def test_prompt_requires_verbatim_narration_and_no_rendered_text():
     prompt = compose_single_shot_prompt(_scenario(), max_characters=5000)
 
     assert "natural Iranian Persian" in prompt
-    assert "about 116 words per 30 seconds" in prompt
+    assert "word for word" in prompt
+    assert "words per 30 seconds" not in prompt
     assert "hold the frame silently" in prompt
     assert "Stop speaking when the final line ends" in prompt
     assert "NO ON-SCREEN TEXT" in prompt

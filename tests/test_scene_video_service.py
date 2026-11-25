@@ -635,7 +635,7 @@ def test_scene_provider_prompt_contains_product_direction_without_character_depe
     assert "slow cinematic push-in" in prompt
     assert "match_cut" in prompt
     assert "natural Iranian Persian" in prompt
-    assert "about 116 words per 30 seconds" in prompt
+    assert "words per 30 seconds" not in prompt
     assert "hold the frame silently" in prompt
     assert "Read ONLY this text word for word" in prompt
     assert "if the line ends early hold the frame silently" in prompt

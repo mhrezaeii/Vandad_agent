@@ -485,7 +485,7 @@ export function Dashboard() {
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [monitorStatus, setMonitorStatus] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
-  const [duration, setDuration] = useState(20);
+  const [duration, setDuration] = useState(60);
   const [providerId, setProviderId] = useState("");
   const [characterKey, setCharacterKey] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
