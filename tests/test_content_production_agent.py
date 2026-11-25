@@ -60,18 +60,20 @@ def _context(
     )
 
 
-def _scenario_payload(*, title="معرفی ونداد"):
+def _scenario_payload(*, title="مُعَرَّفی وَنداد"):
     scenes = [
         {
             "index": 0,
-            "narration": "محصولتان را بهتر معرفی کنید.",
+            "narration": "مَحصولتان رَا بِهتر مُعَرَّفی کُنید.",
             "visual_prompt": "A clean cinematic product interface shot",
             "duration_seconds": 15.0,
             "scene_type": "product_demo",
         },
         {
             "index": 1,
-            "narration": "پایش منابع را ساده و شفاف انجام دهید.",
+            "narration": (
+                "مُعَرَّفی پِلاتفُرم: پایِش مَنابِع رَا سادَه و شَفّاف اَنجام دَهید."
+            ),
             "visual_prompt": "A calm dashboard shot with charts",
             "duration_seconds": 15.0,
             "scene_type": "product_demo",
@@ -79,11 +81,11 @@ def _scenario_payload(*, title="معرفی ونداد"):
     ]
     return {
         "title": title,
-        "opening_hook": "محصولتان چقدر شناخته شده است؟",
+        "opening_hook": "مَحصولتان چِقدر شِناخته شُده اَست؟",
         "scenes": scenes,
         "narration": " ".join(scene["narration"] for scene in scenes),
-        "cta": "بیشتر آشنا شوید",
-        "caption": "معرفی ونداد",
+        "cta": "بیشتَر شُناخته شُوید",
+        "caption": "مُعَرَّفی وَنداد",
         "hashtags": ["#ونداد"],
         "target_duration_seconds": 30,
     }
@@ -458,7 +460,7 @@ async def test_production_regenerates_scenario_once_after_a_rejected_output(
     assert calls["count"] == 2
     assert result["project_status"] == ProjectStatus.VIDEO_GENERATING.value
     assert result["video_status"] == "in_progress"
-    assert result["title"] == "معرفی ونداد"
+    assert result["title"] == "مُعَرَّفی وَنداد"
 
 
 async def test_production_returns_in_progress_when_video_wait_is_bounded(

@@ -24,24 +24,31 @@ from app.services.scenario_service import (
 
 def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
     return {
-        "title": "عنوان تست",
-        "opening_hook": "یک قلاب روشن برای شروع",
+        "title": "عُنوان تست",
+        "opening_hook": "یَک قُلابِ رُوشَن بَرای شُروع",
         "visual_style": "clean cinematic vertical",
         "scenes": [
             {
                 "index": index,
-                "narration": f"روایت فارسی صحنه {index + 1}",
+                "narration": (
+                    f"رِوایت فارِسی صَحنه {index + 1}"
+                    + ("، مُعَرَّفی پِلاتفُرم" if index == count - 1 else "")
+                ),
                 "visual_prompt": f"English visual prompt {index + 1}",
                 "duration_seconds": duration,
-                "on_screen_text": f"متن {index + 1}",
-                "scene_type": "product_demo" if index == 2 else ("problem" if index == 0 else "b_roll"),
+                "on_screen_text": f"مَتن {index + 1}",
+                "scene_type": (
+                    "product_demo"
+                    if index in (2, count - 1)
+                    else ("problem" if index == 0 else "b_roll")
+                ),
                 "camera_direction": "medium close-up, slow push-in" if index == 1 else "cinematic tracking shot",
                 "transition": "match_cut" if index == 2 else "cut",
             }
             for index in range(count)
         ],
-        "cta": "همین حالا شروع کنید",
-        "caption": "کپشن فارسی",
+        "cta": "هَمین لَحظه شُروع کُنید",
+        "caption": "کَپشن فارسی",
         "hashtags": ["#امنیت", "#امنیت", "#فناوری"],
     }
 
@@ -68,7 +75,7 @@ def test_normalize_scales_durations_to_exact_target():
     assert [scene.index for scene in scenario.scenes] == list(range(5))
     # Every scene keeps the required Persian/English fields.
     for scene in scenario.scenes:
-        assert scene.narration.startswith("روایت فارسی")
+        assert scene.narration.startswith("رِوایت فارِسی")
         assert scene.visual_prompt.startswith("English visual prompt")
         assert scene.duration_seconds >= 1.0
 
@@ -110,9 +117,9 @@ def test_normalize_rejects_scene_without_visual_prompt():
 def test_pronunciation_text_preserves_words_and_rejects_rewrites():
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
-    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارسی صَحنه 1"
+    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارِسی صَحنه 1"
     scenario = normalize_scenario(raw, request)
-    assert scenario.scenes[0].pronunciation_text == "رِوایت فارسی صَحنه 1"
+    assert scenario.scenes[0].pronunciation_text == "رِوایت فارِسی صَحنه 1"
     raw["scenes"][0]["pronunciation_text"] = "درود فارسی"
     with pytest.raises(ValueError, match="exact narration words"):
         normalize_scenario(raw, request)
@@ -123,11 +130,11 @@ def test_production_fa_scenario_requires_vowelized_pronunciation_text():
     raw = _raw_scenario(count=2, duration=15.0)
     with pytest.raises(ValueError, match="pronunciation_text with diacritics"):
         normalize_scenario(raw, request)
-    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارسی صَحنه 1"
-    raw["scenes"][1]["pronunciation_text"] = "رِوایت فارسی صَحنه 2"
-    raw["cta_pronunciation_text"] = "هَمین حالا شُروع کُنید"
+    raw["scenes"][0]["pronunciation_text"] = "رِوایت فارِسی صَحنه 1"
+    raw["scenes"][1]["pronunciation_text"] = "رِوایت فارِسی صَحنه 2، مُعَرَّفی پِلاتفُرم"
+    raw["cta_pronunciation_text"] = "هَمین لَحظه شُروع کُنید"
     scenario = normalize_scenario(raw, request)
-    assert scenario.scenes[0].pronunciation_text == "رِوایت فارسی صَحنه 1"
+    assert scenario.scenes[0].pronunciation_text == "رِوایت فارِسی صَحنه 1"
 
 
 def test_storyboard_prompt_uses_brand_lexicon_without_pronunciation_fields():
@@ -137,7 +144,8 @@ def test_storyboard_prompt_uses_brand_lexicon_without_pronunciation_fields():
     )
     system, user = build_scenario_prompt(request)
     assert "pronunciation_text" not in user
-    assert "اعراب" not in system
+    assert "اعراب" in system
+    assert "تمام کلمات فارسی" in system
     assert "وَندیار" in user
 
 
@@ -151,7 +159,7 @@ def test_parse_scenario_content_accepts_fenced_json():
     request = ScenarioRequest(target_duration_seconds=30)
     payload = json.dumps(_raw_scenario(), ensure_ascii=False)
     scenario = parse_scenario_content(f"```json\n{payload}\n```", request)
-    assert scenario.title == "عنوان تست"
+    assert scenario.title == "عُنوان تست"
     assert scenario.total_duration_seconds == pytest.approx(30.0, abs=0.01)
 
 
@@ -314,3 +322,45 @@ def test_persian_written_surface_sanitizer_leaves_non_persian_and_spoken_text():
 def test_persian_prompt_forbids_latin_only_on_screen_text():
     system, _user = build_scenario_prompt(ScenarioRequest())
     assert "متن صرفاً لاتین ممنوع است" in system
+
+
+def test_storyboard_prompt_requires_diacritics_unique_scenes_and_platform_finale():
+    system, user = build_scenario_prompt(ScenarioRequest(target_duration_seconds=30))
+    assert "اعراب" in system
+    assert "تمام کلمات فارسی" in user
+    assert "تکرار" in system
+    assert "نزدیک به تکرار" in user
+    assert "آخرین صحنه" in user
+    assert "معرفی کلی پلتفرم" in user
+
+
+def test_review_scenario_flags_duplicate_scenes():
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][1]["narration"] = raw["scenes"][0]["narration"]
+    raw["scenes"][1]["visual_prompt"] = raw["scenes"][0]["visual_prompt"]
+    issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
+    assert any("duplicate" in issue for issue in issues)
+
+
+def test_review_scenario_requires_last_scene_to_introduce_the_platform():
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][-1]["scene_type"] = "b_roll"
+    raw["scenes"][-1]["narration"] = "رِوایت فارِسی صَحنه 2"
+    issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
+    assert any("last scene" in issue for issue in issues)
+
+
+def test_review_scenario_flags_persian_words_without_diacritics():
+    from app.services.scenario_review import review_scenario
+
+    request = ScenarioRequest(target_duration_seconds=30)
+    raw = _raw_scenario(count=2, duration=15.0)
+    raw["scenes"][0]["narration"] = "روایت فارسی صحنه 1"
+    issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
+    assert any("without diacritics" in issue for issue in issues)

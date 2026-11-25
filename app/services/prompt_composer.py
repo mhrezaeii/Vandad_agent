@@ -293,10 +293,11 @@ _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
 
 
 def _spoken_text(scene: SceneSpec) -> str:
-    """Plain narration is authoritative for the video provider.
+    """The fully diacritized narration is authoritative for the video provider.
 
-    Diacritic-heavy ``pronunciation_text`` confused the video model and caused
-    misread or rushed speech, so only the exact Persian narration is spoken.
+    The scenario prompt now writes every Persian spoken word with diacritics so
+    the video model reads the intended vowels instead of guessing them. The
+    optional ``pronunciation_text`` field is never sent to the provider.
     """
     return scene.narration.strip()
 
