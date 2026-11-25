@@ -468,10 +468,11 @@ def test_spoken_diacritics_fixer_marks_only_hard_words_and_review_passes():
     assert review_scenario(scenario, target_duration_seconds=30) == []
 
 
-def test_storyboard_prompt_asks_for_one_minute_without_word_count():
+def test_storyboard_prompt_asks_for_forty_seconds_without_word_count():
     system, user = build_scenario_prompt(ScenarioRequest(target_duration_seconds=20))
 
-    assert "حدود یک دقیقه" in system
+    assert "حدود چهل ثانیه" in system
+    assert "حدود 20 ثانیه ویدیو" in user
     assert "نیازی به شمارش واژه" in system
     assert "هیچ محدودیت یا هدف شمارشی" in user
     assert "هدف گفتار" not in user

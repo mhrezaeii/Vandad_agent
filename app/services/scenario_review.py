@@ -4,7 +4,7 @@ Every generated scenario passes this review before it can reach
 ``script_ready``. The checks are cheap, deterministic, and encode product
 rules only: complete structure, scene duration, Persian narration, selective
 (hard-word-only) diacritics, distinct beats, and a single terminal CTA. Word
-count is intentionally not gated: GPT writes a complete, natural ~60-second
+count is intentionally not gated: GPT writes a complete, natural ~40-second
 scenario and it is sent directly to the video model. LLM output is stochastic,
 so a review failure must be retryable — the workflow node raises a transient
 error and the engine re-generates the scenario.

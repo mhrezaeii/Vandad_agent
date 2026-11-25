@@ -114,7 +114,7 @@ class ContentScenarioService:
         ) or None
 
         request = ScenarioRequest(
-            target_duration_seconds=int(options.get("target_duration_seconds") or 60),
+            target_duration_seconds=int(options.get("target_duration_seconds") or 40),
             scene_count=options.get("scene_count"),
             brand_name=brand.display_name or brand.name,
             brand_tone=brand.tone,

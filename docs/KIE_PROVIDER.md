@@ -56,7 +56,7 @@ does not report a duration.
 ### Scenario length and speech
 
 The scenario writer is asked for a complete, natural Persian storyboard for
-roughly a one-minute promotional video. There is no word-count target, no word
+roughly a 40-second promotional video. There is no word-count target, no word
 budget, and no word-rate gate: GPT writes the whole scenario in its own words
 and the validated scenario is sent directly to the video model. Provider speech
 is synthesised live and is not word-perfect. The quality gate still checks
@@ -64,8 +64,8 @@ structure, scene timing, single terminal CTA, no burned-in text, and
 hard-word-only diacritics; word count is deliberately not a quality rule.
 
 Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. The image-to-video model prices at 2.4 / 4.5 / 8 credits per second for
-480p / 720p / 1080p, so a 60-second 480p single-shot generation costs about
-144 credits. These rates do not describe the separate Grok Imagine Video 1.5
+480p / 720p / 1080p, so a 40-second 480p generation costs about
+96 credits. These rates do not describe the separate Grok Imagine Video 1.5
 Preview text-to-video model. Verify current
 pricing on kie.ai before relying on the estimate; the adapter's preflight
 checks the live credit balance against the same per-second rates, and the
@@ -78,26 +78,26 @@ assumption, not a billing statement).
 With the example `SCENE_VIDEO_KIE_PRICE_PER_CREDIT_USD=0.005`, the image-to-video
 credit schedule implies these planning estimates:
 
-| Resolution | Credits/second | Estimated USD/second | 30 seconds | 60 seconds |
+| Resolution | Credits/second | Estimated USD/second | 30 seconds | 40 seconds |
 |---|---:|---:|---:|---:|
-| 480p | 2.4 | $0.0120 | $0.36 | $0.72 |
-| 720p | 4.5 | $0.0225 | $0.675 | $1.35 |
-| 1080p | 8.0 | $0.0400 | $1.20 | $2.40 |
+| 480p | 2.4 | $0.0120 | $0.36 | $0.48 |
+| 720p | 4.5 | $0.0225 | $0.675 | $0.90 |
+| 1080p | 8.0 | $0.0400 | $1.20 | $1.60 |
 
-The sub-$1 target for a 30–60 second final video is therefore compatible with
-480p generation on raw estimated credits only; 720p/1080p do not meet that
-target for a 60-second output. These estimates exclude retries and any
-supplier-side charges not represented by `creditsConsumed`. The application
-checks the estimated project cost against the company's per-operation budget
-before reservation, and settles the ledger from reported consumed credits.
+The $0.50 per-operation company budget for the default 40-second video is met
+by 480p generation on raw estimated credits ($0.48), while 720p/1080p exceed
+that limit. These estimates exclude retries and any supplier-side charges not
+represented by `creditsConsumed`. The application checks the estimated project
+cost against the company's per-operation budget before reservation, and settles
+the ledger from reported consumed credits.
 
 **Duration caveat:** the initial production default is single-shot, which
 submits exactly one image-to-video task and supports at most 30 seconds. The
-60-second figure above is a planning estimate only; it requires multi-scene
+40-second figure above is a planning estimate only; it requires multi-scene
 generation and local assembly. Multi-scene mode is not part of the initial
 accepted production path until its separate end-to-end quality and audio
-acceptance is completed. Do not interpret the $0.72 estimate as evidence that
-60-second production has already passed acceptance.
+acceptance is completed. Do not interpret the $0.48 estimate as evidence that
+40-second production has already passed acceptance.
 
 ## Single-shot mode (one prompt, one submission)
 
@@ -124,7 +124,7 @@ body field `generation_mode`):
 4. The single provider MP4 (native audio preserved, no local TTS overlay) is
    the final deliverable via the existing single-clip passthrough path.
 
-The initial release defaults to `generation_mode="single_shot"`. Multi-scene mode is available only when explicitly selected with `generation_mode="multi_scene"`; it creates one paid KIE job per storyboard scene and assembles the returned clips locally while preserving their native audio tracks. It is not the default path. Because the default image-to-video model accepts at most 30 seconds per job, a 60-second deliverable requires multi-scene mode with every scene kept within the model-specific 6–30 second bounds. The multi-scene code path has mock-based tests, but credentialed end-to-end audio/quality acceptance remains a release gate.
+The initial release defaults to `generation_mode="single_shot"`. Multi-scene mode is available only when explicitly selected with `generation_mode="multi_scene"`; it creates one paid KIE job per storyboard scene and assembles the returned clips locally while preserving their native audio tracks. It is not the default path. Because the default image-to-video model accepts at most 30 seconds per job, a 40-second deliverable requires multi-scene mode with every scene kept within the model-specific 6–30 second bounds. The multi-scene code path has mock-based tests, but credentialed end-to-end audio/quality acceptance remains a release gate.
 
 ## Character reference image
 
