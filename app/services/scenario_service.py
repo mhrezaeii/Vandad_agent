@@ -29,12 +29,15 @@ from app.schemas.scenario import (
     Scenario,
     ScenarioRequest,
     SceneSpec,
+    _spoken_tokens,
     hard_pronunciation_fixes,
     max_spoken_words,
+    min_spoken_words,
     normalize_scenario,
 )
 from app.security.crypto import MasterKeyBox
 from app.services.llm_execution_service import LlmExecutionService
+from app.services.scenario_review import word_budget_issues
 
 _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
 
@@ -66,7 +69,10 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     cta_hint = request.cta_text or "یک دعوت به اقدام کوتاه و روشن"
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
     total_word_budget = max_spoken_words(request.target_duration_seconds)
-    per_scene_word_budget = max_spoken_words(request.target_duration_seconds / scene_count)
+    total_word_minimum = min_spoken_words(request.target_duration_seconds)
+    duration_per_scene = request.target_duration_seconds / scene_count
+    per_scene_word_budget = max_spoken_words(duration_per_scene)
+    per_scene_word_minimum = min_spoken_words(duration_per_scene)
     pronunciation_lexicon = (
         json.dumps(request.pronunciation_lexicon, ensure_ascii=False, sort_keys=True)
         if request.pronunciation_lexicon else "بدون واژه‌نامه اختصاصی"
@@ -94,13 +100,14 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "وقتی بیش از یک صحنه وجود دارد، آخرین صحنه باید معرفی کلی پلتفرم باشد، "
         "نه تکرار CTA و نه تمرکز روی یک قابلیت تکهای. آخرین صحنه آخرین لحظه ویدیو است؛ "
         "بعد از آن هیچ جمله، صحنه یا تکراری نیاید و scene_type=cta ممنوع است. "
-        "هیچ واژه‌ای را اضافه، حذف، ترجمه، بازنویسی یا جابه جا نکن. "
+        "واژههای واژهنامه و نام برند را اضافه، حذف، ترجمه یا جابهجا نکن. "
         "از ترجمه ماشینی، جمله‌های طولانی، اغراق و ادعای اثبات‌نشده دوری کن. "
         f"نرخ گفتار مدل الزامی است: {KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه "
         f"({MAX_NARRATION_WORDS_PER_MINUTE} واژه در دقیقه)، اندازهگیری شده از خروجی واقعی KIE. "
-        "متن سناریو را دقیقاً با همین نرخ بنویس؛ کمتر نوشتن باعث میشود مدل جای خالی را با "
-        "جمله تکراری یا صحنه جدید پر کند و بیشتر نوشتن باعث تندخوانی میشود. "
-        "جملهها کوتاه باشند، اما شمار واژهها را به نرخ بالا نزدیک نگه دار. "
+        "پیش از برگرداندن JSON، واژههای هر narration صحنه و narration کل را بشمار و با بودجه زیر "
+        "مطابقت بده؛ اگر بیرون بود، متن را با همان ترتیب و بدون برش یا جمله ناتمام بازنویسی کن. "
+        "کمتر نوشتن باعث میشود مدل جای خالی را با جمله تکراری یا صحنه اضافی پر کند و "
+        "بیشتر نوشتن باعث تندخوانی میشود. شمارش فقط narration صحنههاست، نه title، opening_hook، cta یا caption. "
         "صحنه‌های product_demo باید محصول را در حال استفاده نشان دهند: رابط کاربری، داشبورد، "
         "تعامل کاربر و جریان کار؛ از متن ناخوانا و رابط کاربری ساختگی با قابلیت‌های ادعایی پرهیز کن. "
         "هیچ متنی روی تصویر رندر نشود؛ داخل قاب هیچ متن، کپشن، "
@@ -124,10 +131,13 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
         f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
-        f"بودجه گفتار: حدود {total_word_budget} واژه در کل و {per_scene_word_budget} واژه در هر صحنه، "
-        f"برابر با نرخ اندازهگیری شده {KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه. "
-        "از این شمارش بهطور قابل توجهی کمتر ننویس، چون مدل جای خالی را با تکرار و صحنه اضافی پر میکند؛ "
-        "سرعت خواندن را هم تغییر نده. "
+        f"بودجه گفتار الزامی است (نه تقریبی): {total_word_budget} واژه در کل؛ "
+        f"حداقل {total_word_minimum} و حداکثر {total_word_budget} واژه. "
+        f"هر صحنه دقیقاً {duration_per_scene:.1f} ثانیه و {per_scene_word_minimum} تا "
+        f"{per_scene_word_budget} واژه داشته باشد، برابر با نرخ اندازهگیری شده "
+        f"{KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه. "
+        "خودت بشمار و قبل از خروجی بررسی کن؛ کمتر یا بیشتر از این بازه ننویس و سرعت خواندن را تغییر نده. "
+        "برای کوتاه کردن، جملهها را بازنویسی کن، ولی روایت را برش نزن و بخشی از ترتیب صحنهها را حذف نکن. "
         "اعرابگذاری فقط برای واژههای دشوار تلفظ، نام برند و موارد واژهنامه است؛ "
         "کلمات عادی فارسی در narration، cta و opening_hook بدون اعراب بمانند. "
         "واژههای واژهنامه را دقیقاً با همان اعراب به کار ببر و واژهای را جابهجا نکن. "
@@ -270,6 +280,61 @@ def ensure_spoken_diacritics(scenario: Scenario, request: ScenarioRequest) -> Sc
     )
 
 
+def _prepare_scenario(content: Any, request: ScenarioRequest) -> Scenario:
+    """Parse a model response and apply the deterministic speech/text fixes."""
+    scenario = parse_scenario_content(content, request)
+    scenario = sanitize_persian_written_surfaces(scenario, request)
+    return ensure_spoken_diacritics(scenario, request)
+
+
+def word_budget_retry_key(
+    idempotency_key: str | None, *, company_id: uuid.UUID, user: str
+) -> str:
+    """Give each counted repair prompt its own stable idempotency key.
+
+    The base key stays project-scoped, while the digest separates a new bad
+    draft from a previous one. An identical retry still replays safely.
+    """
+    base = idempotency_key or f"auto:{company_id}"
+    digest = hashlib.sha256(user.encode("utf-8")).hexdigest()[:16]
+    return f"{base}:word-budget-repair:{digest}"
+
+
+def _word_budget_feedback(
+    scenario: Scenario,
+    request: ScenarioRequest,
+    issues: list[str],
+) -> str:
+    """Build concrete counted feedback for a corrective regeneration."""
+    total_words = len(_spoken_tokens(scenario.narration))
+    total_limit = max_spoken_words(request.target_duration_seconds)
+    total_minimum = min_spoken_words(request.target_duration_seconds)
+    lines = [
+        "\n\nبازبینی خودکار بودجه گفتار رد شد؛ سناریو را دوباره بنویس:",
+        f"تعداد فعلی کل: {total_words} واژه؛ مجاز: {total_minimum} تا {total_limit} واژه "
+        f"برای {request.target_duration_seconds} ثانیه.",
+    ]
+    for scene in sorted(scenario.scenes, key=lambda item: item.index):
+        words = len(_spoken_tokens(scene.narration))
+        limit = max_spoken_words(scene.duration_seconds)
+        minimum = min_spoken_words(scene.duration_seconds)
+        lines.append(
+            f"صحنه {scene.index + 1}: {words} واژه در {scene.duration_seconds:g} ثانیه؛ "
+            f"مجاز: {minimum} تا {limit} واژه."
+        )
+    lines.extend(
+        [
+            "دلایل بازبینی: " + " | ".join(issues[:5]),
+            "همان تعداد صحنه، ترتیب روایی و زمینه تأییدشده پلتفرم را حفظ کن؛ "
+            "فقط متن گفتار را فشرده یا گسترش بده تا در بازه باشد.",
+            "برش نزن، جمله ناتمام نگذار و واژهای بعد از آخرین صحنه اضافه نکن؛ "
+            "CTA فقط یکبار در انتها میماند.",
+            "همان ساختار JSON کامل را دوباره برگردان و on_screen_text را خالی بگذار.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 class ScenarioService:
     """Generate a validated scenario through the configured text-generation API."""
 
@@ -311,9 +376,28 @@ class ScenarioService:
             idempotency_key=idempotency_key,
             task_id=task_id,
         )
-        scenario = parse_scenario_content(metadata.get("content"), request)
-        scenario = sanitize_persian_written_surfaces(scenario, request)
-        return ensure_spoken_diacritics(scenario, request), metadata
+        scenario = _prepare_scenario(metadata.get("content"), request)
+        issues = word_budget_issues(
+            scenario, target_duration_seconds=request.target_duration_seconds
+        )
+        if issues:
+            # The quality gate would reject this script later, so give the model
+            # one counted correction before the workflow burns another retry.
+            repair_user = user + _word_budget_feedback(scenario, request, issues)
+            repair_metadata = await self._complete(
+                company_id=company_id,
+                connection_id=connection_id,
+                system=system,
+                user=repair_user,
+                timeout_seconds=timeout_seconds,
+                operation=operation,
+                idempotency_key=word_budget_retry_key(
+                    idempotency_key, company_id=company_id, user=repair_user
+                ),
+                task_id=task_id,
+            )
+            return _prepare_scenario(repair_metadata.get("content"), request), repair_metadata
+        return scenario, metadata
 
     async def _complete(
         self,

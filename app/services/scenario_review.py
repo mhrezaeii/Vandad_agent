@@ -22,6 +22,7 @@ from app.schemas.scenario import (
     _spoken_tokens,
     hard_pronunciation_fixes,
     max_spoken_words,
+    min_spoken_words,
 )
 from app.services.scene_novelty import normalize_visual_signature
 
@@ -50,9 +51,6 @@ _DUPLICATE_NARRATION_THRESHOLD = 0.7
 _DUPLICATE_VISUAL_THRESHOLD = 0.8
 _CTA_OVERLAP_THRESHOLD = 0.6
 _WORD_BUDGET_GRACE = 1
-# A short script leaves silent time that the video model fills with repeated
-# lines or improvised scenes. Require most of the measured per-second budget.
-_MIN_WORD_BUDGET_RATIO = 0.85
 
 
 def _token_set(value: str) -> set[str]:
@@ -93,6 +91,49 @@ def _mentions_cta(value: str, cta_key: tuple[str, ...]) -> bool:
             if tokens[index : index + width] == cta_key:
                 return True
     return _jaccard(set(tokens), set(cta_key)) >= _CTA_OVERLAP_THRESHOLD
+
+
+def word_budget_issues(
+    scenario: Scenario,
+    *,
+    target_duration_seconds: int | float,
+) -> list[str]:
+    """Return word-budget issues; generation reuses these exact thresholds."""
+    issues: list[str] = []
+    if target_duration_seconds:
+        total_words = len(_spoken_tokens(scenario.narration))
+        total_limit = max_spoken_words(float(target_duration_seconds))
+        total_minimum = min_spoken_words(float(target_duration_seconds))
+        if total_words > total_limit + _WORD_BUDGET_GRACE:
+            issues.append(
+                f"narration has {total_words} words for {target_duration_seconds}s; "
+                f"maximum is {total_limit} at the measured "
+                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
+            )
+        elif total_words < total_minimum:
+            issues.append(
+                f"narration has only {total_words} words for {target_duration_seconds}s; "
+                f"at least {total_minimum} are needed at the measured "
+                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate, otherwise the model "
+                "fills the silence with repeated scenes."
+            )
+    for scene in sorted(scenario.scenes, key=lambda item: item.index):
+        words = len(_spoken_tokens(scene.narration))
+        limit = max_spoken_words(scene.duration_seconds)
+        minimum = min_spoken_words(scene.duration_seconds)
+        wpm = round(words / scene.duration_seconds * 60) if scene.duration_seconds else 0
+        if words > limit + _WORD_BUDGET_GRACE:
+            issues.append(
+                f"scene {scene.index + 1} narration is ~{wpm} wpm, above the "
+                f"measured {MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
+            )
+        elif words < minimum:
+            issues.append(
+                f"scene {scene.index + 1} narration has only {words} words for "
+                f"{scene.duration_seconds:g}s; at least {minimum} are needed to "
+                "prevent the model from improvising a repeated scene."
+            )
+    return issues
 
 
 def review_scenario(
@@ -164,40 +205,11 @@ def review_scenario(
 
     # Calm delivery: a beat must not contain more words than can be spoken at
     # the approved pace. Otherwise the video model rushes and improvises a new
-    # line after the script ends.
-    if target_duration_seconds:
-        total_words = len(_spoken_tokens(scenario.narration))
-        total_limit = max_spoken_words(float(target_duration_seconds))
-        total_minimum = max(1, round(total_limit * _MIN_WORD_BUDGET_RATIO))
-        if total_words > total_limit + _WORD_BUDGET_GRACE:
-            issues.append(
-                f"narration has {total_words} words for {target_duration_seconds}s; "
-                f"maximum is {total_limit} at the measured "
-                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
-            )
-        elif total_words < total_minimum:
-            issues.append(
-                f"narration has only {total_words} words for {target_duration_seconds}s; "
-                f"at least {total_minimum} are needed at the measured "
-                f"{MAX_NARRATION_WORDS_PER_MINUTE} wpm rate, otherwise the model "
-                "fills the silence with repeated scenes."
-            )
-    for scene in ordered_scenes:
-        words = len(_spoken_tokens(scene.narration))
-        limit = max_spoken_words(scene.duration_seconds)
-        minimum = max(1, round(limit * _MIN_WORD_BUDGET_RATIO))
-        wpm = round(words / scene.duration_seconds * 60) if scene.duration_seconds else 0
-        if words > limit + _WORD_BUDGET_GRACE:
-            issues.append(
-                f"scene {scene.index + 1} narration is ~{wpm} wpm, above the "
-                f"measured {MAX_NARRATION_WORDS_PER_MINUTE} wpm rate."
-            )
-        elif words < minimum:
-            issues.append(
-                f"scene {scene.index + 1} narration has only {words} words for "
-                f"{scene.duration_seconds:g}s; at least {minimum} are needed to "
-                "prevent the model from improvising a repeated scene."
-            )
+    # line after the script ends. The same helper drives the writer's repair
+    # retry, so generation cannot pass a script the review would reject.
+    issues.extend(
+        word_budget_issues(scenario, target_duration_seconds=target_duration_seconds)
+    )
 
     # One CTA, at the very end. Nothing may continue after the final beat.
     cta_key = tuple(_spoken_tokens(scenario.cta or ""))

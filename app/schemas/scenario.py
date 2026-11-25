@@ -37,11 +37,19 @@ MAX_TARGET_DURATION_SECONDS = 120
 # words at this measured average, not at a slower "calm" rate of its own choosing.
 KIE_WORDS_PER_30_SECONDS = 116
 MAX_NARRATION_WORDS_PER_MINUTE = KIE_WORDS_PER_30_SECONDS * 2
+# A short script leaves silent time that the video model fills with repeated
+# lines or improvised scenes. The writer and the review gate share this floor.
+MIN_WORD_BUDGET_RATIO = 0.85
 
 
 def max_spoken_words(seconds: float, *, wpm: int = MAX_NARRATION_WORDS_PER_MINUTE) -> int:
     """Word budget for a beat at KIE's measured spoken-word rate."""
     return max(1, round(float(seconds) * wpm / 60))
+
+
+def min_spoken_words(seconds: float, *, wpm: int = MAX_NARRATION_WORDS_PER_MINUTE) -> int:
+    """Minimum useful words for a beat, before the model improvises filler."""
+    return max(1, round(max_spoken_words(seconds, wpm=wpm) * MIN_WORD_BUDGET_RATIO))
 
 
 def expected_scene_count(target_duration_seconds: float) -> int:
