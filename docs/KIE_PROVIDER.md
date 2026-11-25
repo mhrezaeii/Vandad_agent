@@ -62,8 +62,9 @@ the script fills the clip; a short script leaves silence that the model fills
 with repeated sentences or improvised scenes. Provider speech is synthesised
 live and is not word-perfect, so the review gate enforces a budget near the
 measured average rather than a slower manual pace. The scenario writer uses the
-same budget helper as the gate and performs one counted corrective regeneration
-if the first draft is over or under budget, before the workflow-level retry.
+same budget helper as the gate and performs up to two counted corrective
+regenerations if a draft is over or under budget, before the workflow-level
+retry.
 
 Both supported KIE models return an MP4 with provider-native audio; audio cannot be disabled. This native-audio output is the chosen audio path for the initial release: Vandad validates and preserves the returned audio and does not add a local TTS/lip-sync replacement. The image-to-video model prices at 2.4 / 4.5 / 8 credits per second for
 480p / 720p / 1080p, so a 20-second 480p single-shot generation costs about

@@ -464,6 +464,8 @@ def test_storyboard_prompt_states_exact_word_budget():
     _system, user = build_scenario_prompt(ScenarioRequest(target_duration_seconds=20))
 
     assert "دقیقاً 5.0 ثانیه" in user
+    assert "هدف گفتار: 69" in user
+    assert "هدف 17" in user
     assert "حداقل 65" in user
     assert "حداکثر 77" in user
     assert "16 تا 19" in user
@@ -473,20 +475,24 @@ def test_storyboard_prompt_states_exact_word_budget():
 def test_word_budget_retry_key_is_distinct_and_stable():
     company_id = uuid.uuid4()
     first = word_budget_retry_key(
-        "content-scenario:1", company_id=company_id, user="feedback A"
+        "content-scenario:1", company_id=company_id, user="feedback A", attempt=1
     )
     second = word_budget_retry_key(
-        "content-scenario:1", company_id=company_id, user="feedback B"
+        "content-scenario:1", company_id=company_id, user="feedback B", attempt=1
+    )
+    second_attempt = word_budget_retry_key(
+        "content-scenario:1", company_id=company_id, user="feedback A", attempt=2
     )
 
-    assert first.startswith("content-scenario:1:word-budget-repair:")
+    assert first.startswith("content-scenario:1:word-budget-repair-1:")
     assert first != second
+    assert first != second_attempt
     assert first == word_budget_retry_key(
-        "content-scenario:1", company_id=company_id, user="feedback A"
+        "content-scenario:1", company_id=company_id, user="feedback A", attempt=1
     )
     assert word_budget_retry_key(
-        None, company_id=company_id, user="feedback A"
-    ).startswith(f"auto:{company_id}:word-budget-repair:")
+        None, company_id=company_id, user="feedback A", attempt=1
+    ).startswith(f"auto:{company_id}:word-budget-repair-1:")
 
 
 async def test_scenario_service_repairs_word_budget_with_counted_feedback():
@@ -517,3 +523,66 @@ async def test_scenario_service_repairs_word_budget_with_counted_feedback():
     assert metadata["content"] is corrected
     assert len(_spoken_tokens(scenario.narration)) == 76
     assert word_budget_issues(scenario, target_duration_seconds=20) == []
+
+
+async def test_scenario_service_uses_second_correction_for_still_overlong_draft():
+    request = ScenarioRequest(target_duration_seconds=20)
+    overlong = _raw_scenario(count=4, duration=5.0)
+    for index, scene in enumerate(overlong["scenes"]):
+        scene["narration"] = _filler(index, 25) + "."
+    still_over = _raw_scenario(count=4, duration=5.0)
+    for index, (scene, size) in enumerate(
+        zip(still_over["scenes"], (21, 21, 20, 21), strict=True)
+    ):
+        scene["narration"] = _filler(index, size) + "."
+    corrected = _raw_scenario(count=4, duration=5.0)
+
+    responses = [overlong, still_over, corrected]
+    calls: list[dict[str, str]] = []
+
+    async def llm_call(*, system: str, user: str) -> dict[str, object]:
+        calls.append({"system": system, "user": user})
+        return {"content": responses[len(calls) - 1]}
+
+    service = ScenarioService(None, None, None, None, llm_call=llm_call)
+    scenario, metadata = await service.generate(
+        company_id=uuid.uuid4(),
+        connection_id=None,
+        request=request,
+        idempotency_key="content-scenario:test",
+    )
+
+    assert len(calls) == 3
+    assert "83" in calls[2]["user"]
+    assert "هدف: 69" in calls[2]["user"]
+    assert "هدف: 17" in calls[2]["user"]
+    assert "تلاش قبلی" in calls[2]["user"]
+    assert metadata["content"] is corrected
+    assert len(_spoken_tokens(scenario.narration)) == 76
+    assert word_budget_issues(scenario, target_duration_seconds=20) == []
+
+
+async def test_scenario_service_raises_transient_when_budget_cannot_be_fixed():
+    request = ScenarioRequest(target_duration_seconds=20)
+    overlong = _raw_scenario(count=4, duration=5.0)
+    for index, scene in enumerate(overlong["scenes"]):
+        scene["narration"] = _filler(index, 25) + "."
+
+    calls: list[dict[str, str]] = []
+
+    async def llm_call(*, system: str, user: str) -> dict[str, object]:
+        calls.append({"system": system, "user": user})
+        return {"content": overlong}
+
+    service = ScenarioService(None, None, None, None, llm_call=llm_call)
+    with pytest.raises(ScenarioGenerationError) as excinfo:
+        await service.generate(
+            company_id=uuid.uuid4(),
+            connection_id=None,
+            request=request,
+            idempotency_key="content-scenario:test",
+        )
+
+    assert len(calls) == 3
+    assert excinfo.value.code == "scenario_word_budget"
+    assert excinfo.value.retryable is True

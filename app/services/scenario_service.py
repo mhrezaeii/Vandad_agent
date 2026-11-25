@@ -40,6 +40,9 @@ from app.services.llm_execution_service import LlmExecutionService
 from app.services.scenario_review import word_budget_issues
 
 _SCENARIO_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+# The model often lands a little above a stated ceiling. Two counted passes
+# keep the workflow retry as a last resort instead of persisting a bad script.
+_MAX_WORD_BUDGET_REPAIRS = 2
 
 
 class ScenarioGenerationError(Exception):
@@ -70,9 +73,11 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
     hashtags_hint = "، ".join(request.hashtags) if request.hashtags else "سه تا پنج هشتگ مرتبط"
     total_word_budget = max_spoken_words(request.target_duration_seconds)
     total_word_minimum = min_spoken_words(request.target_duration_seconds)
+    total_word_target = _word_budget_target(request.target_duration_seconds)
     duration_per_scene = request.target_duration_seconds / scene_count
     per_scene_word_budget = max_spoken_words(duration_per_scene)
     per_scene_word_minimum = min_spoken_words(duration_per_scene)
+    per_scene_word_target = _word_budget_target(duration_per_scene)
     pronunciation_lexicon = (
         json.dumps(request.pronunciation_lexicon, ensure_ascii=False, sort_keys=True)
         if request.pronunciation_lexicon else "بدون واژه‌نامه اختصاصی"
@@ -131,12 +136,12 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
         f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
-        f"بودجه گفتار الزامی است (نه تقریبی): {total_word_budget} واژه در کل؛ "
+        f"هدف گفتار: {total_word_target} واژه در کل؛ "
         f"حداقل {total_word_minimum} و حداکثر {total_word_budget} واژه. "
-        f"هر صحنه دقیقاً {duration_per_scene:.1f} ثانیه و {per_scene_word_minimum} تا "
-        f"{per_scene_word_budget} واژه داشته باشد، برابر با نرخ اندازهگیری شده "
-        f"{KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه. "
-        "خودت بشمار و قبل از خروجی بررسی کن؛ کمتر یا بیشتر از این بازه ننویس و سرعت خواندن را تغییر نده. "
+        f"هر صحنه دقیقاً {duration_per_scene:.1f} ثانیه و هدف {per_scene_word_target} واژه با "
+        f"بازه {per_scene_word_minimum} تا {per_scene_word_budget} واژه داشته باشد، برابر با نرخ "
+        f"اندازهگیری شده {KIE_WORDS_PER_30_SECONDS} واژه در ۳۰ ثانیه. "
+        "خودت بشمار و قبل از خروجی بررسی کن؛ از هدف تجاوز نکن و سرعت خواندن را تغییر نده. "
         "برای کوتاه کردن، جملهها را بازنویسی کن، ولی روایت را برش نزن و بخشی از ترتیب صحنهها را حذف نکن. "
         "اعرابگذاری فقط برای واژههای دشوار تلفظ، نام برند و موارد واژهنامه است؛ "
         "کلمات عادی فارسی در narration، cta و opening_hook بدون اعراب بمانند. "
@@ -287,8 +292,15 @@ def _prepare_scenario(content: Any, request: ScenarioRequest) -> Scenario:
     return ensure_spoken_diacritics(scenario, request)
 
 
+def _word_budget_target(seconds: float) -> int:
+    """Aim just above the floor so a small model overshoot stays under the cap."""
+    minimum = min_spoken_words(seconds)
+    maximum = max_spoken_words(seconds)
+    return max(minimum, round(minimum + (maximum - minimum) * 0.3))
+
+
 def word_budget_retry_key(
-    idempotency_key: str | None, *, company_id: uuid.UUID, user: str
+    idempotency_key: str | None, *, company_id: uuid.UUID, user: str, attempt: int
 ) -> str:
     """Give each counted repair prompt its own stable idempotency key.
 
@@ -297,41 +309,52 @@ def word_budget_retry_key(
     """
     base = idempotency_key or f"auto:{company_id}"
     digest = hashlib.sha256(user.encode("utf-8")).hexdigest()[:16]
-    return f"{base}:word-budget-repair:{digest}"
+    return f"{base}:word-budget-repair-{attempt}:{digest}"
 
 
 def _word_budget_feedback(
     scenario: Scenario,
     request: ScenarioRequest,
     issues: list[str],
+    *,
+    attempt: int,
 ) -> str:
     """Build concrete counted feedback for a corrective regeneration."""
     total_words = len(_spoken_tokens(scenario.narration))
     total_limit = max_spoken_words(request.target_duration_seconds)
     total_minimum = min_spoken_words(request.target_duration_seconds)
+    target_total = _word_budget_target(request.target_duration_seconds)
     lines = [
-        "\n\nبازبینی خودکار بودجه گفتار رد شد؛ سناریو را دوباره بنویس:",
-        f"تعداد فعلی کل: {total_words} واژه؛ مجاز: {total_minimum} تا {total_limit} واژه "
+        "\n\nبازبینی خودکار بودجه گفتار رد شد؛ سناریو را دوباره بنویس "
+        f"(اصلاح {attempt} از {_MAX_WORD_BUDGET_REPAIRS}):",
+        f"تعداد فعلی کل: {total_words} واژه؛ هدف: {target_total} واژه؛ "
+        f"مجاز: {total_minimum} تا {total_limit} واژه "
         f"برای {request.target_duration_seconds} ثانیه.",
     ]
     for scene in sorted(scenario.scenes, key=lambda item: item.index):
         words = len(_spoken_tokens(scene.narration))
         limit = max_spoken_words(scene.duration_seconds)
         minimum = min_spoken_words(scene.duration_seconds)
+        target = _word_budget_target(scene.duration_seconds)
         lines.append(
             f"صحنه {scene.index + 1}: {words} واژه در {scene.duration_seconds:g} ثانیه؛ "
-            f"مجاز: {minimum} تا {limit} واژه."
+            f"هدف: {target} واژه؛ مجاز: {minimum} تا {limit} واژه."
         )
     lines.extend(
         [
             "دلایل بازبینی: " + " | ".join(issues[:5]),
-            "همان تعداد صحنه، ترتیب روایی و زمینه تأییدشده پلتفرم را حفظ کن؛ "
-            "فقط متن گفتار را فشرده یا گسترش بده تا در بازه باشد.",
+            "دقیقاً مطابق اعداد هدف بنویس و از حداکثر تجاوز نکن؛ "
+            "همان تعداد صحنه، ترتیب روایی و زمینه تأییدشده پلتفرم را حفظ کن.",
             "برش نزن، جمله ناتمام نگذار و واژهای بعد از آخرین صحنه اضافه نکن؛ "
             "CTA فقط یکبار در انتها میماند.",
             "همان ساختار JSON کامل را دوباره برگردان و on_screen_text را خالی بگذار.",
         ]
     )
+    if attempt > 1:
+        lines.append(
+            "تلاش قبلی هنوز خارج از بودجه بود؛ از شمارش قبلی صرفنظر کن و متن را "
+            "دوباره با همان ترتیب، ولی کوتاهتر و دقیقاً مطابق هدف بنویس."
+        )
     return "\n".join(lines)
 
 
@@ -376,15 +399,19 @@ class ScenarioService:
             idempotency_key=idempotency_key,
             task_id=task_id,
         )
-        scenario = _prepare_scenario(metadata.get("content"), request)
-        issues = word_budget_issues(
-            scenario, target_duration_seconds=request.target_duration_seconds
-        )
-        if issues:
-            # The quality gate would reject this script later, so give the model
-            # one counted correction before the workflow burns another retry.
-            repair_user = user + _word_budget_feedback(scenario, request, issues)
-            repair_metadata = await self._complete(
+        for attempt in range(_MAX_WORD_BUDGET_REPAIRS + 1):
+            scenario = _prepare_scenario(metadata.get("content"), request)
+            issues = word_budget_issues(
+                scenario, target_duration_seconds=request.target_duration_seconds
+            )
+            if not issues or attempt == _MAX_WORD_BUDGET_REPAIRS:
+                break
+            # Correct counted drafts here instead of letting the quality gate
+            # reject a persisted script and burn a whole workflow retry.
+            repair_user = user + _word_budget_feedback(
+                scenario, request, issues, attempt=attempt + 1
+            )
+            metadata = await self._complete(
                 company_id=company_id,
                 connection_id=connection_id,
                 system=system,
@@ -392,11 +419,20 @@ class ScenarioService:
                 timeout_seconds=timeout_seconds,
                 operation=operation,
                 idempotency_key=word_budget_retry_key(
-                    idempotency_key, company_id=company_id, user=repair_user
+                    idempotency_key,
+                    company_id=company_id,
+                    user=repair_user,
+                    attempt=attempt + 1,
                 ),
                 task_id=task_id,
             )
-            return _prepare_scenario(repair_metadata.get("content"), request), repair_metadata
+        if issues:
+            raise ScenarioGenerationError(
+                "Scenario word budget is still invalid after "
+                f"{_MAX_WORD_BUDGET_REPAIRS} corrections: " + "; ".join(issues[:4]),
+                code="scenario_word_budget",
+                retryable=True,
+            )
         return scenario, metadata
 
     async def _complete(
