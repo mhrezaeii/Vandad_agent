@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.core.queue import WorkflowJob, WorkflowQueue
+from app.core.queue import DELAYED_KEY, MAIN_KEY, PROCESSING_KEY, WorkflowJob, WorkflowQueue
 from app.integrations.providers import build_default_registry
 from app.models import (
     Platform,
@@ -160,6 +160,10 @@ async def test_concurrency_limit_bounds_executing_jobs(
     await db_session.commit()
 
     queue = WorkflowQueue(redis_manager.client)
+    # Isolate this test from jobs left by earlier tests; otherwise the two
+    # consumers can spend the bounded wait draining unrelated queue entries.
+    for key in (MAIN_KEY, PROCESSING_KEY, DELAYED_KEY):
+        await redis_manager.client.delete(key)
     await queue.requeue_processing()
     for execution in executions:
         await queue.enqueue(WorkflowJob(execution_id=execution.id, company_id=company.id))
@@ -184,7 +188,7 @@ async def test_concurrency_limit_bounds_executing_jobs(
     consumers = [asyncio.create_task(worker._consume_loop(i)) for i in range(worker.concurrency)]
 
     # Wait until all executions complete (bounded wait).
-    deadline = asyncio.get_running_loop().time() + 30
+    deadline = asyncio.get_running_loop().time() + 90
     while asyncio.get_running_loop().time() < deadline:
         result = await db_session.execute(
             select(WorkflowExecution.status).where(
