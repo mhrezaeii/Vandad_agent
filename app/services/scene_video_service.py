@@ -75,6 +75,7 @@ from app.services.video_assembly import (
     probe_video_streams,
     qc_video_file,
     run_ffmpeg,
+    storyboard_transitions,
 )
 from app.storage.base import ArtifactStorage
 
@@ -1527,10 +1528,7 @@ class SceneVideoService:
             (item for item in (project.scenario or {}).get("scenes", []) if isinstance(item, dict)),
             key=lambda item: int(item.get("index") or 0),
         )
-        transitions = tuple(
-            str(item.get("transition_out") or item.get("transition") or "cut")
-            for item in scenario_scenes[1:]
-        )
+        transitions = storyboard_transitions(scenario_scenes)
         if len(transitions) != max(0, len(ordered_jobs) - 1):
             transitions = ()
 

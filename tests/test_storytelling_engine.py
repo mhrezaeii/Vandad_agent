@@ -273,6 +273,15 @@ def test_xfade_args_keep_exact_duration_and_mix_native_audio(tmp_path):
     assert "alimiter" in joined_music
 
 
+def test_storyboard_transitions_use_each_scene_entrance():
+    scenes = [
+        {"transition": "cut", "transition_in": "cut", "transition_out": "dissolve"},
+        {"transition": "cut", "transition_in": "dissolve", "transition_out": "cut"},
+        {"transition": "cut", "transition_in": "match_cut", "transition_out": "cut"},
+    ]
+    assert video_assembly.storyboard_transitions(scenes) == ("dissolve", "match_cut")
+
+
 def test_qc_report_fails_closed_on_expected_native_audio_missing(monkeypatch):
     monkeypatch.setattr(
         video_assembly, "probe_video_streams",

@@ -15,6 +15,7 @@ import json
 import math
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +140,19 @@ def clip_duration_seconds(path: Path) -> float | None:
         capture_output=True, timeout=60, check=False,
     )
     return _probe_float(result.stdout.strip())
+
+
+def storyboard_transitions(scenes: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    """Return the transition entering every scene after the first one.
+
+    ``transition_in`` is the directed handoff from the previous beat. Using
+    ``transition_out`` here would apply the final beat's exit to an earlier cut
+    and silently drop the authored dissolve at the storyboard seam.
+    """
+    return tuple(
+        str(item.get("transition_in") or item.get("transition") or "cut")
+        for item in scenes[1:]
+    )
 
 
 def build_xfade_concat_args(
