@@ -98,7 +98,9 @@ class ClipAssemblyService:
             render_end_card(
                 output_path=end_card, width=width, height=height,
                 title=(brand.display_name if brand else "") or "Vandefence",
+                product=str(project.video_title or ""),
                 tagline=str(((brand.visual_config or {}).get("endcard_tagline")) or ""),
+                cta=str(project.call_to_action or ""),
                 site_url=str(((brand.visual_config or {}).get("site_url")) or ""),
             )
             endcard_video = workdir / "end-card.mp4"

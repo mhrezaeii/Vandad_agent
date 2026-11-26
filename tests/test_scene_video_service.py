@@ -63,6 +63,7 @@ def _scenario(count: int = 3, duration: float = 5.0) -> Scenario:
             SceneSpec(
                 index=index,
                 narration=f"روایت {index}",
+                pronunciation_text=f"روایت {index}",
                 visual_prompt=f"visual prompt {index}",
                 duration_seconds=duration,
                 on_screen_text=f"متن {index}",
@@ -71,6 +72,7 @@ def _scenario(count: int = 3, duration: float = 5.0) -> Scenario:
         ],
         narration=" ".join(f"روایت {index}" for index in range(count)),
         cta="شروع کنید",
+        cta_pronunciation_text="شروع کنید",
         caption="کپشن",
         hashtags=["#تست"],
         target_duration_seconds=int(count * duration),

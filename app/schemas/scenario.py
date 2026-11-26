@@ -19,6 +19,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.storytelling import (
+    ActName,
+    CharacterBible,
+    SceneKind,
+    allocate_act_durations,
+    build_character_bible,
+)
+
 # Scene-count envelope. A single-scene project is allowed because the provider's
 # one clip is itself a complete deliverable and needs no composition stage; the
 # upper bound keeps generation cost and pacing sane.
@@ -58,9 +66,12 @@ class ScenarioRequest(BaseModel):
     product_context: str | None = Field(default=None, max_length=3000)
     platform_knowledge_context: str | None = Field(default=None, max_length=12000)
     pronunciation_lexicon: dict[str, str] = Field(default_factory=dict, max_length=100)
-    require_pronunciation_text: bool = False
+    require_pronunciation_text: bool = True
     has_reference_image: bool = False
     reference_character_description: str | None = Field(default=None, max_length=1000)
+    visual_style_preset: str = Field(default="cinematic_3d_storytelling", max_length=100)
+    character_bible: CharacterBible | None = None
+    enable_storyboard: bool = True
 
     @field_validator("hashtags")
     @classmethod
@@ -91,9 +102,22 @@ class ScenarioRequest(BaseModel):
 
 
 _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+_PERSIAN_WORD_RE = re.compile(r"[\u0600-\u06FF]+")
 
-# Only these hard-to-pronounce words receive diacritics. Ordinary Persian
-# words stay unvowelized; over-vowelized speech makes the video model stumble.
+# The video model's native Persian speech mispronounces unvowelized words, so
+# every word of four letters or more must carry diacritics. Only short words
+# (one to three letters) stay plain; marks there add no useful pronunciation
+# information. Pronunciation marks never change the spoken words or their order.
+SHORT_SPEECH_WORD_MAX_LETTERS = 3
+
+
+def needs_speech_diacritics(word: str) -> bool:
+    """Whether a Persian word is long enough to require pronunciation marks."""
+    return len(_DIACRITICS_RE.sub("", word)) > SHORT_SPEECH_WORD_MAX_LETTERS
+
+
+# Curated pronunciations for brand/technical words. They override the model's
+# own vowelization so names and lexicon entries are always spoken as intended.
 HARD_PRONUNCIATION_FIXES: dict[str, str] = {
     "وندیار": "وَندیار",
     "ونداد": "وَنَداد",
@@ -138,8 +162,12 @@ class SceneSpec(BaseModel):
     narration: str = Field(min_length=1, max_length=2000, description="Persian narration for this scene.")
     pronunciation_text: str | None = Field(
         default=None,
+        min_length=1,
         max_length=2000,
-        description="Same spoken words with Persian diacritics for pronunciation.",
+        description=(
+            "Same spoken words with Persian diacritics for pronunciation. "
+            "Auto-filled from narration for legacy callers."
+        ),
     )
     visual_prompt: str = Field(
         min_length=1,
@@ -148,9 +176,29 @@ class SceneSpec(BaseModel):
     )
     duration_seconds: float = Field(gt=0, description="Scene duration in seconds.")
     on_screen_text: str | None = Field(default=None, max_length=500, description="Persian on-screen text.")
-    scene_type: Literal["problem", "product_demo", "b_roll", "motion_graphic", "cta"] = "b_roll"
+    scene_type: SceneKind = "b_roll"
     camera_direction: str | None = Field(default=None, max_length=1000)
     transition: Literal["cut", "dissolve", "whip", "match_cut", "fade"] = "cut"
+
+    # Storyboard direction. All fields are optional so previously stored
+    # scenarios keep validating; build_storyboard() supplies deterministic
+    # defaults when a writer omits them.
+    scene_id: str | None = Field(default=None, max_length=100)
+    act: ActName | None = None
+    narrative_purpose: str | None = Field(default=None, max_length=500)
+    characters: list[str] = Field(default_factory=list, max_length=8)
+    character_actions: str | None = Field(default=None, max_length=1000)
+    character_emotions: str | None = Field(default=None, max_length=500)
+    environment: str | None = Field(default=None, max_length=1000)
+    camera_shot: str | None = Field(default=None, max_length=500)
+    camera_angle: str | None = Field(default=None, max_length=500)
+    camera_movement: str | None = Field(default=None, max_length=500)
+    lighting: str | None = Field(default=None, max_length=500)
+    visual_composition: str | None = Field(default=None, max_length=1000)
+    sound_design: str | None = Field(default=None, max_length=500)
+    transition_in: str | None = Field(default=None, max_length=100)
+    transition_out: str | None = Field(default=None, max_length=100)
+    continuity_constraints: list[str] = Field(default_factory=list, max_length=12)
 
     @field_validator("narration", "visual_prompt")
     @classmethod
@@ -187,11 +235,18 @@ class Scenario(BaseModel):
     scenes: list[SceneSpec] = Field(min_length=MIN_SCENES, max_length=MAX_SCENES)
     narration: str = Field(min_length=1, description="Full Persian narration, scenes joined in order.")
     cta: str = Field(default="", max_length=500)
-    cta_pronunciation_text: str | None = Field(default=None, max_length=500)
+    cta_pronunciation_text: str = Field(
+        default="",
+        max_length=500,
+        description="Same spoken CTA words with Persian diacritics for pronunciation.",
+    )
     caption: str = Field(default="", max_length=2000)
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     target_duration_seconds: int = Field(ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS)
     visual_style: str | None = Field(default=None, max_length=1000)
+    visual_style_preset: str | None = Field(default=None, max_length=100)
+    character_bible: CharacterBible | None = None
+    storyboard_version: str | None = Field(default=None, max_length=50)
     language: str = Field(default="fa-IR", min_length=2, max_length=20)
 
     @field_validator("title", "opening_hook", "narration")
@@ -304,6 +359,7 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
                 raise ValueError(f"Scene {position + 1} pronunciation_text changed narration words or order.")
     target_duration = float(request.target_duration_seconds)
     fallback_duration = max(MIN_SCENE_DURATION_SECONDS, target_duration / len(raw_scenes))
+    allocations = allocate_act_durations(target_duration, len(raw_scenes))
 
     scenes: list[SceneSpec] = []
     for position, item in enumerate(raw_scenes):
@@ -322,6 +378,7 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
             raise ValueError(f"Scene {position} has no visual prompt.")
         duration = _coerce_float(item.get("duration_seconds") or item.get("duration"), fallback_duration)
         duration = max(MIN_SCENE_DURATION_SECONDS, min(MAX_SCENE_DURATION_SECONDS, duration))
+        storyboard_act = allocations[position][0] if position < len(allocations) else "problem"
         scenes.append(
             SceneSpec(
                 index=position,
@@ -333,6 +390,22 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
                 scene_type=item.get("scene_type", "b_roll"),
                 camera_direction=item.get("camera_direction"),
                 transition=item.get("transition", "cut"),
+                scene_id=item.get("scene_id"),
+                act=item.get("act") or storyboard_act,
+                narrative_purpose=item.get("narrative_purpose"),
+                characters=item.get("characters") or [],
+                character_actions=item.get("character_actions"),
+                character_emotions=item.get("character_emotions"),
+                environment=item.get("environment"),
+                camera_shot=item.get("camera_shot"),
+                camera_angle=item.get("camera_angle"),
+                camera_movement=item.get("camera_movement"),
+                lighting=item.get("lighting"),
+                visual_composition=item.get("visual_composition"),
+                sound_design=item.get("sound_design"),
+                transition_in=item.get("transition_in"),
+                transition_out=item.get("transition_out"),
+                continuity_constraints=item.get("continuity_constraints") or [],
             )
         )
 
@@ -383,6 +456,14 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
     if not isinstance(visual_style, str):
         visual_style = None
 
+    style_preset = raw.get("visual_style_preset") or request.visual_style_preset
+    if not isinstance(style_preset, str) or not style_preset.strip():
+        style_preset = "cinematic_3d_storytelling"
+    bible = build_character_bible(raw.get("character_bible")) or request.character_bible
+    storyboard_version = raw.get("storyboard_version")
+    if not isinstance(storyboard_version, str) or not storyboard_version.strip():
+        storyboard_version = "cinematic-1" if request.enable_storyboard else None
+
     return Scenario(
         title=title,
         opening_hook=opening_hook,
@@ -394,5 +475,8 @@ def normalize_scenario(raw: dict[str, Any], request: ScenarioRequest) -> Scenari
         hashtags=hashtags,
         target_duration_seconds=request.target_duration_seconds,
         visual_style=visual_style,
+        visual_style_preset=style_preset,
+        character_bible=bible,
+        storyboard_version=storyboard_version,
         language=request.language,
     )

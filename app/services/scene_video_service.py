@@ -66,13 +66,16 @@ from app.services.scene_novelty import (
     normalize_visual_signature,
     visual_fingerprint,
 )
+from app.services.storytelling import character_block, get_style_preset
 from app.services.video_assembly import (
     clip_has_audio,
     concat_scene_clips,
     ffmpeg_binary,
     ffprobe_binary,
     probe_video_streams,
+    qc_video_file,
     run_ffmpeg,
+    storyboard_transitions,
 )
 from app.storage.base import ArtifactStorage
 
@@ -82,12 +85,20 @@ _PREVIEW_BYTES = 64 * 1024
 
 def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference_image: bool = False) -> str:
     """Translate structured storyboard direction into a provider-ready prompt."""
+    preset = get_style_preset(scenario.visual_style_preset)
     lines = [
         f"SCENE TYPE: {scene.scene_type}",
-        f"VISUAL STYLE: {scenario.visual_style or 'consistent premium brand film'}",
+        f"ACT: {scene.act or 'unspecified'}",
+        f"NARRATIVE PURPOSE: {scene.narrative_purpose or 'advance the five-act story'}",
+        f"STYLE PRESET: {scenario.visual_style_preset or 'cinematic_3d_storytelling'}",
+        f"VISUAL STYLE: {scenario.visual_style or preset['visual_style']}",
+        "AVOID: " + preset["avoid"],
         "NO ON-SCREEN TEXT: render no captions, subtitles, labels, watermarks, "
         "logos or generated lettering in any frame.",
     ]
+    bible = character_block(scenario.character_bible)
+    if bible:
+        lines.append(bible)
     if scene.scene_type == "product_demo":
         lines.append(
             "PRODUCT DEMO: Show a believable close-up or over-the-shoulder interaction with the product UI. "
@@ -98,10 +109,26 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
             "MOTION GRAPHICS: Use clean brand-colored shapes, iconography and kinetic "
             "composition; no generated text."
         )
+    for label, value in (
+        ("ENVIRONMENT", scene.environment),
+        ("CHARACTER ACTIONS", scene.character_actions),
+        ("CHARACTER EMOTIONS", scene.character_emotions),
+        ("CAMERA SHOT", scene.camera_shot),
+        ("CAMERA ANGLE", scene.camera_angle),
+        ("CAMERA MOVEMENT", scene.camera_movement),
+        ("LIGHTING", scene.lighting),
+        ("COMPOSITION", scene.visual_composition),
+        ("SOUND DESIGN", scene.sound_design),
+    ):
+        if value:
+            lines.append(f"{label}: {str(value).strip()}")
     if scene.camera_direction:
         lines.append(f"CAMERA: {scene.camera_direction}")
     lines.append(f"TRANSITION INTO NEXT SCENE: {scene.transition}")
     lines.append(f"VISUAL PROMPT: {scene.visual_prompt}")
+    for constraint in scene.continuity_constraints:
+        if str(constraint).strip():
+            lines.append(f"CONTINUITY: {str(constraint).strip()}")
     if has_reference_image:
         lines.append(
             "REFERENCE IMAGE (immutable source): use the exact attached image as the "
@@ -109,7 +136,9 @@ def build_scene_provider_prompt(scene: Any, scenario: Scenario, *, has_reference
             "or alter the source image; preserve the same identity, face, hair, outfit, "
             "accessories and proportions in every generated frame."
         )
-    spoken_text = scene.narration.strip()
+    # The pronunciation-ready surface is authoritative for provider speech;
+    # narration stays the readable canonical text for subtitles and QC.
+    spoken_text = (scene.pronunciation_text or scene.narration).strip()
     if spoken_text:
         lines.append(
             "AUDIO: natural Iranian Persian (Farsi) voice-over. Do not slow down "
@@ -1493,6 +1522,17 @@ class SceneVideoService:
         overlays = self._plan_real_product_overlays(
             project, jobs, output_dir_hint=project.id, width=width, height=height,
         )
+        ordered_jobs = sorted(jobs, key=lambda item: item.scene_index)
+        scene_seconds = tuple(float(job.duration_seconds) for job in ordered_jobs)
+        scenario_scenes = sorted(
+            (item for item in (project.scenario or {}).get("scenes", []) if isinstance(item, dict)),
+            key=lambda item: int(item.get("index") or 0),
+        )
+        transitions = storyboard_transitions(scenario_scenes)
+        if len(transitions) != max(0, len(ordered_jobs) - 1):
+            transitions = ()
+
+        qc: dict[str, Any] = {}
         output_dir = Path(tempfile.mkdtemp(prefix="vandad-assembly-"))
         try:
             for index, (image, _start, _end) in enumerate(list(overlays)):
@@ -1502,8 +1542,23 @@ class SceneVideoService:
             output_path = output_dir / f"vandad-final-{project.id}.mp4"
             await concat_scene_clips(
                 tuple(clip_paths), output_path=output_path, width=width, height=height,
-                overlays=tuple(overlays),
+                overlays=tuple(overlays), transitions=transitions,
+                scene_seconds=scene_seconds,
             )
+            qc = qc_video_file(
+                output_path,
+                expected_duration_seconds=sum(scene_seconds),
+                expected_width=width, expected_height=height,
+                expect_audio=bool(provider.supports_native_audio),
+            )
+            if qc.get("status") == "failed":
+                failures = [
+                    item["name"] for item in qc.get("checks", []) if not item.get("passed")
+                ]
+                raise SceneVideoPermanentError(
+                    "The assembled video failed structural QC: " + ", ".join(failures),
+                    code="assembly_qc_failed",
+                )
             preview = bytearray()
 
             async def chunks():
@@ -1563,6 +1618,8 @@ class SceneVideoService:
                 "status": "not_applicable",
                 "reason": "local_deterministic_assembly",
             },
+            "assembly_qc": qc,
+            "transitions": list(transitions),
         }
         project.final_artifact_id = artifact.id
         project.assembly_metadata = metadata

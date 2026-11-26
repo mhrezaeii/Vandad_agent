@@ -2,8 +2,8 @@
 
 Every generated scenario passes this review before it can reach
 ``script_ready``. The checks are cheap, deterministic, and encode product
-rules only: complete structure, scene duration, Persian narration, selective
-(hard-word-only) diacritics, distinct beats, and a single terminal CTA. Word
+rules only: complete structure, scene duration, Persian narration, diacritics
+on every word of four letters or more, distinct beats, and a single terminal CTA. Word
 count is intentionally not gated: GPT writes a complete, natural ~40-second
 scenario and it is sent directly to the video model. LLM output is stochastic,
 so a review failure must be retryable — the workflow node raises a transient
@@ -21,8 +21,10 @@ from app.schemas.scenario import (
     Scenario,
     _spoken_tokens,
     hard_pronunciation_fixes,
+    needs_speech_diacritics,
 )
 from app.services.scene_novelty import normalize_visual_signature
+from app.services.storytelling import build_storyboard, storyboard_issues
 
 # Unverifiable or absolute claims are forbidden by the scenario system prompt;
 # the review enforces the same policy on the produced text.
@@ -62,15 +64,19 @@ def _visual_key(value: str) -> set[str]:
     return set(_spoken_tokens(normalize_visual_signature(value)))
 
 
-def _missing_hard_word_diacritics(value: str, fixes: dict[str, str]) -> list[str]:
-    """Hard words present in the text but still missing pronunciation marks."""
+def _missing_diacritics(value: str, fixes: dict[str, str]) -> list[str]:
+    """Long Persian words that are unvowelized or miss a lexicon pronunciation."""
     missing: set[str] = set()
     for word in _PERSIAN_WORD_RE.findall(value or ""):
-        if _DIACRITICS_RE.search(word):
+        plain = _DIACRITICS_RE.sub("", word)
+        if not needs_speech_diacritics(plain):
             continue
-        for plain in fixes:
-            if word == plain or word.startswith(plain):
+        expected = fixes.get(plain)
+        if expected is not None:
+            if expected not in word:
                 missing.add(plain)
+        elif not _DIACRITICS_RE.search(word):
+            missing.add(plain)
     return sorted(missing)
 
 
@@ -149,8 +155,11 @@ def review_scenario(
         # The finale must be structured as a product demo, but its wording is not
         # gated. A fixed whitelist of nouns ("پلتفرم"، "سامانه"، ...) rejected valid
         # natural narrations in production. CTA repetition is still caught below.
-        if last.scene_type != "product_demo":
-            issues.append("last scene must introduce the platform with scene_type 'product_demo'.")
+        if last.scene_type not in ("product_demo", "brand_ending"):
+            issues.append(
+                "last scene must introduce the platform with scene_type "
+                "'product_demo' or 'brand_ending'."
+            )
 
     # One CTA, at the very end. Nothing may continue after the final beat.
     cta_key = tuple(_spoken_tokens(scenario.cta or ""))
@@ -201,9 +210,9 @@ def review_scenario(
             if text.strip() and not _ARABIC_SCRIPT.search(text):
                 issues.append(f"{label} must be Persian but has no Persian characters.")
 
-        # Diacritics are a pronunciation aid for hard/brand words only. Ordinary
-        # words must stay unvowelized, so the gate checks required marks rather
-        # than a global vowelized-word ratio.
+        # The video model's native speech mispronounces unvowelized Persian, so
+        # every word of four letters or more must carry diacritics. Short words
+        # stay plain; brand/lexicon words must use their curated pronunciation.
         fixes = hard_pronunciation_fixes(pronunciation_lexicon)
         diacritic_targets: list[tuple[str, str]] = [
             ("opening_hook", scenario.opening_hook),
@@ -213,11 +222,22 @@ def review_scenario(
         for scene in scenario.scenes:
             diacritic_targets.append((f"scene {scene.index + 1} narration", scene.narration))
         for label, text in diacritic_targets:
-            missing = _missing_hard_word_diacritics(text, fixes)
+            missing = _missing_diacritics(text, fixes)
             if missing:
                 issues.append(
-                    f"{label}: hard-to-pronounce words need diacritics: "
+                    f"{label}: words of four letters or more need diacritics: "
                     f"{', '.join(missing[:6])}."
                 )
+
+    # Cinematic storyboard/Character Bible gate. This is additive: legacy
+    # scenarios are upgraded deterministically by build_storyboard(), and an
+    # explicit storyboard_version=None disables the gate for older stored data.
+    if scenario.storyboard_version:
+        try:
+            storyboard = build_storyboard(scenario)
+            for issue in storyboard_issues(storyboard):
+                issues.append(f"storyboard: {issue}")
+        except Exception as exc:  # noqa: BLE001 - must be retryable by the writer
+            issues.append(f"storyboard: invalid storyboard: {exc}")
 
     return issues
