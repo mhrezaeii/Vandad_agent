@@ -128,6 +128,119 @@ def _probe_float(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def clip_duration_seconds(path: Path) -> float | None:
+    """Return a clip's container duration, or None when it cannot be probed."""
+    probe = ffprobe_binary()
+    if probe is None:
+        return None
+    result = subprocess.run(
+        [probe, "-v", "error", "-show_entries", "format=duration", "-of",
+         "csv=p=0", str(path)],
+        capture_output=True, timeout=60, check=False,
+    )
+    return _probe_float(result.stdout.strip())
+
+
+def build_xfade_concat_args(
+    *,
+    ffmpeg: str,
+    clip_paths: tuple[Path, ...],
+    output_path: Path,
+    width: int,
+    height: int,
+    scene_seconds: tuple[float, ...],
+    transitions: tuple[str, ...],
+    with_audio: bool,
+) -> tuple[str, ...]:
+    """Build a cinematic multi-scene concat with motivated dissolve transitions.
+
+    A ``cut`` is a near-instant handoff; other values map to deterministic
+    FFmpeg xfade/acrossfade transitions. The chain is padded back to the exact
+    summed scene length, so transitions never shorten the deliverable.
+    """
+    if len(clip_paths) < 2 or len(scene_seconds) != len(clip_paths):
+        raise SceneVideoPermanentError(
+            "Cinematic transitions require one duration per scene and at least two scenes.",
+            code="assembly_transition_input_invalid",
+        )
+    if len(transitions) != len(clip_paths) - 1:
+        raise SceneVideoPermanentError(
+            "Cinematic transitions require one transition between every adjacent pair.",
+            code="assembly_transition_input_invalid",
+        )
+
+    kind_map = {
+        "cut": "fade", "dissolve": "fade", "fade": "fade",
+        "whip": "slide", "match_cut": "fade",
+    }
+    durations = []
+    for value in scene_seconds:
+        if value <= 0 or not math.isfinite(value):
+            raise SceneVideoPermanentError(
+                "Cinematic transitions require finite positive scene durations.",
+                code="assembly_transition_input_invalid",
+            )
+        durations.append(value)
+    transitions_seconds = tuple(
+        max(0.04, min(0.5, value * 0.08)) for value in durations[:-1]
+    )
+    command: list[str] = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    for path in clip_paths:
+        command += ["-i", str(path)]
+
+    filters: list[str] = []
+    for index in range(len(clip_paths)):
+        filters.append(
+            f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p,"
+            f"setsar=1[v{index}]"
+        )
+    video_chain = "v0"
+    offset = 0.0
+    for index, name in enumerate(transitions, start=1):
+        offset += durations[index - 1] - transitions_seconds[index - 1]
+        kind = kind_map.get(str(name).strip().lower(), "fade")
+        output = f"vx{index}"
+        filters.append(
+            f"[{video_chain}][v{index}]xfade=transition={kind}:"
+            f"duration={transitions_seconds[index - 1]:.3f}:"
+            f"offset={max(0.0, offset):.3f}[{output}]"
+        )
+        video_chain = output
+    total = sum(durations)
+    filters.append(
+        f"[{video_chain}]tpad=stop_mode=clone:stop_duration="
+        f"{sum(transitions_seconds):.3f}[vout]"
+    )
+
+    audio_chain: str | None = None
+    if with_audio:
+        for index in range(len(clip_paths)):
+            filters.append(
+                f"[{index}:a]aresample=48000,aformat=channel_layouts=stereo[a{index}]"
+            )
+        audio_chain = "a0"
+        for index in range(1, len(clip_paths)):
+            output = f"ax{index}"
+            filters.append(
+                f"[{audio_chain}][a{index}]acrossfade=d={transitions_seconds[index - 1]:.3f}"
+                f":c1=tri:c2=tri[{output}]"
+            )
+            audio_chain = output
+        filters.append(f"[{audio_chain}]apad=whole_dur={total:.3f}[aout]")
+
+    command += [
+        "-filter_complex", ";".join(filters),
+        "-map", "[vout]",
+        *([ "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2" ]
+          if audio_chain else ["-an"]),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-t", f"{total:.3f}", "-movflags", "+faststart",
+        str(output_path),
+    ]
+    return tuple(command)
+
+
 def build_concat_args(
     *,
     ffmpeg: str,
@@ -218,6 +331,10 @@ async def concat_scene_clips(
     width: int,
     height: int,
     overlays: tuple[tuple[Path, float, float], ...] = (),
+    transitions: tuple[str, ...] = (),
+    scene_seconds: tuple[float, ...] = (),
+    music_path: Path | None = None,
+    music_gain: float = 0.12,
 ) -> int:
     """Assemble scene clips into one MP4; returns the output size in bytes.
 
@@ -241,6 +358,17 @@ async def concat_scene_clips(
             )
     ffmpeg = ffmpeg_binary()
     with_audio = all(clip_has_audio(path) for path in clip_paths)
+    use_xfade = bool(transitions and len(clip_paths) > 1)
+    durations = tuple(float(value) for value in scene_seconds)
+    if use_xfade and len(durations) != len(clip_paths):
+        probed = tuple(clip_duration_seconds(path) for path in clip_paths)
+        durations = tuple(value for value in probed if value is not None)
+        if len(durations) != len(clip_paths):
+            # Without reliable timings, fall back to the exact plain concat
+            # rather than guessing xfade offsets.
+            use_xfade = False
+            durations = ()
+    total_seconds = sum(durations) if durations else 0.0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     concat_list = output_path.with_suffix(".concat.txt")
@@ -249,13 +377,23 @@ async def concat_scene_clips(
         encoding="utf-8",
     )
     temp_full = output_path.with_suffix(".full.mp4")
+    mixed = output_path.with_suffix(".mixed.mp4")
     try:
-        await run_ffmpeg(
-            build_concat_args(
-                ffmpeg=ffmpeg, concat_list=concat_list, output_path=temp_full,
-                width=width, height=height, with_audio=with_audio,
-            ),
-        )
+        if use_xfade:
+            await run_ffmpeg(
+                build_xfade_concat_args(
+                    ffmpeg=ffmpeg, clip_paths=tuple(clip_paths), output_path=temp_full,
+                    width=width, height=height, scene_seconds=durations,
+                    transitions=tuple(transitions), with_audio=with_audio,
+                ),
+            )
+        else:
+            await run_ffmpeg(
+                build_concat_args(
+                    ffmpeg=ffmpeg, concat_list=concat_list, output_path=temp_full,
+                    width=width, height=height, with_audio=with_audio,
+                ),
+            )
         finish_args = build_finish_args(
             ffmpeg=ffmpeg, source_path=temp_full, output_path=output_path,
             width=width, height=height, overlays=overlays, with_audio=with_audio,
@@ -264,9 +402,18 @@ async def concat_scene_clips(
             temp_full.replace(output_path)
         else:
             await run_ffmpeg(finish_args)
+        if music_path is not None and with_audio and total_seconds > 0:
+            await run_ffmpeg(
+                build_music_mix_args(
+                    ffmpeg=ffmpeg, video_path=output_path, music_path=music_path,
+                    output_path=mixed, total_seconds=total_seconds, music_gain=music_gain,
+                ),
+            )
+            mixed.replace(output_path)
     finally:
         concat_list.unlink(missing_ok=True)
         temp_full.unlink(missing_ok=True)
+        mixed.unlink(missing_ok=True)
 
     size = output_path.stat().st_size
     if size <= 0:
@@ -386,6 +533,122 @@ def build_audio_concat_args(
         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
         str(output_path),
     )
+
+
+def build_music_mix_args(
+    *,
+    ffmpeg: str,
+    video_path: Path,
+    music_path: Path,
+    output_path: Path,
+    total_seconds: float,
+    music_gain: float = 0.12,
+) -> tuple[str, ...]:
+    """Mix an optional licensed bed under the existing native narration audio.
+
+    Speech remains the primary source (gain 1.0); the bed is ducked to
+    ``music_gain`` with equal-power cross fade at both ends and a limiter keeps
+    the final programme level bounded. No music is generated or downloaded.
+    """
+    if not music_path.is_file():
+        raise SceneVideoPermanentError(
+            "The supplied music bed does not exist on disk.", code="assembly_music_missing"
+        )
+    gain = max(0.0, min(0.35, float(music_gain)))
+    fade = max(0.2, min(2.0, total_seconds / 10.0))
+    fade_start = max(0.0, total_seconds - fade)
+    filters = (
+        f"[1:a]aresample=48000,aformat=channel_layouts=stereo,"
+        f"volume={gain:.3f},afade=t=in:st=0:d={fade:.3f},"
+        f"afade=t=out:st={fade_start:.3f}:d={fade:.3f}[bed];"
+        f"[0:a][bed]amix=inputs=2:duration=first:dropout_transition=0,"
+        f"alimiter=limit=0.95[aout]"
+    )
+    return (
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(video_path), "-stream_loop", "-1", "-i", str(music_path),
+        "-filter_complex", filters,
+        "-map", "0:v:0", "-map", "[aout]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-t", f"{total_seconds:.3f}", "-movflags", "+faststart",
+        str(output_path),
+    )
+
+
+def qc_video_file(
+    path: Path,
+    *,
+    expected_duration_seconds: float,
+    expected_width: int,
+    expected_height: int,
+    expect_audio: bool,
+    duration_tolerance_seconds: float = 1.0,
+) -> dict[str, Any]:
+    """Deterministic structural QC for one assembled deliverable.
+
+    This verifies container facts only. Pronunciation, acting quality and brand
+    correctness still require a human listening/viewing pass; the report says so
+    explicitly so nobody mistakes a passing probe for creative acceptance.
+    """
+    probe = probe_video_streams(path)
+    if probe is None:
+        return {
+            "status": "skipped",
+            "reason": "ffprobe is not installed; structural QC is unavailable.",
+            "requires_human_review": True,
+            "checks": [],
+        }
+
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, passed: bool, detail: str) -> None:
+        checks.append({"name": name, "passed": bool(passed), "detail": detail})
+
+    check("has_video", bool(probe["has_video"]), "video stream present")
+    width_ok = int(probe["width"] or 0) == int(expected_width)
+    height_ok = int(probe["height"] or 0) == int(expected_height)
+    check(
+        "resolution",
+        width_ok and height_ok,
+        f"{probe['width']}x{probe['height']} (expected {expected_width}x{expected_height})",
+    )
+    ratio = (
+        float(probe["width"]) / float(probe["height"])
+        if probe["height"] else 0.0
+    )
+    check(
+        "vertical_aspect",
+        abs(ratio - 9.0 / 16.0) <= 0.02,
+        f"aspect={ratio:.4f} (expected 9:16)",
+    )
+    duration = _probe_float(probe["duration_seconds"])
+    duration_ok = (
+        duration is not None
+        and abs(duration - float(expected_duration_seconds)) <= float(duration_tolerance_seconds)
+    )
+    check(
+        "duration",
+        bool(duration_ok),
+        f"{duration if duration is not None else 'unknown'}s "
+        f"(expected {float(expected_duration_seconds):.3f}s "
+        f"+/-{float(duration_tolerance_seconds):.3f}s)",
+    )
+    if expect_audio:
+        check(
+            "native_audio",
+            bool(probe["has_audio"]),
+            f"audio_streams={probe['audio_stream_count']}, codec={probe['audio_codec']}",
+        )
+    else:
+        check("no_audio_expected", not probe["has_audio"], "audio stream absent as expected")
+
+    return {
+        "status": "passed" if all(item["passed"] for item in checks) else "failed",
+        "probe": probe,
+        "checks": checks,
+        "requires_human_review": True,
+        "note": "Structural probe only; pronunciation and creative quality require listening/viewing.",
+    }
 
 
 async def run_ffmpeg(command: tuple[str, ...]) -> None:

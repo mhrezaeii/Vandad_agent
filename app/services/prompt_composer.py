@@ -134,6 +134,74 @@ _TIMING_COMPACT = (
 _TIMING_MINIMAL = "TIMING: Beats in order at stated durations; total matches video length."
 
 
+PROMPT_SECTIONS: tuple[str, ...] = (
+    "goal",
+    "identity",
+    "visual_world",
+    "story_arc",
+    "timing",
+    "cinematography",
+    "speech",
+    "sound",
+    "text_free_brand_end",
+    "storyboard_cta",
+)
+
+_STORY_ARC_FULL = (
+    "Five-act compact film: Problem, Escalation, Solution, Transformation, "
+    "Brand/CTA. Keep the cause-and-effect chain visible; escalation must add a "
+    "new complication, the solution must connect to the problem, and the "
+    "transformation must show a believable change. Do not restart the problem "
+    "after the transformation."
+)
+_STORY_ARC_COMPACT = (
+    "Five acts in order: Problem, Escalation, Solution, Transformation, "
+    "Brand/CTA. Keep cause and effect visible; no repeated setup."
+)
+
+_CINEMATOGRAPHY_FULL = (
+    "Use motivated wide, medium and close coverage with smooth, purposeful "
+    "camera movement, realistic material response, soft key light and gentle "
+    "rim light. Composition and focus must guide attention to the acting and "
+    "the product. No random cuts, flicker, drifting framing or unmotivated zoom."
+)
+_CINEMATOGRAPHY_COMPACT = (
+    "Motivated coverage with smooth camera movement, soft key/rim light and "
+    "intentional focus. No random cuts or drifting framing."
+)
+
+_PRONUNCIATION_FULL = (
+    "PRONUNCIATION: the NARRATION and CTA lines below are already prepared for "
+    "Iranian Persian speech. Diacritics are pronunciation cues only: pronounce "
+    "the marked words naturally, never spell out the marks, and do not change "
+    "the words or their order."
+)
+_PRONUNCIATION_COMPACT = (
+    "PRONUNCIATION: treat Persian diacritics as pronunciation cues; pronounce "
+    "naturally and never change the words or their order."
+)
+
+_SOUND_FULL = (
+    "SOUND DESIGN: keep one coherent, unobtrusive corporate music bed under "
+    "the narration, with clean dialogue and natural scene ambience where the "
+    "story needs it. No lyrics, no copyrighted melody and no abrupt level jumps."
+)
+_SOUND_COMPACT = (
+    "SOUND: one coherent unobtrusive bed; clean dialogue; no lyrics or copyrighted melody."
+)
+
+_BRAND_FULL = (
+    "BRAND END: finish deliberately on the final brand beat and the single "
+    "authored CTA. The brand end card is added deterministically in assembly, "
+    "so do not invent, render or spell any logo, URL, tagline or lettering "
+    "inside the generated frames."
+)
+_BRAND_COMPACT = (
+    "BRAND END: stop on the final brand beat and one CTA. Do not invent or "
+    "render logos, URLs or lettering in the generated frames."
+)
+
+
 @dataclass(frozen=True)
 class _RuleSet:
     goal: str
@@ -245,48 +313,128 @@ def _build_prompt(
     character_description: str | None,
     has_reference_image: bool,
 ) -> str:
-    rules = _RULESETS[layout.rules]
-    lines = [rules.goal]
+    """Compose the centralized ten-section prompt.
 
+    The sections are stable so the same scenario always produces prompts that
+    differ only by deterministic compaction level. Spoken lines appear exactly
+    once, in the beat where they belong; no narration dump is ever added.
+    """
+    rules = _RULESETS[layout.rules]
+    full = layout.rules == "full"
+    arc = _STORY_ARC_FULL if full else _STORY_ARC_COMPACT
+    camera_rules = _CINEMATOGRAPHY_FULL if full else _CINEMATOGRAPHY_COMPACT
+    pronunciation = _PRONUNCIATION_FULL if full else _PRONUNCIATION_COMPACT
+    sound = _SOUND_FULL if full else _SOUND_COMPACT
+    brand = _BRAND_FULL if full else _BRAND_COMPACT
+    ordered = sorted(scenario.scenes, key=lambda item: item.index)
+
+    sections: list[str] = []
+    sections.append(_section(1, "GOAL & CONTINUITY", rules.goal))
+
+    identity_parts: list[str] = []
     character_block = (character_description or "").strip()
     if has_reference_image or character_block:
-        lines.append(rules.reference)
+        identity_parts.append(rules.reference)
         if character_block:
-            lines.append(rules.character.format(description=character_block))
+            identity_parts.append(rules.character.format(description=character_block))
+    if scenario.character_bible is not None:
+        from app.services.storytelling import character_block as bible_block
 
+        bible = bible_block(scenario.character_bible)
+        if bible:
+            identity_parts.append(bible)
+    sections.append(
+        _section(
+            2,
+            "IDENTITY & CHARACTER BIBLE",
+            " ".join(identity_parts) if identity_parts else (
+                "No fixed presenter: use only the generic subjects described in each beat."
+            ),
+        )
+    )
+
+    visual_parts: list[str] = []
+    if layout.include_style and scenario.visual_style_preset:
+        from app.services.storytelling import get_style_preset
+
+        preset = get_style_preset(scenario.visual_style_preset)
+        visual_parts.append(f"STYLE PRESET: {scenario.visual_style_preset}.")
+        visual_parts.append(preset["visual_style"])
+        if full:
+            visual_parts.append(preset["avoid"])
     if layout.include_style and scenario.visual_style:
-        lines.append(f"VISUAL STYLE: {scenario.visual_style.strip()}")
+        visual_parts.append(f"VISUAL STYLE: {scenario.visual_style.strip()}")
+    sections.append(
+        _section(
+            3,
+            "VISUAL WORLD",
+            " ".join(visual_parts) if visual_parts else (
+                "Match the visual language described in every beat; keep one coherent world."
+            ),
+        )
+    )
 
-    lines.append(rules.timing)
-    lines.append(rules.speech)
-    lines.append(rules.on_screen)
-    lines.append("STORYBOARD (play beats in this exact order):")
+    arc_parts = [arc]
+    act_coverage = [scene.act for scene in ordered if scene.act]
+    if act_coverage:
+        arc_parts.append("Beat acts: " + " -> ".join(act_coverage) + ".")
+    sections.append(_section(4, "EMOTIONAL STORY ARC", " ".join(arc_parts)))
+    sections.append(_section(5, "TIMING & PACING", rules.timing))
+    sections.append(
+        _section(
+            6,
+            "CINEMATOGRAPHY",
+            camera_rules if layout.include_camera else (
+                "Follow each beat's visual composition; no unmotivated cuts."
+            ),
+        )
+    )
+    sections.append(_section(7, "SPEECH & PRONUNCIATION", f"{rules.speech} {pronunciation}"))
 
-    for scene in sorted(scenario.scenes, key=lambda item: item.index):
+    sound_parts = [sound]
+    if full:
+        for scene in ordered:
+            value = (scene.sound_design or "").strip()
+            if value:
+                sound_parts.append(f"Beat {scene.index + 1}: {value}.")
+    sections.append(_section(8, "SOUND DESIGN", " ".join(sound_parts)))
+    sections.append(_section(9, "TEXT-FREE FRAME & BRAND END", f"{rules.on_screen} {brand}"))
+
+    beat_lines = ["STORYBOARD (play beats in this exact order):"]
+    for scene in ordered:
         beat = [f"Beat {scene.index + 1} ({_format_seconds(scene.duration_seconds)}):"]
+        act = (scene.act or "").strip()
+        purpose = (scene.narrative_purpose or "").strip()
+        if act:
+            beat.append(f"ACT: {act}.")
+        if purpose:
+            beat.append(f"PURPOSE: {purpose}")
         if layout.include_camera and scene.camera_direction:
             beat.append(f"CAMERA: {scene.camera_direction.strip()}")
         if layout.include_visual:
             beat.append(f"VISUAL: {scene.visual_prompt.strip()}")
-        lines.append(" ".join(beat))
+        beat_lines.append(" ".join(beat))
 
         spoken = _spoken_text(scene)
         if spoken:
             label = "NARRATION:" if layout.compact_labels else (
                 "NARRATION (speak exactly, at the measured pace, in Persian):"
             )
-            lines.append(f"{label} {spoken}")
+            beat_lines.append(f"{label} {spoken}")
 
     cta = _spoken_cta(scenario)
     if cta:
-        label = (
-            "CTA:"
-            if layout.compact_labels
-            else "ENDING CTA (speak exactly, at the measured pace, in Persian):"
+        label = "CTA:" if layout.compact_labels else (
+            "ENDING CTA (speak exactly, at the measured pace, in Persian):"
         )
-        lines.append(f"{label} {cta}")
+        beat_lines.append(f"{label} {cta}")
+    sections.append(_section(10, "STORYBOARD BEATS & CTA", "\n".join(beat_lines)))
+    return "\n".join(sections)
 
-    return "\n".join(lines)
+
+def _section(number: int, title: str, body: str) -> str:
+    """One deterministic, numbered prompt section."""
+    return f"{number}) {title}: {body.strip()}"
 
 
 _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
@@ -299,7 +447,7 @@ def _spoken_text(scene: SceneSpec) -> str:
     the same words and word order as narration with the selective diacritic
     rule applied. Never use scene.narration directly for speech output.
     """
-    return scene.pronunciation_text.strip()
+    return (scene.pronunciation_text or scene.narration).strip()
 
 
 def _spoken_key(value: str) -> tuple[str, ...]:

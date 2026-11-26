@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -76,14 +77,25 @@ _SCENE_FILLER = (
 )
 
 
+_DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+
+
+def _spoken_word(word: str) -> str:
+    """Production fixtures now follow the 4+ letter diacritic rule."""
+    plain = _DIACRITICS_RE.sub("", word)
+    if len(plain) <= 3 or _DIACRITICS_RE.search(word):
+        return word
+    return plain[0] + "\u064e" + plain[1:]
+
+
 def _long_narration(prefix: str, bank_index: int, target_words: int = 58) -> str:
     bank = _SCENE_FILLER[bank_index].split()
     words = prefix.split()
     position = 0
     while len(words) < target_words:
-        words.append(bank[position % len(bank)])
+        words.append(_spoken_word(bank[position % len(bank)]))
         position += 1
-    return " ".join(words[:target_words])
+    return " ".join(_spoken_word(word) for word in words[:target_words])
 
 
 def _scenario_payload(*, title="مُعَرَّفی وَنداد"):
@@ -91,6 +103,7 @@ def _scenario_payload(*, title="مُعَرَّفی وَنداد"):
         {
             "index": 0,
             "narration": _long_narration("مَحصولتان رَا بِهتر مُعَرَّفی کُنید.", 0),
+            "pronunciation_text": _long_narration("مَحصولتان رَا بِهتر مُعَرَّفی کُنید.", 0),
             "visual_prompt": "A clean cinematic product interface shot",
             "duration_seconds": 15.0,
             "scene_type": "product_demo",
@@ -98,6 +111,9 @@ def _scenario_payload(*, title="مُعَرَّفی وَنداد"):
         {
             "index": 1,
             "narration": _long_narration(
+                "مُعَرَّفی پِلاتفُرم: پایِش مَنابِع رَا سادَه و شَفّاف اَنجام دَهید.", 1
+            ),
+            "pronunciation_text": _long_narration(
                 "مُعَرَّفی پِلاتفُرم: پایِش مَنابِع رَا سادَه و شَفّاف اَنجام دَهید.", 1
             ),
             "visual_prompt": "A calm dashboard shot with charts",
@@ -111,6 +127,7 @@ def _scenario_payload(*, title="مُعَرَّفی وَنداد"):
         "scenes": scenes,
         "narration": " ".join(scene["narration"] for scene in scenes),
         "cta": "بیشتَر شُناخته شُوید",
+        "cta_pronunciation_text": "بیشتَر شُناخته شُوید",
         "caption": "مُعَرَّفی وَنداد",
         "hashtags": ["#ونداد"],
         "target_duration_seconds": 30,

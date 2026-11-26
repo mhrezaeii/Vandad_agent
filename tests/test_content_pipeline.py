@@ -579,6 +579,7 @@ async def _approved_single_shot_project(
             {
                 "index": index,
                 "narration": f"روایت {index}",
+                "pronunciation_text": f"روایت {index}",
                 "visual_prompt": f"visual {index}",
                 "duration_seconds": scene_seconds,
             }
@@ -586,6 +587,7 @@ async def _approved_single_shot_project(
         ],
         "narration": " ".join(f"روایت {index}" for index in range(scene_count)),
         "cta": "شروع کنید",
+        "cta_pronunciation_text": "شروع کنید",
         "target_duration_seconds": target_duration,
     }
     await db_session.commit()

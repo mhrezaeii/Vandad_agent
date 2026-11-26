@@ -24,6 +24,7 @@ from app.schemas.scenario import (
     needs_speech_diacritics,
 )
 from app.services.scene_novelty import normalize_visual_signature
+from app.services.storytelling import build_storyboard, storyboard_issues
 
 # Unverifiable or absolute claims are forbidden by the scenario system prompt;
 # the review enforces the same policy on the produced text.
@@ -154,8 +155,11 @@ def review_scenario(
         # The finale must be structured as a product demo, but its wording is not
         # gated. A fixed whitelist of nouns ("پلتفرم"، "سامانه"، ...) rejected valid
         # natural narrations in production. CTA repetition is still caught below.
-        if last.scene_type != "product_demo":
-            issues.append("last scene must introduce the platform with scene_type 'product_demo'.")
+        if last.scene_type not in ("product_demo", "brand_ending"):
+            issues.append(
+                "last scene must introduce the platform with scene_type "
+                "'product_demo' or 'brand_ending'."
+            )
 
     # One CTA, at the very end. Nothing may continue after the final beat.
     cta_key = tuple(_spoken_tokens(scenario.cta or ""))
@@ -224,5 +228,16 @@ def review_scenario(
                     f"{label}: words of four letters or more need diacritics: "
                     f"{', '.join(missing[:6])}."
                 )
+
+    # Cinematic storyboard/Character Bible gate. This is additive: legacy
+    # scenarios are upgraded deterministically by build_storyboard(), and an
+    # explicit storyboard_version=None disables the gate for older stored data.
+    if scenario.storyboard_version:
+        try:
+            storyboard = build_storyboard(scenario)
+            for issue in storyboard_issues(storyboard):
+                issues.append(f"storyboard: {issue}")
+        except Exception as exc:  # noqa: BLE001 - must be retryable by the writer
+            issues.append(f"storyboard: invalid storyboard: {exc}")
 
     return issues

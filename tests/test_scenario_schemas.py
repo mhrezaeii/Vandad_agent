@@ -7,6 +7,7 @@ import json
 import pytest
 
 from app.schemas.scenario import (
+    _DIACRITICS_RE,
     MAX_SCENES,
     MIN_SCENES,
     Scenario,
@@ -59,6 +60,18 @@ _SCENE_WORD_BANKS = tuple(
 )
 
 
+def _vowelize_fixture(text: str) -> str:
+    """Simulate the four-letter diacritic rule for fixture narration."""
+
+    def mark(word: str) -> str:
+        plain = _DIACRITICS_RE.sub("", word)
+        if len(plain) < 4 or _DIACRITICS_RE.search(word):
+            return word
+        return plain[0] + "\u064e" + plain[1:]
+
+    return " ".join(mark(word) for word in text.split())
+
+
 def _filler(bank_index: int, size: int) -> str:
     bank = _SCENE_WORD_BANKS[bank_index]
     return " ".join(bank[position % len(bank)] for position in range(size))
@@ -74,18 +87,29 @@ def _scene_narration(index: int, count: int, duration: float) -> str:
     words = words[:target]
     if count > 1 and index == count - 1:
         words = [*words[:-2], "مُعَرَّفی", "پِلاتفُرم"]
-    return " ".join(words) + "."
+    return _vowelize_fixture(" ".join(words) + ".")
+
+
+def _set_spoken(raw: dict, scene_index: int, text: str, pronunciation: str | None = None) -> None:
+    """Set both narration and its pronunciation-ready twin together."""
+    raw["scenes"][scene_index]["narration"] = text
+    raw["scenes"][scene_index]["pronunciation_text"] = pronunciation or _vowelize_fixture(text)
+
+
+def _set_cta(raw: dict, text: str, pronunciation: str | None = None) -> None:
+    raw["cta"] = text
+    raw["cta_pronunciation_text"] = pronunciation or _vowelize_fixture(text)
 
 
 def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
-    return {
-        "title": "عُنوان تست",
-        "opening_hook": "یَک قُلابِ رُوشَن بَرای شُروع",
-        "visual_style": "clean cinematic vertical",
-        "scenes": [
+    scenes = []
+    for index in range(count):
+        narration = _scene_narration(index, count, duration)
+        scenes.append(
             {
                 "index": index,
-                "narration": _scene_narration(index, count, duration),
+                "narration": narration,
+                "pronunciation_text": narration,
                 "visual_prompt": f"English visual prompt {index + 1}",
                 "duration_seconds": duration,
                 "on_screen_text": f"مَتن {index + 1}",
@@ -97,9 +121,14 @@ def _raw_scenario(count: int = 5, duration: float = 6.0) -> dict:
                 "camera_direction": "medium close-up, slow push-in" if index == 1 else "cinematic tracking shot",
                 "transition": "match_cut" if index == 2 else "cut",
             }
-            for index in range(count)
-        ],
+        )
+    return {
+        "title": "عُنوان تست",
+        "opening_hook": "یَک قُلابِ رُوشَن بَرای شُروع",
+        "visual_style": "clean cinematic vertical",
+        "scenes": scenes,
         "cta": "هَمین لَحظه شُروع کُنید",
+        "cta_pronunciation_text": "هَمین لَحظه شُروع کُنید",
         "caption": "کَپشن فارسی",
         "hashtags": ["#امنیت", "#امنیت", "#فناوری"],
     }
@@ -173,14 +202,17 @@ def test_pronunciation_text_preserves_words_and_rejects_rewrites():
     raw["scenes"][0]["pronunciation_text"] = pronunciation
     scenario = normalize_scenario(raw, request)
     assert scenario.scenes[0].pronunciation_text == pronunciation
-    raw["scenes"][0]["pronunciation_text"] = "درود فارسی"
-    with pytest.raises(ValueError, match="exact narration words"):
+    raw["scenes"][0]["pronunciation_text"] = "دَرود فارِسی"
+    with pytest.raises(ValueError, match="changed narration words"):
         normalize_scenario(raw, request)
 
 
 def test_production_fa_scenario_requires_vowelized_pronunciation_text():
     request = ScenarioRequest(target_duration_seconds=30, require_pronunciation_text=True)
     raw = _raw_scenario(count=2, duration=15.0)
+    for scene in raw["scenes"]:
+        scene.pop("pronunciation_text")
+    raw.pop("cta_pronunciation_text")
     with pytest.raises(ValueError, match="pronunciation_text with diacritics"):
         normalize_scenario(raw, request)
     first_pronunciation = raw["scenes"][0]["narration"]
@@ -198,9 +230,9 @@ def test_storyboard_prompt_uses_brand_lexicon_without_pronunciation_fields():
         pronunciation_lexicon={"وندیار": "وَندیار"},
     )
     system, user = build_scenario_prompt(request)
-    assert "pronunciation_text" not in user
+    assert "pronunciation_text" in user
     assert "اعراب" in system
-    assert "کلمات عادی فارسی" in system
+    assert "چهار حرف و بیشتر" in system
     assert "وَندیار" in user
 
 
@@ -266,7 +298,7 @@ def test_storyboard_prompt_is_ai_native_and_character_free():
     assert "brand_character" not in user
     assert "Team chat, CRM" in user
     assert "problem → product_demo" in user
-    assert "چکیدهای از کل پلتفرم" in system
+    assert "چکیده‌ای از کل پلتفرم" in system
     assert "موضوع:" not in user
 
 
@@ -299,10 +331,9 @@ def test_review_scenario_passes_valid_and_flags_problems():
     scenario = normalize_scenario(_raw_scenario(count=5, duration=6.0), request)
     assert review_scenario(scenario, target_duration_seconds=30) == []
 
-    overclaiming = normalize_scenario(
-        {**_raw_scenario(count=2, duration=15.0), "cta": "تضمین کامل امنیت"},
-        request,
-    )
+    raw = _raw_scenario(count=2, duration=15.0)
+    _set_cta(raw, "تضمین کامل امنیت", "تَضمین کامِل اَمَنیت")
+    overclaiming = normalize_scenario(raw, request)
     issues = review_scenario(overclaiming, target_duration_seconds=30)
     assert any("forbidden claim" in issue for issue in issues)
 
@@ -318,13 +349,14 @@ def test_review_scenario_requires_every_spoken_and_written_surface_in_persian():
     """Title, narration, CTA and on-screen text must all be Persian."""
     from app.services.scenario_review import review_scenario
 
-    request = ScenarioRequest(target_duration_seconds=30)
+    request = ScenarioRequest(target_duration_seconds=30, require_pronunciation_text=False)
     raw = _raw_scenario(count=2, duration=15.0)
     english = normalize_scenario(
         {
             **raw,
             "narration": "English only full narration",
             "cta": "Start now",
+            "cta_pronunciation_text": "Start now",
             "scenes": [
                 {**raw["scenes"][0], "on_screen_text": "BUY NOW"},
                 {**raw["scenes"][1], "on_screen_text": "BUY NOW"},
@@ -381,7 +413,7 @@ def test_persian_prompt_forbids_all_on_screen_text():
 def test_storyboard_prompt_requires_diacritics_unique_scenes_and_platform_finale():
     system, user = build_scenario_prompt(ScenarioRequest(target_duration_seconds=30))
     assert "اعراب" in system
-    assert "کلمات عادی فارسی" in user
+    assert "چهار حرف و بیشتر" in user
     assert "تکرار" in system
     assert "نزدیک به تکرار" in user
     assert "آخرین صحنه" in user
@@ -396,6 +428,7 @@ def test_review_scenario_flags_duplicate_scenes():
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
     raw["scenes"][1]["narration"] = raw["scenes"][0]["narration"]
+    raw["scenes"][1]["pronunciation_text"] = raw["scenes"][0]["pronunciation_text"]
     raw["scenes"][1]["visual_prompt"] = raw["scenes"][0]["visual_prompt"]
     issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
     assert any("duplicate" in issue for issue in issues)
@@ -418,48 +451,61 @@ def test_review_scenario_accepts_natural_finale_without_fixed_noun_whitelist():
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
     raw["scenes"][-1]["scene_type"] = "product_demo"
-    raw["scenes"][-1]["narration"] = (
-        "همه چیز در یک نگاه کنار هم قرار میگیرد و کارها سادهتر پیش میرود."
+    _set_spoken(
+        raw,
+        -1,
+        _vowelize_fixture(
+            "همه چیز در یک نگاه کنار هم قرار میگیرد و کارها سادهتر پیش میرود."
+        ),
     )
     issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
     assert not [issue for issue in issues if "last scene" in issue]
 
 
-def test_review_scenario_flags_unvowelized_hard_words_only():
+def test_review_scenario_flags_every_unvowelized_long_word():
     from app.services.scenario_review import review_scenario
 
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
-    raw["scenes"][0]["narration"] = "سیستم پایش پروژه بدون اعراب"
+    _set_spoken(raw, 0, "سیستم پایش پروژه و کارها")
     issues = review_scenario(normalize_scenario(raw, request), target_duration_seconds=30)
-    diacritic_issues = [issue for issue in issues if "hard-to-pronounce" in issue]
+    diacritic_issues = [issue for issue in issues if "need diacritics" in issue]
     assert any("سیستم" in issue for issue in diacritic_issues)
     assert any("پایش" in issue for issue in diacritic_issues)
     assert any("پروژه" in issue for issue in diacritic_issues)
+    assert any("کارها" in issue for issue in diacritic_issues)
+    # The one-letter conjunction stays plain and must not be flagged.
+    assert not any(issue.endswith("و.") for issue in diacritic_issues)
 
 
-def test_spoken_diacritics_fixer_marks_only_hard_words_and_review_passes():
+def test_spoken_diacritics_fixer_vowelizes_long_words_and_keeps_short_words_plain():
     from app.services.scenario_review import review_scenario
 
     request = ScenarioRequest(target_duration_seconds=30)
     raw = _raw_scenario(count=2, duration=15.0)
-    raw["opening_hook"] = "وقتی کارها پراکندهاند، دید کلی دشوار میشود."
-    raw["cta"] = "همین حالا شروع کنید"
-    raw["scenes"][0]["narration"] = (
-        "کارها و هماهنگی تیم، گاهی در جاهای گوناگون پراکنده میشوند. "
-        + " " + _filler(2, 45)
+    raw["opening_hook"] = _vowelize_fixture(
+        "وقتی کارها پراکندهاند، دید کلی دشوار میشود."
     )
-    raw["scenes"][1]["narration"] = (
-        "وندیار، سیستم عاملی برای مدیریت پروژه و تیم است. "
-        + " " + _filler(0, 45)
+    raw["cta"] = _vowelize_fixture("همین حالا شروع کنید")
+    raw["cta_pronunciation_text"] = raw["cta"]
+    first = _vowelize_fixture(
+        "کارها و هماهنگی تیم، گاهی در جاهای گوناگون پراکنده میشوند."
     )
+    second = _vowelize_fixture(
+        "وندیار، سیستم عاملی برای مدیریت پروژه و تیم است."
+    )
+    _set_spoken(raw, 0, first, first)
+    _set_spoken(raw, 1, second, second)
 
     scenario = ensure_spoken_diacritics(normalize_scenario(raw, request), request)
 
-    # Ordinary Persian words stay unvowelized.
-    assert "کارها و هماهنگی تیم" in scenario.scenes[0].narration
-    assert "پراکنده میشوند" in scenario.scenes[0].narration
-    # Only hard/brand words receive pronunciation marks.
+    # Short connecting words stay plain even in fully vowelized narration.
+    assert " و " in scenario.scenes[0].narration
+    assert " و " in scenario.scenes[1].narration
+    # Longer words keep the marks supplied by the scenario model.
+    assert "کَارها" in scenario.scenes[0].narration
+    assert "پَراکنده" in scenario.scenes[0].narration
+    # Brand/lexicon words use their curated pronunciation.
     assert "وَندیار" in scenario.scenes[1].narration
     assert "سیستِم" in scenario.scenes[1].narration
     assert "عامِلی" in scenario.scenes[1].narration

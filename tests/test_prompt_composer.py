@@ -19,6 +19,7 @@ def _scenario(scene_count: int = 3, target: int = 20) -> Scenario:
             SceneSpec(
                 index=index,
                 narration=f"جملهٔ روایت شمارهٔ {index + 1} به فارسی.",
+                pronunciation_text=f"جملهٔ روایت شمارهٔ {index + 1} به فارسی.",
                 visual_prompt=(
                     f"The same young office worker (round glasses, red tie) "
                     f"interacts with a floating productivity dashboard, beat {index + 1}."
@@ -36,6 +37,7 @@ def _scenario(scene_count: int = 3, target: int = 20) -> Scenario:
         scenes=scenes,
         narration=" ".join(scene.narration for scene in scenes),
         cta="همین حالا شروع کنید.",
+        cta_pronunciation_text="همین حالا شروع کنید.",
         caption="کپشن ویدیو",
         hashtags=["#وندیار"],
         target_duration_seconds=target,
@@ -57,6 +59,7 @@ def _long_compaction_scenario() -> Scenario:
             SceneSpec(
                 index=index,
                 narration=narration,
+                pronunciation_text=narration,
                 visual_prompt=(
                     "Vertical 9:16 cinematic enterprise technology shot with a restrained charcoal "
                     "and deep navy palette, subtle cyan accents and realistic office lighting. "
@@ -81,6 +84,7 @@ def _long_compaction_scenario() -> Scenario:
         scenes=scenes,
         narration=" ".join(scene.narration for scene in scenes),
         cta="برای آشنایی بیشتر با ما تماس بگیرید.",
+        cta_pronunciation_text="برای آشنایی بیشتر با ما تماس بگیرید.",
         caption="کپشن ویدیو",
         hashtags=["#امنیت"],
         target_duration_seconds=30,

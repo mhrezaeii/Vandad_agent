@@ -21,6 +21,8 @@ dependencies = [
     "croniter>=6.0",
     "python-multipart>=0.0.20",
     "pillow>=11.0",
+    "arabic-reshaper>=3.0",
+    "python-bidi>=0.6",
     "playwright>=1.49",
 ]
 
