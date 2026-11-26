@@ -128,7 +128,7 @@ class ContentScenarioService:
                 if isinstance(visual_config.get("pronunciation_lexicon"), dict)
                 else {}
             ),
-            require_pronunciation_text=False,
+            require_pronunciation_text=True,
             has_reference_image=bool(options.get("character_key") or options.get("character_image_url")),
             reference_character_description=options.get("character_description"),
         )

@@ -293,12 +293,13 @@ _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
 
 
 def _spoken_text(scene: SceneSpec) -> str:
-    """The selectively diacritized narration is authoritative for the provider.
+    """The pronunciation_text is authoritative for the provider.
 
-    Only hard-to-pronounce/brand words carry marks; ordinary Persian words stay
-    unvowelized. The optional ``pronunciation_text`` field is never sent.
+    This is the dedicated pronunciation-ready field, which preserves exactly
+    the same words and word order as narration with the selective diacritic
+    rule applied. Never use scene.narration directly for speech output.
     """
-    return scene.narration.strip()
+    return scene.pronunciation_text.strip()
 
 
 def _spoken_key(value: str) -> tuple[str, ...]:
@@ -309,13 +310,16 @@ def _spoken_key(value: str) -> tuple[str, ...]:
 
 
 def _spoken_cta(scenario: Scenario) -> str:
-    """Append the CTA once, unless the last beat already speaks it."""
-    cta = scenario.cta.strip()
+    """Append the CTA once, using cta_pronunciation_text.
+
+    The cta_pronunciation_text field is the authoritative spoken CTA text.
+    """
+    cta = scenario.cta_pronunciation_text.strip()
     if not cta or not scenario.scenes:
         return ""
     last_scene = max(scenario.scenes, key=lambda item: item.index)
     cta_key = _spoken_key(cta)
-    last_key = _spoken_key(last_scene.narration)
+    last_key = _spoken_key(last_scene.pronunciation_text)
     if not cta_key or not last_key:
         return cta
     if cta_key == last_key:

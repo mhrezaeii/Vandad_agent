@@ -58,7 +58,7 @@ class ScenarioRequest(BaseModel):
     product_context: str | None = Field(default=None, max_length=3000)
     platform_knowledge_context: str | None = Field(default=None, max_length=12000)
     pronunciation_lexicon: dict[str, str] = Field(default_factory=dict, max_length=100)
-    require_pronunciation_text: bool = False
+    require_pronunciation_text: bool = True
     has_reference_image: bool = False
     reference_character_description: str | None = Field(default=None, max_length=1000)
 
@@ -91,9 +91,22 @@ class ScenarioRequest(BaseModel):
 
 
 _DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+_PERSIAN_WORD_RE = re.compile(r"[\u0600-\u06FF]+")
 
-# Only these hard-to-pronounce words receive diacritics. Ordinary Persian
-# words stay unvowelized; over-vowelized speech makes the video model stumble.
+# The video model's native Persian speech mispronounces unvowelized words, so
+# every word of four letters or more must carry diacritics. Only short words
+# (one to three letters) stay plain; marks there add no useful pronunciation
+# information. Pronunciation marks never change the spoken words or their order.
+SHORT_SPEECH_WORD_MAX_LETTERS = 3
+
+
+def needs_speech_diacritics(word: str) -> bool:
+    """Whether a Persian word is long enough to require pronunciation marks."""
+    return len(_DIACRITICS_RE.sub("", word)) > SHORT_SPEECH_WORD_MAX_LETTERS
+
+
+# Curated pronunciations for brand/technical words. They override the model's
+# own vowelization so names and lexicon entries are always spoken as intended.
 HARD_PRONUNCIATION_FIXES: dict[str, str] = {
     "وندیار": "وَندیار",
     "ونداد": "وَنَداد",
@@ -136,8 +149,8 @@ class SceneSpec(BaseModel):
 
     index: int = Field(default=0, ge=0)
     narration: str = Field(min_length=1, max_length=2000, description="Persian narration for this scene.")
-    pronunciation_text: str | None = Field(
-        default=None,
+    pronunciation_text: str = Field(
+        min_length=1,
         max_length=2000,
         description="Same spoken words with Persian diacritics for pronunciation.",
     )
@@ -187,7 +200,11 @@ class Scenario(BaseModel):
     scenes: list[SceneSpec] = Field(min_length=MIN_SCENES, max_length=MAX_SCENES)
     narration: str = Field(min_length=1, description="Full Persian narration, scenes joined in order.")
     cta: str = Field(default="", max_length=500)
-    cta_pronunciation_text: str | None = Field(default=None, max_length=500)
+    cta_pronunciation_text: str = Field(
+        default="",
+        max_length=500,
+        description="Same spoken CTA words with Persian diacritics for pronunciation.",
+    )
     caption: str = Field(default="", max_length=2000)
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     target_duration_seconds: int = Field(ge=MIN_TARGET_DURATION_SECONDS, le=MAX_TARGET_DURATION_SECONDS)

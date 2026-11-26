@@ -24,10 +24,12 @@ from app.integrations.providers import ProviderExecutor, ProviderRegistry
 from app.integrations.providers.base import ProviderError
 from app.schemas.scenario import (
     _DIACRITICS_RE,
+    _PERSIAN_WORD_RE,
     Scenario,
     ScenarioRequest,
     SceneSpec,
     hard_pronunciation_fixes,
+    needs_speech_diacritics,
     normalize_scenario,
 )
 from app.security.crypto import MasterKeyBox
@@ -81,17 +83,18 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         "برای هر صحنه scene_type را از problem, product_demo, b_roll, motion_graphic, cta انتخاب کن. "
         "سناریو باید چکیدهای از کل پلتفرم باشد، نه معرفی یک قابلیت یا یک تکه از پلتفرم: "
         "نمای کلی، مهمترین قابلیتهای مستند و دعوت به اقدام را در یک مسیر کوتاه بگنجان. "
-        "فقط واژههای دشوار تلفظ را اعرابگذاری کن: نام برند، واژههای عاریتی و تخصصی، "
-        "و مواردی که در واژهنامه تلفظ آمدهاند. کلمات عادی فارسی را بدون اعراب بنویس و "
-        "از اعرابگذاری همه کلمات پرهیز کن؛ اعراب فقط علامت تلفظ است و واژهای را عوض نمیکند. "
+        "هر صحنه باید \\\"narration\\\" (متن خوانا، زبان فارسی) و \\\"pronunciation_text\\\" (واژه‌های تلفظ شده با اعراب فارسی برای مدل ویدیو) فیلدها را تولید کند. "
+        "اعراب فقط علامت تلفظ است و واژهای را عوض نمیکند. "
+        "نام برند، واژههای عاریتی و تخصصی و موارد واژهنامه را دقیقاً مطابق واژهنامه اعرابگذاری کن. "
+        "اعراب فقط علامت تلفظ است و واژهای را عوض نمیکند. "
         "هیچ صحنه‌ای نباید تکرار یا نزدیک به تکرار صحنه دیگری باشد: "
         "هر صحنه معنی، تصویر و متن گفتار متفاوتی دارد و پیام قبل را بازنویسی نمی کند. "
         "وقتی بیش از یک صحنه وجود دارد، آخرین صحنه باید معرفی کلی پلتفرم باشد، "
         "نه تکرار CTA و نه تمرکز روی یک قابلیت تکهای. آخرین صحنه آخرین لحظه ویدیو است؛ "
-        "بعد از آن هیچ جمله، صحنه یا تکراری نیاید و scene_type=cta ممنوع است. "
+        "بعد از آن هیچ جمله، صحنه یا تکراری نیاید و scene_type=cta ممنوع است. CTA باید JSON شامل \"cta\" (متن دعوت به اقدام) و \"cta_pronunciation_text\" (واژه‌های تلفظ شده CTA با اعراب فارسی) باشد. "
         "واژههای واژهنامه و نام برند را اضافه، حذف، ترجمه یا جابهجا نکن. "
         "از ترجمه ماشینی، جمله‌های طولانی، اغراق و ادعای اثبات\u200cنشده دوری کن. "
-        "سناریو را در حد یک ویدیوی تبلیغاتی حدود چهل ثانیه بنویس؛ "
+        "سناریو را در حد یک ویدیوی تبلیغاتی حدود چهل ثانیه بنویس؛ هر صحنه باید JSON شامل \"narration\" (متن خوانا) و \"pronunciation_text\" (واژه‌های تلفظ شده با اعراب فارسی) باشد. "
         "روایت را طبیعی و کامل پیش ببر و نیازی به شمارش واژه یا رعایت بودجه خاصی نیست. "
         "صحنه‌های product_demo باید محصول را در حال استفاده نشان دهند: رابط کاربری، داشبورد، "
         "تعامل کاربر و جریان کار؛ از متن ناخوانا و رابط کاربری ساختگی با قابلیت‌های ادعایی پرهیز کن. "
@@ -115,21 +118,23 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         f"زمینه و قابلیت‌های تأییدشده محصول: {product_context}\n"
         f"دانش تأییدشده پلتفرم‌ها (فقط مرجع؛ ادعای خارج از شواهد نساز): {platform_knowledge}\n"
         f"CTA: {cta_hint}\nهشتگ‌ها: {hashtags_hint}\n\n"
-        f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
+f"واژه‌نامه تلفظ اختصاصی برند (کلید=واژه، مقدار=تلفظ): {pronunciation_lexicon}\n\n"
         f"مدت هدف: حدود {request.target_duration_seconds} ثانیه ویدیو؛ متن را طبیعی و کامل بنویس. "
         "هیچ محدودیت یا هدف شمارشی برای واژهها وجود ندارد؛ روایت را برش نزن و ترتیب صحنهها را حفظ کن. "
-        "اعرابگذاری فقط برای واژههای دشوار تلفظ، نام برند و موارد واژهنامه است؛ "
-        "کلمات عادی فارسی در narration، cta و opening_hook بدون اعراب بمانند. "
-        "واژههای واژهنامه را دقیقاً با همان اعراب به کار ببر و واژهای را جابهجا نکن. "
+        "هر صحنه باید دو فیلد JSON تولید کند: \"narration\" (متن خوانا، زبان فارسی) و \"pronunciation_text\" (واژه‌های تلفظ شده با اعراب فارسی برای مدل ویدیو). "
+        "اعراب فقط علامت تلفظ است و واژهای را عوض نمیکند. "
+        "نام برند، واژههای عاریتی و تخصصی و موارد واژهنامه را دقیقاًMatching واژهنامه الاعرابگذاری کن. "
+        "واژههای یک تا سه حرفی بدون اعراب بمانند. "
+        "واژههای واژهنامه و نام برند را دقیقاً با همان اعراب به کار ببر و واژهای را جابهجا نکن. "
         "هیچ صحنهای تکراری یا نزدیک به تکراری نباشد؛ صحنهها معنی، تصویر و گفتار متفاوت داشته باشند. "
-        "آخرین صحنه (وقتی بیش از یک صحنه است) معرفی کلی پلتفرم و آخرین لحظه ویدیو است؛ "
-        "بعد از CTA هیچ جمله، صحنه یا بخشی جدید نیاید و CTA فقط یکبار در انتها گفته شود. "
+        "آخرین صحنه (وقتی بیش از یک صحنه است)introduce کلی پلتفرم و آخرین لحظه ویدیو است؛ "
+        "بعد از CTA هیچ جمله، صحنه یا بخشی جدید نیاید و CTA فقط یکبار در آخر گفته شود. "
         "scene_type=cta در سناریوهای چندصحنه ممنوع است. "
         "هیچ متنی روی تصویر رندر نشود؛ on_screen_text را خالی یا null بگذار. "
         "ساختار JSON الزامی:\n"
         "{\n"
         '  "title": "عنوان فارسی",\n'
-        '  "opening_hook": "قلاب کوتاه فارسی، بدون اعراب مگر واژههای دشوار",\n'
+        '  "opening_hook": "قلاب کوتاه فارسی با اعراب واژههای چهار حرف و بیشتر",\n'
         '  "visual_style": "consistent cinematic visual style in English",\n'
         '  "scenes": [\n'
         "    {\n"
@@ -143,7 +148,8 @@ def build_scenario_prompt(request: ScenarioRequest) -> tuple[str, str]:
         '      "on_screen_text": null,\n'
         "    }\n"
         "  ],\n"
-        '  "cta": "دعوت به اقدام کوتاه فارسی، بدون اعراب مگر واژههای دشوار",\n'
+        '  "cta": "دعوت به اقدام کوتاه فارسی با اعراب واژههای چهار حرف و بیشتر",\n'
+        '  "cta_pronunciation_text": "واژه‌های تلفظ شده CTA با اعراب فارسی، دقیقاً همان واژهها و همان ترتیب",'
         '  "caption": "کپشن فارسی",\n'
         '  "hashtags": ["#هشتگ"]\n'
         "}\n\n"
@@ -217,20 +223,32 @@ def sanitize_persian_written_surfaces(
 
 
 def _normalize_spoken_diacritics(value: str | None, fixes: dict[str, str]) -> str | None:
-    """Keep diacritics only on hard words, preserving words and their order."""
+    """Vowelize long words, keep short words plain, preserve word order."""
     if value is None:
         return None
-    # The model often over-vowelizes ordinary Persian words. Strip every mark
-    # first, then restore only the curated hard-word/brand pronunciations.
-    value = _DIACRITICS_RE.sub("", value)
-    for plain, vowelized in sorted(fixes.items(), key=lambda item: -len(item[0])):
-        pattern = r"(?<![\u0600-\u06FF])" + re.escape(plain)
-        value = re.sub(pattern, lambda _match, spoken=vowelized: spoken, value)
-    return value
+    ordered_fixes = sorted(fixes.items(), key=lambda item: -len(item[0]))
+
+    def normalize_word(match: re.Match[str]) -> str:
+        word = match.group(0)
+        plain = _DIACRITICS_RE.sub("", word)
+        # Brand and lexicon words must use the curated pronunciation, even if
+        # the model supplied different (or no) marks of its own.
+        for fix_plain, vowelized in ordered_fixes:
+            if plain == fix_plain:
+                return vowelized
+            if plain.startswith(fix_plain):
+                return vowelized + plain[len(fix_plain) :]
+        if not needs_speech_diacritics(plain):
+            return plain
+        # Longer words keep the marks written by the scenario model: the video
+        # model's native speech needs them to pronounce Persian correctly.
+        return word
+
+    return _PERSIAN_WORD_RE.sub(normalize_word, value)
 
 
 def ensure_spoken_diacritics(scenario: Scenario, request: ScenarioRequest) -> Scenario:
-    """Normalize spoken Persian surfaces to hard-word-only diacritics."""
+    """Normalize spoken Persian surfaces to the short-word/fully-vowelized rule."""
     if request.language.split("-", 1)[0].strip().lower() != "fa":
         return scenario
 
